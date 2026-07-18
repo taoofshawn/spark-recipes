@@ -4,7 +4,7 @@ services:
       context: ./patches
       dockerfile: Dockerfile
     image: vllm-node-mimo-v25-nvfp4:dflash-mimo-20260704
-    container_name: mimo-dflash
+    container_name: mimo-v25-dflash
     network_mode: host
     ipc: host
     shm_size: 16g
@@ -69,7 +69,7 @@ services:
       # Download with: hf download ... --revision <hash>
       MODEL_REVISION: a147dd04d6cf861e43b2d783dcde23b53ab7ee68
       DFLASH_REVISION: 1f58446181abcaa01030fdbde835fbd38ae9a2b1
-      SERVED_MODEL_NAME: MiMo-V2.5-NVFP4-DFlash-FP8KV
+      SERVED_MODEL_NAME: mimo-v25-dflash
       PORT: 8000
       DFLASH_SPEC_TOKENS: ${DFLASH_SPEC_TOKENS:-7}
       ATTENTION_BACKEND: triton_attn
@@ -94,20 +94,20 @@ services:
         # Auto-detect the RoCE-v2 IPv4 GID index (it re-numbers across
         # reboots).  Same logic as the deepseek-v4-flash-aiden recipe.
         # ==============================================================
-        for HCA in $(echo "${NCCL_IB_HCA}" | tr ',' ' '); do
+        for HCA in $(echo "$${NCCL_IB_HCA}" | tr ',' ' '); do
           for i in $(seq 0 15); do
-            t=$(cat /sys/class/infiniband/$HCA/ports/1/gid_attrs/types/$i 2>/dev/null || true)
-            g=$(cat /sys/class/infiniband/$HCA/ports/1/gids/$i 2>/dev/null || true)
-            case "$t" in *"RoCE v2"*)
-              case "$g" in *0000:0000:0000:0000:0000:ffff:*)
-                export NCCL_IB_GID_INDEX=$i
+            t=$(cat /sys/class/infiniband/$$HCA/ports/1/gid_attrs/types/$$i 2>/dev/null || true)
+            g=$(cat /sys/class/infiniband/$$HCA/ports/1/gids/$$i 2>/dev/null || true)
+            case "$$t" in *"RoCE v2"*)
+              case "$$g" in *0000:0000:0000:0000:0000:ffff:*)
+                export NCCL_IB_GID_INDEX=$$i
                 break 2
               ;; esac
             ;; esac
           done
         done
 
-        echo "[mimo-dflash] NODE_RANK=${NODE_RANK} DFLASH_SPEC_TOKENS=${DFLASH_SPEC_TOKENS} GID=${NCCL_IB_GID_INDEX:-unset}"
+        echo "[mimo-dflash] NODE_RANK=$${NODE_RANK} DFLASH_SPEC_TOKENS=$${DFLASH_SPEC_TOKENS} GID=$${NCCL_IB_GID_INDEX:-unset}"
 
         # ==============================================================
         # Apply the 6 base mods (CRITICAL — without these the model
@@ -135,11 +135,11 @@ services:
 
         for mod in drop-caches ray-keep-node-nccl-hca fix-prometheus-instrumentator-router \
                    fix-mimo-v2-vllm fix-modelopt-mixed-mxfp8 nvfp4-kv-diffkv; do
-          if [ -f "/workspace/mods/$mod/run.sh" ]; then
-            echo "Applying mod: $mod"
-            bash "/workspace/mods/$mod/run.sh"
+          if [ -f "/workspace/mods/$$mod/run.sh" ]; then
+            echo "Applying mod: $$mod"
+            bash "/workspace/mods/$$mod/run.sh"
           else
-            echo "ERROR: mod $mod not found at /workspace/mods/$mod/run.sh" >&2
+            echo "ERROR: mod $$mod not found at /workspace/mods/$$mod/run.sh" >&2
             echo "  All 6 base mods are vendored in this repo in ./mods/." >&2
             echo "  If the mods/ directory is incomplete, re-clone the repo." >&2
             exit 1
@@ -154,94 +154,94 @@ services:
         for p in patch_triton_noncausal patch_nc_fix patch_kv_page_lcm \
                  patch_aux_layer_off_by_one patch_diffkv_noncausal \
                  patch_draft_cache_auto patch_spec_dtype_guard; do
-          echo "Applying engine patch: $p"
-          python3 "/workspace/patches/$p.py" || echo "  (patch $p may already be applied — continuing)"
+          echo "Applying engine patch: $$p"
+          python3 "/workspace/patches/$$p.py" || echo "  (patch $$p may already be applied — continuing)"
         done
 
         # ==============================================================
         # Start Ray
         # ==============================================================
-        export RAY_TMPDIR="${RAY_TMPDIR:-/dev/shm/ray}"
-        mkdir -p "${RAY_TMPDIR}"
+        export RAY_TMPDIR="$${RAY_TMPDIR:-/dev/shm/ray}"
+        mkdir -p "$${RAY_TMPDIR}"
 
-        if [ "${NODE_RANK}" = "0" ]; then
+        if [ "$${NODE_RANK}" = "0" ]; then
           # ---- HEAD node (serves vLLM) ----
           ray stop --force 2>/dev/null || true
           ray start --head --port=6379 \
-            --node-ip-address="${ROCE_IP}" \
+            --node-ip-address="$${ROCE_IP}" \
             --dashboard-host=0.0.0.0 \
             --num-gpus=1 \
             --object-store-memory=1073741824
 
-          echo "Ray head up on ${ROCE_IP}:6379. Waiting for worker GPU..."
+          echo "Ray head up on $${ROCE_IP}:6379. Waiting for worker GPU..."
           until ray status 2>/dev/null | grep -qE '2\.0/2\.0 GPU|2\.0 GPU'; do sleep 2; done
           echo "Both GPUs joined. Launching vLLM..."
 
           # Resolve snapshot paths from pinned revision hashes
           HF_BASE=/root/.cache/huggingface/hub
-          MODEL_SNAPSHOT_DIR="${HF_BASE}/models--lukealonso--MiMo-V2.5-NVFP4/snapshots/${MODEL_REVISION}"
-          DFLASH_SNAPSHOT_DIR="${HF_BASE}/models--XiaomiMiMo--MiMo-V2.5-DFlash/snapshots/${DFLASH_REVISION}"
+          MODEL_SNAPSHOT_DIR="$${HF_BASE}/models--lukealonso--MiMo-V2.5-NVFP4/snapshots/$${MODEL_REVISION}"
+          DFLASH_SNAPSHOT_DIR="$${HF_BASE}/models--XiaomiMiMo--MiMo-V2.5-DFlash/snapshots/$${DFLASH_REVISION}"
 
-          if [ ! -d "$MODEL_SNAPSHOT_DIR" ]; then
-            echo "ERROR: MiMo-V2.5-NVFP4 snapshot ${MODEL_REVISION} not found." >&2
-            echo "  Expected: ${MODEL_SNAPSHOT_DIR}" >&2
-            echo "  Download: hf download lukealonso/MiMo-V2.5-NVFP4 --revision ${MODEL_REVISION}" >&2
+          if [ ! -d "$$MODEL_SNAPSHOT_DIR" ]; then
+            echo "ERROR: MiMo-V2.5-NVFP4 snapshot $${MODEL_REVISION} not found." >&2
+            echo "  Expected: $${MODEL_SNAPSHOT_DIR}" >&2
+            echo "  Download: hf download lukealonso/MiMo-V2.5-NVFP4 --revision $${MODEL_REVISION}" >&2
             exit 1
           fi
-          if [ ! -d "$DFLASH_SNAPSHOT_DIR" ]; then
-            echo "ERROR: MiMo-V2.5-DFlash snapshot ${DFLASH_REVISION} not found." >&2
-            echo "  Expected: ${DFLASH_SNAPSHOT_DIR}" >&2
-            echo "  Download: hf download XiaomiMiMo/MiMo-V2.5-DFlash --revision ${DFLASH_REVISION} --include 'dflash/*'" >&2
+          if [ ! -d "$$DFLASH_SNAPSHOT_DIR" ]; then
+            echo "ERROR: MiMo-V2.5-DFlash snapshot $${DFLASH_REVISION} not found." >&2
+            echo "  Expected: $${DFLASH_SNAPSHOT_DIR}" >&2
+            echo "  Download: hf download XiaomiMiMo/MiMo-V2.5-DFlash --revision $${DFLASH_REVISION} --include 'dflash/*'" >&2
             exit 1
           fi
 
           # Verify the dflash/ subdir exists in the drafter snapshot
-          if [ ! -d "${DFLASH_SNAPSHOT_DIR}/dflash" ]; then
+          if [ ! -d "$${DFLASH_SNAPSHOT_DIR}/dflash" ]; then
             echo "ERROR: dflash/ subdirectory not found in drafter snapshot." >&2
             echo "  Re-download with: hf download ... --include 'dflash/*'" >&2
             exit 1
           fi
 
-          MODEL_PATH="${MODEL_SNAPSHOT_DIR}"
-          DFLASH_MODEL_PATH="${DFLASH_SNAPSHOT_DIR}/dflash"
+          MODEL_PATH="$${MODEL_SNAPSHOT_DIR}"
+          DFLASH_MODEL_PATH="$${DFLASH_SNAPSHOT_DIR}/dflash"
 
-          echo "MODEL_PATH=${MODEL_PATH}"
-          echo "DFLASH_MODEL_PATH=${DFLASH_MODEL_PATH}"
+          echo "MODEL_PATH=$${MODEL_PATH}"
+          echo "DFLASH_MODEL_PATH=$${DFLASH_MODEL_PATH}"
 
-          SPEC_CONFIG="{\"model\":\"${DFLASH_MODEL_PATH}\",\"method\":\"dflash\",\"num_speculative_tokens\":${DFLASH_SPEC_TOKENS}}"
+          SPEC_CONFIG="{\"model\":\"$${DFLASH_MODEL_PATH}\",\"method\":\"dflash\",\"num_speculative_tokens\":$${DFLASH_SPEC_TOKENS}}"
 
-          exec vllm serve "${MODEL_PATH}" \
-            --served-model-name "${SERVED_MODEL_NAME}" \
+          exec vllm serve "$${MODEL_PATH}" \
+            --served-model-name "$${SERVED_MODEL_NAME}" \
             --trust-remote-code --dtype auto \
             --tensor-parallel-size 2 \
             --distributed-executor-backend ray \
             --load-format safetensors \
             --hf-overrides '{"architectures":["MiMoV2ForCausalLM"]}' \
-            --attention-backend "${ATTENTION_BACKEND}" \
-            --kv-cache-dtype "${KV_CACHE_DTYPE}" \
-            --gpu-memory-utilization "${GPU_MEMORY_UTILIZATION}" \
-            --max-model-len "${MAX_MODEL_LEN}" \
-            --max-num-batched-tokens "${MAX_NUM_BATCHED_TOKENS}" \
-            --max-num-seqs "${MAX_NUM_SEQS}" \
-            --block-size "${BLOCK_SIZE}" \
+            --attention-backend "$${ATTENTION_BACKEND}" \
+            --kv-cache-dtype "$${KV_CACHE_DTYPE}" \
+            --gpu-memory-utilization "$${GPU_MEMORY_UTILIZATION}" \
+            --max-model-len "$${MAX_MODEL_LEN}" \
+            --max-num-batched-tokens "$${MAX_NUM_BATCHED_TOKENS}" \
+            --max-num-seqs "$${MAX_NUM_SEQS}" \
+            --block-size "$${BLOCK_SIZE}" \
             --enable-prefix-caching \
             --enable-chunked-prefill \
             --generation-config vllm \
             --override-generation-config '{"temperature":0,"top_p":0.95}' \
-            --speculative-config "${SPEC_CONFIG}" \
+            --speculative-config "$${SPEC_CONFIG}" \
             --enforce-eager \
             --enable-auto-tool-choice --tool-call-parser mimo --reasoning-parser mimo \
-            --host 0.0.0.0 --port "${PORT}"
+            --host 0.0.0.0 --port "$${PORT}"
 
         else
           # ---- WORKER node (Ray only) ----
           ray stop --force 2>/dev/null || true
           ray start \
-            --address="${MASTER_ADDR}:6379" \
-            --node-ip-address="${ROCE_IP}" \
+            --address="$${MASTER_ADDR}:6379" \
+            --node-ip-address="$${ROCE_IP}" \
             --num-gpus=1 \
             --object-store-memory=1073741824
 
-          echo "Ray worker joined ${MASTER_ADDR}:6379. Container staying alive."
+          echo "Ray worker joined $${MASTER_ADDR}:6379. Container staying alive."
           sleep infinity
         fi

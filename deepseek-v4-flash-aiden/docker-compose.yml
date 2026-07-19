@@ -1,6 +1,6 @@
 services:
   ds4:
-    image: aidendle94/sparkrun-vllm-ds4-gb10@sha256:c188a1246cd3046fd8d49ecc32edf55bb454464e8a22086ff81305f4729ee48e
+    image: aidendle94/sparkrun-vllm-ds4-gb10@sha256:3b4d2b5f7929c2b15d25636e3115f343e693a03fe8a57f94969974432c2c4e8d
     container_name: ds4-dspark
     network_mode: host
     ipc: host

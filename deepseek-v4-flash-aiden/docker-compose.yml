@@ -56,8 +56,6 @@ services:
       VLLM_USE_BREAKABLE_CUDAGRAPH: "0"
       VLLM_USE_V2_MODEL_RUNNER: "1"
       VLLM_USE_FLASHINFER_SAMPLER: "1"
-      #VLLM_USE_B12X_MOE: "1"
-      VLLM_USE_B12X_MOE: "0"
       VLLM_DSPARK_REPLICATE_MARKOV_W1: "1"
       # ---- model / serve ----
       MODEL_PATH: deepseek-ai/DeepSeek-V4-Flash-0731
@@ -115,6 +113,7 @@ services:
           --enable-chunked-prefill --enable-prefix-caching --enable-flashinfer-autotune \
           --tokenizer-mode deepseek_v4 --tool-call-parser deepseek_v4 --reasoning-parser deepseek_v4 \
           --enable-auto-tool-choice \
+          --generation-config vllm \
           --default-chat-template-kwargs.temperature=$${TEMPERATURE} \
           --default-chat-template-kwargs.top_p=$${TOP_P} \
           --default-chat-template-kwargs.thinking=true --default-chat-template-kwargs.reasoning_effort=high \

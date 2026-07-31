@@ -1,14 +1,14 @@
 # deepseek-v4-flash-aiden - 1m token context
 
-This is a docker compose file for starting vLLM with DeepSeek-V4-Flash-DSpark on a 2-node DGX Spark cluster.  
+This is a docker compose file for starting vLLM with DeepSeek-V4-Flash-0731 on a 2-node DGX Spark cluster.  
 The repository should be cloned to both nodes and started on the second node first. 
 
 ## Prep (both nodes)
 ```bash
 cd ~/spark-recipes/deepseek-v4-flash-aiden/
 docker pull $(grep image docker-compose.yml | awk '{print $NF}')
-HF_MODEL=$(grep "HF_MODEL:" docker-compose.yml | awk '{print $NF}')
-HF_REVISION=$(grep "HF_REVISION:" docker-compose.yml | awk '{print $NF}')
+HF_MODEL=$(grep "MODEL_PATH:" docker-compose.yml | awk '{print $NF}')
+HF_REVISION=$(grep "MODEL_REVISION:" docker-compose.yml | awk '{print $NF}')
 hf download $HF_MODEL --revision $HF_REVISION
 ```
 

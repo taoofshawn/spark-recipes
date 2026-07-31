@@ -60,8 +60,8 @@ services:
       VLLM_USE_B12X_MOE: "0"
       VLLM_DSPARK_REPLICATE_MARKOV_W1: "1"
       # ---- model / serve ----
-      MODEL_PATH: deepseek-ai/DeepSeek-V4-Flash-DSpark
-      MODEL_REVISION: 62af8fffb2f7030cac4de2f0169f5b8d1101b646
+      MODEL_PATH: deepseek-ai/DeepSeek-V4-Flash-0731
+      MODEL_REVISION: 9e165c30e2704aec5d9d593cce3eebd58bbef1cb
       SERVED_MODEL_NAME: deepseek-v4-flash
       PORT: 8000
       GPU_MEM: 0.83

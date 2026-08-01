@@ -1,29 +1,29 @@
 # deepseek-v4-flash-tonyd2wild - 1M token context (NVFP4 DS-MLA KV)
 
-A recipe for running DeepSeek-V4-Flash-0731 on a 2-node DGX Spark cluster, built
-from [tonyd2wild's DSpark stack](https://github.com/tonyd2wild/DeepSeek-v4-Flash-0731-DSpark-1M-NVFP4-KV-2x-DGX-Spark)
-instead of the aiden image. It exists to **head-to-head test** whether this image
-and configuration is better than the aiden one — same model revision, same
-hardware, but a different runtime:
+A self-contained recipe for running DeepSeek-V4-Flash-0731 on a 2-node DGX Spark
+cluster, built from [tonyd2wild's DSpark stack](https://github.com/tonyd2wild/DeepSeek-v4-Flash-0731-DSpark-1M-NVFP4-KV-2x-DGX-Spark).
 
-| | aiden `deepseek-v4-flash-aiden` | this recipe |
-|---|---|---|
-| Image | prebuilt `aidendle94/sparkrun-vllm-ds4-gb10@3b4d2b5f…` | local build `vllm-dspark-runtime:dspark-nvfp4-stage-c` |
-| Model runner | v2 (`VLLM_USE_V2_MODEL_RUNNER=1`) | v1 (`--distributed-executor-backend mp`) |
-| KV cache | `fp8` | `nvfp4_ds_mla` |
-| DSpark spec tokens | 4 | **5** (`MTP_NUM_TOKENS=5`) |
-| `max_num_seqs` | 16 | **6** (measured-best for 1M) |
-| `max_num_batched_tokens` | 16384 | 8192 |
-| `max_cudagraph_capture_size` | 256 | `seqs×(k+1)` = 36 |
-| `gpu_memory_utilization` | 0.83 | **0.78** (0.80 "boots-then-dies" on this stack) |
-| sampling default | temp/top_p overrides | `--generation-config vllm`, no override |
-| thinking default | on / max | `false` (parameterizable via `THINKING`) |
+## Configuration overview
 
-> ⚠️ **Do not copy flags across images.** The aiden image rejects
-> `nvfp4_ds_mla` + `--distributed-executor-backend mp`; this image rejects
-> aiden's `VLLM_USE_V2_MODEL_RUNNER=1` and
-> `--attention-backend FLASHINFER_MLA_SPARSE_DSV4`. Keep each recipe's native
-> backend wiring.
+| knob | value |
+|---|---|
+| Image | locally built `vllm-dspark-runtime:dspark-nvfp4-stage-c` (4-stage overlay on `ghcr.io/bjk110/vllm-spark:unholy-fusion-prod-ready`) |
+| Model runner | v1 (`--distributed-executor-backend mp`) |
+| KV cache | `nvfp4_ds_mla` |
+| DSpark spec tokens | 5 (`MTP_NUM_TOKENS=5`) |
+| `max_num_seqs` | 6 (measured-best for 1M) |
+| `max_num_batched_tokens` | 8192 |
+| `max_cudagraph_capture_size` | `seqs×(k+1)` = 36 |
+| `gpu_memory_utilization` | 0.78 (0.80 "boots-then-dies" on this stack) |
+| sampling | `--generation-config vllm`, no override |
+| thinking default | `false` (clients can drive effort themselves) |
+| context length | 1M (1048576) |
+| serve | port `8000`, served model `deepseek-v4-flash` |
+
+> ⚠️ Keep this recipe's native backend wiring — `nvfp4_ds_mla` KV with the v1
+> runner via `--distributed-executor-backend mp`, and B12X MoE via
+> `VLLM_USE_B12X_MOE=1`. These flags belong to this specific image; mixing in
+> flags from other recipes/images fails at startup.
 
 ---
 
@@ -57,8 +57,8 @@ so no `chmod` is needed (⚠️ older clones without the `100755` bits fail with
 
 ## 2) Discover interfaces and set per-node IPs
 
-The committed `.env` / `.env.node0` / `.env.node1` contain **this cluster's**
-values. For new hardware, find the names on each node:
+The committed `.env` / `.env.node0` / `.env.node1` contain one cluster's values
+by default. For new hardware, find the names on each node:
 
 ```bash
 # Ethernet (control plane) — the "BROADCAST,UP" en* ports
@@ -107,7 +107,8 @@ ssh spark-6d14.shawndo.intra hostname   # confirm passwordless login works
 ## 4) Ensure the 0731 model is cached (BOTH nodes)
 
 TP=2 reads the snapshot independently on each node — a missing cache on the
-worker is a classic failure. Same revision as the aiden recipe.
+worker is a classic failure. The revision is pinned by `MODEL_REVISION` in
+`docker-compose.yml`.
 
 ```bash
 cd ~/code/spark-recipes/deepseek-v4-flash-tonyd2wild
@@ -162,9 +163,7 @@ docker compose --env-file .env --env-file .env.node1 up -d
 docker compose --env-file .env --env-file .env.node0 up -d
 ```
 
-API serves at `http://HEAD_NODE_IP:8000/v1` (served model `deepseek-v4-flash` —
-same as the aiden recipe, so existing router/client wiring, e.g.
-`spark.shawndo.intra:4000 → :8000`, works unchanged).
+API serves at `http://HEAD_NODE_IP:8000/v1` (served model `deepseek-v4-flash`).
 
 ## 8) Confirm it is healthy
 
@@ -202,7 +201,7 @@ never benchmark straight after boot or after a quiet period.
 |---|---|
 | `.env` | Shared config — must be customized per cluster |
 | `.env.node0` / `.env.node1` | Per-node overrides (rank, headless, RoCE IP) |
-| `docker-compose.yml` | compose (aiden-style, tonyd2wild config) |
+| `docker-compose.yml` | compose file |
 | `upstream/` | **Vendored upstream repo** (build scripts, patches, docs) — see `upstream/VENDORED-AT.md` |
 
 ## Key knobs
@@ -235,7 +234,7 @@ derived per the upstream's validated profile — don't touch without re-measurin
 | `SymmMemCommunicator: Device capability 12.1 not supported` | expected on GB10; falls back to PYNCCL |
 | Missing module/path during build or first run | this upstream occasionally references modules living in **another repo by the same author** (`tonyd2wild`) — search his other public repos first |
 
-## Benchmarking caveats (from upstream — avoid misleading numbers)
+## Benchmarking caveats
 
 - **Use `stream: false`** and read `usage.completion_tokens` — under spec-decoding,
   streamed deltas measure *steps/s*, not tok/s (up to ~4× under-report).

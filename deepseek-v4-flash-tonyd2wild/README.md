@@ -89,8 +89,8 @@ docker compose --env-file .env --env-file .env.node1 up -d
 docker compose --env-file .env --env-file .env.node0 up -d
 ```
 
-API serves at `http://HEAD_NODE_IP:8888/v1` (served model
-`deepseek-v4-flash-dspark`).
+API serves at `http://HEAD_NODE_IP:8000/v1` (served model
+`deepseek-v4-flash` — same as the aiden recipe so existing router/client wiring works unchanged).
 
 ## files
 
@@ -110,7 +110,7 @@ API serves at `http://HEAD_NODE_IP:8888/v1` (served model
 | `GPU_MEM` | 0.78 | keep ≤0.78 on this stack |
 | `MAX_MODEL_LEN` | 1048576 | 1M is the true YaRN ceiling |
 | `THINKING` | false | server `thinking` default; your pi client drives effort client-side anyway |
-| `PORT` | 8888 | serve port |
+| `PORT` | 8000 | serve port |
 
 `MAX_NUM_BATCHED_TOKENS=8192` and `max-cudagraph-capture-size=seqs×(k+1)` are
 derived per the upstream's validated profile — don't touch without re-measuring.

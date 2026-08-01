@@ -1,7 +1,7 @@
 # deepseek-v4-flash-tonyd2wild - 1M token context (NVFP4 DS-MLA KV)
 
-A second recipe for running DeepSeek-V4-Flash-0731 on a 2-node DGX Spark cluster,
-built from [tonyd2wild's DSpark stack](https://github.com/tonyd2wild/DeepSeek-v4-Flash-0731-DSpark-1M-NVFP4-KV-2x-DGX-Spark)
+A recipe for running DeepSeek-V4-Flash-0731 on a 2-node DGX Spark cluster, built
+from [tonyd2wild's DSpark stack](https://github.com/tonyd2wild/DeepSeek-v4-Flash-0731-DSpark-1M-NVFP4-KV-2x-DGX-Spark)
 instead of the aiden image. It exists to **head-to-head test** whether this image
 and configuration is better than the aiden one — same model revision, same
 hardware, but a different runtime:
@@ -27,77 +27,181 @@ hardware, but a different runtime:
 
 ---
 
-## Prep (both nodes) — 1) Ensure the 0731 model is cached
+# Building & deploying from scratch on new DGX Sparks
+
+Everything below is what it takes to go from a pair of fresh GB10 Sparks to a
+serving `deepseek-v4-flash` on :8000. It reflects a real deployment; the gotchas
+marked ⚠️ are ones actually hit.
+
+## 0) Prerequisites (each node)
+
+- Docker with NVIDIA GPU support (`docker run --gpus all nvidia/cuda:12.1.0-base-ubuntu22.04 true` works).
+- **Disk**: image is ~22.7 GB; the model snapshot is ~155 GB (48 shards) — HF cache needs room on **both** nodes.
+- Outbound internet to `ghcr.io` (base image) and `huggingface.co` (model, only if cache absent).
+- Both nodes cabled on the same RoCE fabric (ConnectX-7/QSFP) and the same control-plane Ethernet network.
+- **Passwordless SSH from the head node (rank 0) to the worker (rank 1)** — the build script rsyncs to the worker over SSH.
+
+Roles: **node0 = leader** (rank 0, runs the API server), **node1 = follower** (rank 1, `--headless`).
+
+## 1) Clone the recipe (both nodes)
 
 ```bash
-cd ~/spark-recipes/deepseek-v4-flash-tonyd2wild/
+git clone https://github.com/taoofshawn/spark-recipes.git ~/code/spark-recipes
+cd ~/code/spark-recipes && git checkout deepseek-v4-flash-tonyd2wild
+```
+
+The committed tree already has executable bits on all `upstream/*.sh` scripts,
+so no `chmod` is needed (⚠️ older clones without the `100755` bits fail with
+`./build-dspark-vllm-runtime.sh: Permission denied` — fix with
+`chmod +x upstream/*.sh upstream/scripts/*.sh`).
+
+## 2) Discover interfaces and set per-node IPs
+
+The committed `.env` / `.env.node0` / `.env.node1` contain **this cluster's**
+values. For new hardware, find the names on each node:
+
+```bash
+# Ethernet (control plane) — the "BROADCAST,UP" en* ports
+ip -br addr show | grep -E '^en'
+# RoCE (data plane) — maps each ethernet port to its RDMA device
+ibdev2netdev        # or: rdma link show
+```
+
+Typical mapping: `enp1s0f0np0` ↔ `rocep1s0f0`, `enP2p1s0f0np0` ↔ `roceP2p1s0f0`.
+The RoCE **IPv4 address** of the leader goes in `MASTER_ADDR` (`.env`) and
+`ROCE_IP` (`.env.node0`); the follower's goes in `.env.node1`.
+
+| file | fields to change on new hardware |
+|---|---|
+| `.env` | `MASTER_ADDR` (leader RoCE IP), `ETH_IF`, `ETH_IF2`, `IB_PORTS` |
+| `.env.node0` | `ROCE_IP` (leader) |
+| `.env.node1` | `ROCE_IP` (follower) |
+
+`NCCL_IB_GID_INDEX` is left empty — the compose auto-detects the RoCE-v2 IPv4
+GID at boot (override only if detection ever picks the wrong one).
+
+## 3) Configure the build environment (`upstream/.env.dspark`)
+
+The build script (`build-dspark-vllm-runtime.sh`) requires `WORKER_HOST` in
+`upstream/.env.dspark` to rsync the build to the worker (⚠️ without it you get
+`WORKER_HOST: WORKER_HOST must be set in …/.env.dspark`). A cluster-specific
+copy is committed — edit it for new hardware:
+
+```bash
+cd upstream
+# key values to change per cluster:
+#   WORKER_HOST=<worker ssh hostname>  (e.g. spark-6d14.shawndo.intra)
+#   MASTER_ADDR=<leader RoCE IP>
+#   VLLM_HOST_IP=<leader RoCE IP>      WORKER_VLLM_HOST_IP=<worker RoCE IP>
+#   NCCL_IB_HCA=<roce ports>           NCCL_SOCKET_IFNAME=<eth ifaces>
+#   HF_CACHE=/home/<user>/.cache/huggingface   WORKER_HF_CACHE= (same path on worker)
+```
+
+⚠️ If the head has never SSH'd to the worker under that hostname, add the host key first:
+
+```bash
+ssh-keyscan -H spark-6d14.shawndo.intra >> ~/.ssh/known_hosts
+ssh spark-6d14.shawndo.intra hostname   # confirm passwordless login works
+```
+
+## 4) Ensure the 0731 model is cached (BOTH nodes)
+
+TP=2 reads the snapshot independently on each node — a missing cache on the
+worker is a classic failure. Same revision as the aiden recipe.
+
+```bash
+cd ~/code/spark-recipes/deepseek-v4-flash-tonyd2wild
 HF_MODEL=$(grep "MODEL_PATH:" docker-compose.yml | awk '{print $NF}')
 HF_REVISION=$(grep "MODEL_REVISION:" docker-compose.yml | awk '{print $NF}')
 hf download $HF_MODEL --revision $HF_REVISION
 ```
-`HF_CACHE` in `.env` already points at the same 0731 snapshot the aiden recipe
-uses, so if you already ran that recipe there is nothing to download.
 
-## Prep — 2) Build the image (CPU build, no GPU needed)
+The container mounts `${HF_CACHE}` (in `.env`, default
+`/home/sdrew/.cache/huggingface`) at `/cache/huggingface`. If the container ever
+runs as uid 1000 (e.g. the upstream launcher scripts) and the cache is root-owned,
+startup fails — `sudo chown -R 1000:1000 <hf-cache>` fixes that. This compose runs
+as root, so it is not needed here.
 
-There is **no prebuilt public image** — the final image is a scripted 4-stage
-overlay build on top of a public base
-(`ghcr.io/bjk110/vllm-spark:unholy-fusion-prod-ready`). Build on the head node
-with the vendored upstream scripts:
+## 5) Build the image (head node; CPU build, no GPU needed)
 
-```bash
-cd upstream/
-docker pull ghcr.io/bjk110/vllm-spark:unholy-fusion-prod-ready
-./build-dspark-vllm-runtime.sh        # builds mia-raf-pr1 → nvfp4-a → nvfp4-b → dspark-nvfp4-stage-c
-```
-`build-dspark-vllm-runtime.sh` rsyncs to the worker and rebuilds there too by
-default (`WORKER_BUILD=1`); or build on one node and `docker save`/`load` to the
-other. Confirm the tag exists on **both** nodes:
+There is **no prebuilt public image** — the final image is a 4-stage overlay
+build on top of a public base (`ghcr.io/bjk110/vllm-spark:unholy-fusion-prod-ready`):
 
 ```bash
-docker images vllm-dspark-runtime:dspark-nvfp4-stage-c
+cd ~/code/spark-recipes/deepseek-v4-flash-tonyd2wild/upstream
+docker pull ghcr.io/bjk110/vllm-spark:unholy-fusion-prod-ready   # ~5 GB, once
+./build-dspark-vllm-runtime.sh
 ```
 
-### Verify Patch 4 is in the image (0731 shared-expert fix)
+What it does:
+1. builds `vllm-dspark-runtime:mia-raf-pr1` (overlay: 18 patched vLLM source files) — 1–2 min cached
+2. `…-nvfp4-a` → `…-nvfp4-b` → **`vllm-dspark-runtime:dspark-nvfp4-stage-c`** (NVFP4 KV stages, ~seconds each)
+3. verifies imports + prints `dspark nvfp4 stage-c image ok 0.21.1rc1.dev339+…`
+4. rsyncs `upstream/` to the worker and rebuilds there (`WORKER_BUILD=1`; disable with `WORKER_BUILD=0`). First worker run pulls the base image again (~5 GB).
 
-Without it, 0731 decode roughly halves (acceptance ~26%). A fresh build already
-contains it, but confirm:
+Alternative: build once and ship the finished image:
+`docker save vllm-dspark-runtime:dspark-nvfp4-stage-c | ssh <worker> docker load`.
+
+## 6) Verify the build on both nodes
 
 ```bash
+docker images vllm-dspark-runtime:dspark-nvfp4-stage-c        # expect ~22.7 GB on BOTH
+# Patch 4 (0731 shared-expert fix) — without it 0731 decode ~halves (acceptance ~26%):
 docker run --rm --entrypoint grep vllm-dspark-runtime:dspark-nvfp4-stage-c \
   -n "shared_experts.gate_up_proj" \
   /opt/env/lib/python3.12/site-packages/vllm/v1/spec_decode/dspark.py
+# Expected: lines 33-34  ("shared_experts.gate_up_proj", ".shared_experts.w1", 0) / (…".w3", 1)
 ```
-Expected: two lines, `.shared_experts.w1` and `.shared_experts.w3`.
 
-### Missing module?
-
-This upstream is known to occasionally reference a module that is **not in this
-repo** but exists in **another repo by the same author** (`tonyd2wild`). If the
-build or first run errors on a missing path, search the author's other public
-repos (e.g. his DSpark serving-stack / MiMo repos) before going deeper.
-
----
-
-## Run
+## 7) Start (worker first, then leader ~30–35 s later)
 
 ```bash
-# Node 1 (follower): start first
+# Node 1 (follower/headless) — start FIRST
 docker compose --env-file .env --env-file .env.node1 up -d
-
-# Node 0 (leader): start about 30s after
+# ~30–35 s later, Node 0 (leader)
 docker compose --env-file .env --env-file .env.node0 up -d
 ```
 
-API serves at `http://HEAD_NODE_IP:8000/v1` (served model
-`deepseek-v4-flash` — same as the aiden recipe so existing router/client wiring works unchanged).
+API serves at `http://HEAD_NODE_IP:8000/v1` (served model `deepseek-v4-flash` —
+same as the aiden recipe, so existing router/client wiring, e.g.
+`spark.shawndo.intra:4000 → :8000`, works unchanged).
+
+## 8) Confirm it is healthy
+
+First boot takes **~7–8 min** (model load ~3 min + warmup/compile). Watch the leader:
+
+```bash
+docker logs -f ds4-dspark-t2w
+# wait for: "Application startup complete"
+curl -s http://127.0.0.1:8000/v1/models | python3 -m json.tool
+# expect: "id": "deepseek-v4-flash", "max_model_len": 1048576
+```
+
+Health markers in the boot log (all confirmed on a working deploy):
+
+| marker | meaning |
+|---|---|
+| `Using nvfp4_ds_mla data type to store kv cache` | NVFP4 DS-MLA KV active |
+| `Resolved architecture: DeepSeekV4DSparkModel` | model recognized |
+| `world_size=2 … backend=nccl` / `DP group leader … world_size=2` | both nodes joined TP=2 |
+| `Using 'B12X' Mxfp4 MoE backend` | the speed-critical MoE path (do not disable) |
+| `num_spec_tokens=5` | DSpark k=5 |
+| `GPU KV cache size: ~1.55–1.6M tokens` | KV pool (per-boot variance ~15%) |
+| `Application startup complete` | API up |
+
+Then send a real request and confirm SpecDecoding metrics appear:
+`docker logs --tail 40 ds4-dspark-t2w | grep "SpecDecoding metrics"`.
+
+⚠️ **Warm-up / cold-start**: a fresh boot is ~30% slower until a few hundred
+tokens of real traffic pass through, and the warm state decays after idle —
+never benchmark straight after boot or after a quiet period.
 
 ## files
 
 | File/dir | Purpose |
 |---|---|
-| `.env` | Shared config — must be customized |
-| `.env.node0` / `.env.node1` | Per-node overrides |
+| `.env` | Shared config — must be customized per cluster |
+| `.env.node0` / `.env.node1` | Per-node overrides (rank, headless, RoCE IP) |
 | `docker-compose.yml` | compose (aiden-style, tonyd2wild config) |
 | `upstream/` | **Vendored upstream repo** (build scripts, patches, docs) — see `upstream/VENDORED-AT.md` |
 
@@ -109,35 +213,34 @@ API serves at `http://HEAD_NODE_IP:8000/v1` (served model
 | `MAX_NUM_SEQS` | 6 | concurrency cap (6 is measured-best at 1M; 12 is riskier) |
 | `GPU_MEM` | 0.78 | keep ≤0.78 on this stack |
 | `MAX_MODEL_LEN` | 1048576 | 1M is the true YaRN ceiling |
-| `THINKING` | false | server `thinking` default; your pi client drives effort client-side anyway |
+| `THINKING` | false | server `thinking` default; clients can drive effort themselves |
 | `PORT` | 8000 | serve port |
 
 `MAX_NUM_BATCHED_TOKENS=8192` and `max-cudagraph-capture-size=seqs×(k+1)` are
 derived per the upstream's validated profile — don't touch without re-measuring.
 
-## Finding interface names for .env
+## Troubleshooting (real hits)
 
-### Ethernet ports (control plane → `ETH_IF`, `ETH_IF2`)
-```bash
-ip addr show | grep -E '^[0-9]+: en'
-```
-### RoCE ports (data plane → `IB_PORTS`)
-```bash
-ibdev2netdev     # or: rdma link show
-```
-Typical mapping: `enp1s0f0np0` ↔ `rocep1s0f0`, `enP2p1s0f0np0` ↔ `roceP2p1s0f0`.
-`GLOO_SOCKET_IFNAME`/`TP_SOCKET_IFNAME` use `ETH_IF`; the RoCE-v2 IPv4 GID index
-is auto-detected at boot (override via `NCCL_IB_GID_INDEX` if needed).
+| Symptom | Cause / fix |
+|---|---|
+| `./build-dspark-vllm-runtime.sh: Permission denied` | scripts not executable — `chmod +x upstream/*.sh upstream/scripts/*.sh` (fixed in the committed tree) |
+| `WORKER_HOST: WORKER_HOST must be set in …/.env.dspark` | build env missing — create/fix `upstream/.env.dspark` (committed copy exists) |
+| `Host key verification failed` (during build rsync) | add host key on head: `ssh-keyscan -H <worker> >> ~/.ssh/known_hosts` |
+| 0731 decode ~33 tok/s / acceptance ~26% | Patch 4 missing in the image — re-verify step 6 |
+| boots then dies under traffic at `GPU_MEM=0.80` | keep `GPU_MEM` ≤ 0.78 |
+| `No available shared memory broadcast block found in 60 seconds` | benign — other rank still compiling; resolves on its own |
+| `Truncating max_cudagraph_capture_size to 32` | benign on this vLLM; DSpark captures at 24 (valid k+1=6 multiple) |
+| `torch.compile is turned on, but the model … does not support it` | contradictory benign warning — compile actually runs (~22 s, AOT-cached) |
+| `min_p and logit_bias parameters won't work with speculative decoding` | expected under DSpark |
+| `SymmMemCommunicator: Device capability 12.1 not supported` | expected on GB10; falls back to PYNCCL |
+| Missing module/path during build or first run | this upstream occasionally references modules living in **another repo by the same author** (`tonyd2wild`) — search his other public repos first |
 
 ## Benchmarking caveats (from upstream — avoid misleading numbers)
 
 - **Use `stream: false`** and read `usage.completion_tokens` — under spec-decoding,
   streamed deltas measure *steps/s*, not tok/s (up to ~4× under-report).
-- **Warm the engine** — fresh boot is ~30% slow until a few hundred tokens of real
-  traffic, and the warm state **decays after idle**. Never benchmark right after
-  boot or after a quiet period.
-- KV pool is per-boot (varies ~15% boot-to-boot); the 1.5M pool figure is not a
-  fixed property.
+- **Warm the engine** — fresh boot is ~30% slow; warm state decays after idle.
+- KV pool is per-boot (varies ~15%); the 1.5M figure is not a fixed property.
 
 ## Attribution / upstream
 

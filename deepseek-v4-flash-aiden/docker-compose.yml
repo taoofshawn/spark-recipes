@@ -1,6 +1,6 @@
 services:
   ds4:
-    image: aidendle94/sparkrun-vllm-ds4-gb10@sha256:c188a1246cd3046fd8d49ecc32edf55bb454464e8a22086ff81305f4729ee48e
+    image: aidendle94/sparkrun-vllm-ds4-gb10@sha256:3b4d2b5f7929c2b15d25636e3115f343e693a03fe8a57f94969974432c2c4e8d
     container_name: ds4-dspark
     network_mode: host
     ipc: host
@@ -56,12 +56,10 @@ services:
       VLLM_USE_BREAKABLE_CUDAGRAPH: "0"
       VLLM_USE_V2_MODEL_RUNNER: "1"
       VLLM_USE_FLASHINFER_SAMPLER: "1"
-      #VLLM_USE_B12X_MOE: "1"
-      VLLM_USE_B12X_MOE: "0"
       VLLM_DSPARK_REPLICATE_MARKOV_W1: "1"
       # ---- model / serve ----
-      MODEL_PATH: deepseek-ai/DeepSeek-V4-Flash-DSpark
-      MODEL_REVISION: 62af8fffb2f7030cac4de2f0169f5b8d1101b646
+      MODEL_PATH: deepseek-ai/DeepSeek-V4-Flash-0731
+      MODEL_REVISION: 9e165c30e2704aec5d9d593cce3eebd58bbef1cb
       SERVED_MODEL_NAME: deepseek-v4-flash
       PORT: 8000
       GPU_MEM: 0.83
@@ -115,6 +113,7 @@ services:
           --enable-chunked-prefill --enable-prefix-caching --enable-flashinfer-autotune \
           --tokenizer-mode deepseek_v4 --tool-call-parser deepseek_v4 --reasoning-parser deepseek_v4 \
           --enable-auto-tool-choice \
+          --generation-config vllm \
           --default-chat-template-kwargs.temperature=$${TEMPERATURE} \
           --default-chat-template-kwargs.top_p=$${TOP_P} \
           --default-chat-template-kwargs.thinking=true --default-chat-template-kwargs.reasoning_effort=high \

@@ -21,6 +21,48 @@ docker compose --env-file .env --env-file .env.node1 up -d
 docker compose --env-file .env --env-file .env.node0 up -d
 ```
 
+## Chat template fix (real low/high/max reasoning)
+
+The image's native `deepseek_v4` tokenizer collapses reasoning levels: it only
+has one effort prefix (mislabeled `max`, actually the `high` text) and injects
+either that or nothing — requests sent as `low`/`high`/`max` did **not** get
+distinct prompts. This branch mounts the model's official
+`chat_template.jinja` (from the upstream "Add missing chat_template.jinja" PR)
+and switches to `--tokenizer-mode hf` so vLLM renders the template, giving real,
+distinct effort levels.
+
+What changed (already in this recipe):
+
+```yaml
+volumes:
+  - ./chat_template.jinja:/opt/deepseek/chat_template.jinja:ro
+```
+```bash
+--tokenizer-mode hf \
+--chat-template /opt/deepseek/chat_template.jinja \
+--default-chat-template-kwargs.thinking_mode=thinking \
+--default-chat-template-kwargs.reasoning_effort=max \
+# parsers unchanged:
+--tool-call-parser deepseek_v4 --reasoning-parser deepseek_v4
+```
+
+`chat_template.jinja` is committed in this recipe directory (SHA-256
+`96d91e0d6fbf703980f24d9c129033dfdce99b64a14fa765b0f472d1ad88743b`), pinned
+from `deepseek-ai/DeepSeek-V4-Flash-0731` revision
+`e13c04e3988264a54c7dd0e947ae5f0bae8f200d`.
+
+**Verify it is applied** (after restart, adjust model/port as needed):
+
+```bash
+for effort in low high max; do
+  curl -sS http://127.0.0.1:8000/v1/chat/completions/render \
+    -H 'Content-Type: application/json' \
+    -d "{\"model\":\"deepseek-v4-flash\",\"messages\":[{\"role\":\"user\",\"content\":\"Test\"}],\"add_generation_prompt\":true,\"chat_template_kwargs\":{\"thinking_mode\":\"thinking\",\"reasoning_effort\":\"$effort\"}}" |
+  jq -r "[\"$effort\", (.token_ids | length)] | @tsv"
+done
+# expect: low 5, high 84, max 97  (distinct counts = template active)
+```
+
 ## Reference
 The [discussion thread](https://forums.developer.nvidia.com/t/deepseek-v4-flash-aiden-recipe-from-reddit-1m-token-session-operational-cuda-12-1-tailored-for-dgx-spark-gb10/372268) for this configuration
 

@@ -14,6 +14,7 @@ services:
       - /home/sdrew/.cache/huggingface:/root/.cache/huggingface
       - /home/sdrew/.cache/vllm-ds4-dspark:/cache
       - /home/sdrew/.cache/tilelang-ds4:/root/.tilelang
+      - ./chat_template.jinja:/opt/deepseek/chat_template.jinja:ro
     deploy:
       resources:
         reservations:
@@ -111,12 +112,13 @@ services:
           --compilation-config '{"cudagraph_mode":"FULL_AND_PIECEWISE","custom_ops":["all"]}' \
           $${ASYNC_ARG} --no-scheduler-reserve-full-isl \
           --enable-chunked-prefill --enable-prefix-caching --enable-flashinfer-autotune \
-          --tokenizer-mode deepseek_v4 --tool-call-parser deepseek_v4 --reasoning-parser deepseek_v4 \
+          --tokenizer-mode hf --tool-call-parser deepseek_v4 --reasoning-parser deepseek_v4 \
           --enable-auto-tool-choice \
+          --chat-template /opt/deepseek/chat_template.jinja \
           --generation-config vllm \
           --default-chat-template-kwargs.temperature=$${TEMPERATURE} \
           --default-chat-template-kwargs.top_p=$${TOP_P} \
-          --default-chat-template-kwargs.thinking=true --default-chat-template-kwargs.reasoning_effort=max \
+          --default-chat-template-kwargs.thinking_mode=thinking --default-chat-template-kwargs.reasoning_effort=max \
           --attention-backend FLASHINFER_MLA_SPARSE_DSV4 --moe-backend b12x \
           --disable-custom-all-reduce \
           --nnodes 2 --node-rank "$${NODE_RANK}" --master-addr "$${MASTER_ADDR}" --master-port 25000 \

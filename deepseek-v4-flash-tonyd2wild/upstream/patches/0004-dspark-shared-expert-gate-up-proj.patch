@@ -1,0 +1,26 @@
+--- a/vllm/v1/spec_decode/dspark.py
++++ b/vllm/v1/spec_decode/dspark.py
+@@ -15,6 +15,23 @@
+ _STACKED_PARAM_NAME_MAPPING = (
+     ("attn.fused_wqa_wkv", ".attn.wq_a", 0),
+     ("attn.fused_wqa_wkv", ".attn.wkv", 1),
++    # The DSpark draft's shared expert is a DeepseekV4MLP whose projections are
++    # gate_up_proj (MergedColumnParallelLinear) + down_proj. The loader renames
++    # only ".shared_experts.w2" -> down_proj, so w1/w3 previously matched no
++    # parameter and were dropped by the logger.debug("Skipping unknown DSpark
++    # weight") path -- silent at INFO. That left
++    # model.layers.{43,44,45}.ffn.shared_experts.gate_up_proj.* uninitialised in
++    # every draft stage. n_shared_experts=1 and the shared expert is always-on,
++    # so each draft FFN ran with its always-active expert missing: coherent but
++    # materially worse drafts, i.e. correct output, unchanged steps/s, collapsed
++    # acceptance. The target model's own loader has these two rows already
++    # (models/deepseek_v4/nvidia/model.py:1952-1953); the draft loader lost them
++    # when the mapping was narrowed to avoid the markov_w1 collision.
++    # Safe: map_dspark_stacked_param_name() returns early on ".experts." (routed
++    # experts, note the leading dot) and these patterns are anchored on the full
++    # ".shared_experts.wN" segment, so "markov_w1" cannot match. Added 2026-07-31.
++    ("shared_experts.gate_up_proj", ".shared_experts.w1", 0),
++    ("shared_experts.gate_up_proj", ".shared_experts.w3", 1),
+ )
+ 
+ 

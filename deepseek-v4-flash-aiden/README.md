@@ -63,6 +63,27 @@ done
 # expect: low 5, high 84, max 97  (distinct counts = template active)
 ```
 
+**Rolling back** (e.g. when the next aiden image ships a correct built-in
+chat template): restore the four original bits —
+
+1. Remove the volume line `./chat_template.jinja:/opt/deepseek/chat_template.jinja:ro`.
+2. `--tokenizer-mode hf` → `--tokenizer-mode deepseek_v4`.
+3. Delete the `--chat-template /opt/deepseek/chat_template.jinja` argument.
+4. `thinking_mode=thinking` → `thinking=true` (keep `reasoning_effort=max`).
+
+`chat_template.jinja` can stay in the repo (it is inert once unmounted).
+The one-step revert is `git checkout main -- deepseek-v4-flash-aiden/` — this
+branch's only diff vs main is this fix. This is the exact original state:
+
+```bash
+--tokenizer-mode deepseek_v4 --tool-call-parser deepseek_v4 --reasoning-parser deepseek_v4 \
+--enable-auto-tool-choice \
+--generation-config vllm \
+--default-chat-template-kwargs.temperature=$${TEMPERATURE} \
+--default-chat-template-kwargs.top_p=$${TOP_P} \
+--default-chat-template-kwargs.thinking=true --default-chat-template-kwargs.reasoning_effort=max \
+```
+
 ## Reference
 The [discussion thread](https://forums.developer.nvidia.com/t/deepseek-v4-flash-aiden-recipe-from-reddit-1m-token-session-operational-cuda-12-1-tailored-for-dgx-spark-gb10/372268) for this configuration
 

@@ -103,6 +103,12 @@ From `spark-vllm-docker` (b12x) on the head node, run in **daemon mode** (`-d`):
 python3 run-recipe.py recipes/deepseek-v4-flash-eugr.yaml -d
 ```
 
+equivalent via the `run-recipe.sh` wrapper (it passes args straight through):
+
+```bash
+./run-recipe.sh recipes/deepseek-v4-flash-eugr.yaml -d
+```
+
 always pass `-d` (daemon) — so the cluster keeps serving after the command
 returns and your terminal is freed. Output is streamed to the container's
 stdout; follow it with:

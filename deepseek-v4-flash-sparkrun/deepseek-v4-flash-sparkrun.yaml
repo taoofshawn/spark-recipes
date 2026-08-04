@@ -56,7 +56,7 @@ defaults:
   reasoning_config: '{"reasoning_parser":"deepseek_v4","reasoning_start_str":"","reasoning_end_str":""}'
   generation_config: '{"temperature":0.95,"top_p":0.44,"repetition_penalty":1.05}'
   compilation_config: '{"cudagraph_mode":"FULL_AND_PIECEWISE","custom_ops":["all"]}'
-  speculative_config: '{"method":"dspark","num_speculative_tokens":5,"draft_sample_method":"probabilistic","attention_backend":"B12X_MLA_SPARSE"}'
+  speculative_config: '{"method":"dspark","num_speculative_tokens":5,"draft_sample_method":"probabilistic"}'
 
 env:
   CUTE_DSL_ARCH: "sm_121a"
@@ -102,7 +102,9 @@ command: |
       --load-format instanttensor \
       --moe-backend b12x \
       --linear-backend b12x \
-      --attention-backend B12X_MLA_SPARSE \
+      --attention-backend FLASHINFER_MLA_SPARSE_DSV4 \
       --max-cudagraph-capture-size {max_cudagraph_capture_size} \
+      --enable-chunked-prefill \
+      --no-scheduler-reserve-full-isl \
       --compilation-config '{compilation_config}' \
       --speculative-config '{speculative_config}'

@@ -44,6 +44,9 @@ env:
   VLLM_USE_V2_MODEL_RUNNER: "1"
   B12X_MLA_SM120_UNIFIED: "1"
   B12X_MOE_FORCE_A8: "1"
+  # Never touch the HF Hub — the model is served from the local cache on both nodes.
+  HF_HUB_OFFLINE: "1"
+  TRANSFORMERS_OFFLINE: "1"
 
 command: |
   vllm serve deepseek-ai/DeepSeek-V4-Flash-0731 \

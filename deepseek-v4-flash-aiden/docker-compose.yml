@@ -106,7 +106,10 @@ services:
 
         if [ "$${ASYNC_SCHED:-1}" = "1" ]; then ASYNC_ARG="--async-scheduling"; else ASYNC_ARG=""; fi
 
-        exec vllm serve "$${MODEL_PATH}" \
+        # 3.8 image: vllm lives under /opt/env (moved from /opt/venv) and the
+        # login shell resets PATH, so call the binary by absolute path.
+        export PATH=/opt/env/bin:/opt/env/nvvm/bin:/opt/env/targets/sbsa-linux/nvvm/bin:$PATH
+        exec /opt/env/bin/vllm serve "$${MODEL_PATH}" \
           --revision "$${MODEL_REVISION:-main}" \
           --served-model-name "$${SERVED_MODEL_NAME:-deepseek-v4-flash}" \
           --host 0.0.0.0 --port "$${PORT}" --trust-remote-code \

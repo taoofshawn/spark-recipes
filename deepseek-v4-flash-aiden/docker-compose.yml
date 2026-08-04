@@ -131,7 +131,7 @@ services:
           --default-chat-template-kwargs.temperature=$${TEMPERATURE} \
           --default-chat-template-kwargs.top_p=$${TOP_P} \
           --default-chat-template-kwargs.thinking=true --default-chat-template-kwargs.reasoning_effort=low \
-          --attention-backend FLASHINFER_MLA_SPARSE_DSV4 --moe-backend b12x \
+          --attention-backend B12X_MLA_SPARSE --moe-backend b12x \
           --disable-custom-all-reduce \
           --nnodes 2 --node-rank "$${NODE_RANK}" --master-addr "$${MASTER_ADDR}" --master-port 25000 \
           $${HEADLESS:+--headless} \

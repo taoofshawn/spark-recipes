@@ -97,34 +97,36 @@ container to give real distinct `low` / `high` / `max` reasoning prefixes.
 
 ## Launch on the 2-node cluster
 
-From `spark-vllm-docker` (b12x) on the head node:
+From `spark-vllm-docker` (b12x) on the head node, run in **daemon mode** (`-d`):
 
 ```bash
-python3 run-recipe.py recipes/deepseek-v4-flash-eugr.yaml
+python3 run-recipe.py recipes/deepseek-v4-flash-eugr.yaml -d
 ```
 
-or with the wrapper:
+always pass `-d` (daemon) — so the cluster keeps serving after the command
+returns and your terminal is freed. Output is streamed to the container's
+stdout; follow it with:
 
 ```bash
-./run-recipe.sh recipes/deepseek-v4-flash-eugr.yaml
+docker logs -f vllm_node
 ```
 
 `run-recipe.py` will:
 1. Apply the recipe's `mods` (instanttensor hybrid loader + reasoning-effort fix).
 2. Launch vLLM on both nodes using the cluster in `.env` (`./.env` / autodiscovery).
 
-To force a build and run in one shot:
-
-```bash
-./run-recipe.sh recipes/deepseek-v4-flash-eugr.yaml --setup --force-build
-```
+> ⚠️ **Do not run in the foreground.** Without `-d`, `launch-cluster.sh` installs a
+> trap on Ctrl-C / SIGHUP that runs `docker stop` on **both** nodes, and the
+> containers run with `--rm` — so a stray Ctrl-C (or a closed terminal) tears the
+> whole cluster down and removes the containers. Always launch with `-d`.
 
 ### Low-level launch (equivalent, manual)
 
-If you prefer to drive `launch-cluster.sh` directly:
+If you prefer to drive `launch-cluster.sh` directly, pass `-d` (after the options,
+before the `exec` action) to stay detached:
 
 ```bash
-./launch-cluster.sh \
+./launch-cluster.sh -d \
   --apply-mod mods/instanttensor-hybrid-draft-loader \
   --apply-mod mods/dsv4-reasoning-effort-fix \
   -e VLLM_USE_AOT_COMPILE=1 -e VLLM_USE_BREAKABLE_CUDAGRAPH=0 \

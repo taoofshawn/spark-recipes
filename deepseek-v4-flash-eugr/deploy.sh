@@ -78,8 +78,10 @@ build_image() {
 # ---------------------------------------------------------------------------
 launch() {
     cd "$EUGER_REPO"
-    echo "[deploy] launching recipes/deepseek-v4-flash-eugr.yaml"
-    python3 run-recipe.py recipes/deepseek-v4-flash-eugr.yaml
+    echo "[deploy] launching recipes/deepseek-v4-flash-eugr.yaml (daemon mode)"
+    # -d: detach so the cluster keeps serving after this returns and a stray
+    #     Ctrl-C / closed terminal can't tear it down.
+    python3 run-recipe.py recipes/deepseek-v4-flash-eugr.yaml -d
 }
 
 ensure_repo

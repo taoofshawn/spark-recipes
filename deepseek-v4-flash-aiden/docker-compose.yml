@@ -1,6 +1,6 @@
 services:
   ds4:
-    image: aidendle94/sparkrun-vllm-ds4-gb10@sha256:3b4d2b5f7929c2b15d25636e3115f343e693a03fe8a57f94969974432c2c4e8d
+    image: aidendle94/sparkrun-vllm-ds4-gb10@sha256:50b139fbfd7b6014452c2d51906f27114970ddf2336c07b631c6c2a1899af308
     container_name: ds4-dspark
     network_mode: host
     ipc: host
@@ -17,11 +17,11 @@ services:
       # Official 0731 encoder, bind-mounted directly OVER the image's bundled
       # pre-0731 encoder so vllm loads it at import (see README). NOTE: the
       # DSPARK_ENCODING_FILE env-var hook from MiaAI's launcher is NOT honored
-      # by this image — hence this direct file overlay.
-      - ./encoding_dsv4.py:/opt/venv/lib/python3.12/site-packages/vllm/tokenizers/deepseek_v4_encoding.py:ro
+      # by this image — hence this direct file overlay. 3.8 image uses /opt/env.
+      - ./encoding_dsv4.py:/opt/env/lib/python3.12/site-packages/vllm/tokenizers/deepseek_v4_encoding.py:ro
       # Corrected deepseek_v4 tokenizer wrapper (pre-0731 wrapper collapses
       # low->high; this restores low/high/max + off). See README.
-      - ./deepseek_v4_wrapper.py:/opt/venv/lib/python3.12/site-packages/vllm/tokenizers/deepseek_v4.py:ro
+      - ./deepseek_v4_wrapper.py:/opt/env/lib/python3.12/site-packages/vllm/tokenizers/deepseek_v4.py:ro
     deploy:
       resources:
         reservations:

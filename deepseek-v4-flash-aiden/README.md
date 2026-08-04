@@ -56,9 +56,9 @@ What changed (already in this recipe):
 ```yaml
 volumes:
   # overlay the image's bundled encoder (fixes low/high/max effort prompts)
-  - ./encoding_dsv4.py:/opt/venv/lib/python3.12/site-packages/vllm/tokenizers/deepseek_v4_encoding.py:ro
+  - ./encoding_dsv4.py:/opt/env/lib/python3.12/site-packages/vllm/tokenizers/deepseek_v4_encoding.py:ro
   # overlay the tokenizer wrapper (fixes pre-0731 low->high collapse + adds off)
-  - ./deepseek_v4_wrapper.py:/opt/venv/lib/python3.12/site-packages/vllm/tokenizers/deepseek_v4.py:ro
+  - ./deepseek_v4_wrapper.py:/opt/env/lib/python3.12/site-packages/vllm/tokenizers/deepseek_v4.py:ro
 ```
 ```bash
 --tokenizer-mode deepseek_v4 --tool-call-parser deepseek_v4 --reasoning-parser deepseek_v4 \
@@ -75,6 +75,16 @@ revision `9e165c30e2704aec5d9d593cce3eebd58bbef1cb` (the same revision pinned
 in this recipe's `MODEL_REVISION`). `deepseek_v4_wrapper.py` is the image's own
 `tokenizers/deepseek_v4.py` (2026-06-26 eldritch build) with only the
 `reasoning_effort` mapping corrected.
+
+> **3.8 image note (`production-3.8`)** — updates this recipe from vLLM
+> `0.11.2` to `0.21.1rc1`, and the overlay target moved from `/opt/venv/...`
+> to `/opt/env/...`. Verified inside the 3.8 image: it does **not** bake in the
+> fix — the encoder still has the pre-0731 mislabeled `REASONING_EFFORT_MAX`
+> and the wrapper still collapses `low`→`high`. Both overlays therefore remain
+> required (paths above), and the tokenizer still routes through the same
+> `deepseek_v4.py` wrapper, so the overlays stay honored. The 0.21 runtime jump
+> may carry other flag/output changes — validate reasoning + tool calls after
+> boot.
 
 > **Why the wrapper overlay?** The official encoder fixes the effort **prompts**,
 > but the image's wrapper still maps every non-`none`/non-`max` effort to `high`

@@ -21,35 +21,49 @@ docker compose --env-file .env --env-file .env.node1 up -d
 docker compose --env-file .env --env-file .env.node0 up -d
 ```
 
-## Chat template fix (real low/high/max reasoning)
+## Reasoning-effort + tool-call fix (official native encoder)
 
-The image's native `deepseek_v4` tokenizer collapses reasoning levels: it only
-has one effort prefix (mislabeled `max`, actually the `high` text) and injects
-either that or nothing — requests sent as `low`/`high`/`max` did **not** get
-distinct prompts. This branch mounts the model's official
-`chat_template.jinja` (from the upstream "Add missing chat_template.jinja" PR)
-and switches to `--tokenizer-mode hf` so vLLM renders the template, giving real,
-distinct effort levels.
+The image's native `deepseek_v4` tokenizer collapses reasoning levels: its
+bundled (pre-0731) encoder has only one effort prefix (mislabeled `max`,
+actually the `high` text) and injects either that or nothing — so requests sent
+as `low`/`high`/`max` do **not** get distinct prompts. It also lacks multi-turn
+tool-result ordering.
+
+**This branch replaces the bundled encoder with the model's official 0731
+encoder** (`encoding/encoding_dsv4.py`) via vLLM's `DSPARK_ENCODING_FILE` hook,
+which installs it into vLLM before import on both ranks. We keep the native
+`deepseek_v4` tokenizer (we do **not** use `--tokenizer-mode hf`), so tool-call /
+reasoning parsing stays on the native path. The official encoder has correct,
+distinct effort prompts — `low` adds nothing, `high` = "Absolute maximum…",
+`max` = "Beyond maximum…" — and implements multi-turn tool-result sorting.
+
+Why not the jinja approach? An earlier attempt mounted a reverse-engineered
+`chat_template.jinja` and switched to `--tokenizer-mode hf`. It produced
+distinct effort levels but broke tool-call JSON at high/max (the template omits
+multi-turn tool-result ordering and re-renders large contexts). The native
+encoder is the forum-recommended path and matches this recipe's native parsers.
 
 What changed (already in this recipe):
 
 ```yaml
 volumes:
-  - ./chat_template.jinja:/opt/deepseek/chat_template.jinja:ro
+  - ./encoding_dsv4.py:/opt/deepseek/encoding_dsv4.py:ro
+environment:
+  DSPARK_ENCODING_FILE: /opt/deepseek/encoding_dsv4.py
 ```
 ```bash
---tokenizer-mode hf \
---chat-template /opt/deepseek/chat_template.jinja \
---default-chat-template-kwargs.thinking_mode=thinking \
---default-chat-template-kwargs.reasoning_effort=max \
-# parsers unchanged:
---tool-call-parser deepseek_v4 --reasoning-parser deepseek_v4
+--tokenizer-mode deepseek_v4 --tool-call-parser deepseek_v4 --reasoning-parser deepseek_v4 \
+--enable-auto-tool-choice \
+--generation-config vllm \
+--default-chat-template-kwargs.thinking=true \
+--default-chat-template-kwargs.reasoning_effort=low \
 ```
 
-`chat_template.jinja` is committed in this recipe directory (SHA-256
-`96d91e0d6fbf703980f24d9c129033dfdce99b64a14fa765b0f472d1ad88743b`), pinned
-from `deepseek-ai/DeepSeek-V4-Flash-0731` revision
-`e13c04e3988264a54c7dd0e947ae5f0bae8f200d`.
+`encoding_dsv4.py` is committed in this recipe directory (SHA-256
+`abc0d26120250dda0ae077dc64aa28836026e61e970854aaeb792445e6a0dde6`), pinned
+from `deepseek-ai/DeepSeek-V4-Flash-0731` path `encoding/encoding_dsv4.py` at
+revision `9e165c30e2704aec5d9d593cce3eebd58bbef1cb` (the same revision pinned
+in this recipe's `MODEL_REVISION`).
 
 **Verify it is applied** (after restart, adjust model/port as needed):
 
@@ -57,23 +71,25 @@ from `deepseek-ai/DeepSeek-V4-Flash-0731` revision
 for effort in low high max; do
   curl -sS http://127.0.0.1:8000/v1/chat/completions/render \
     -H 'Content-Type: application/json' \
-    -d "{\"model\":\"deepseek-v4-flash\",\"messages\":[{\"role\":\"user\",\"content\":\"Test\"}],\"add_generation_prompt\":true,\"chat_template_kwargs\":{\"thinking_mode\":\"thinking\",\"reasoning_effort\":\"$effort\"}}" |
+    -d "{\"model\":\"deepseek-v4-flash\",\"messages\":[{\"role\":\"user\",\"content\":\"Test\"}],\"add_generation_prompt\":true,\"chat_template_kwargs\":{\"thinking\":true,\"reasoning_effort\":\"$effort\"}}" |
   jq -r "[\"$effort\", (.token_ids | length)] | @tsv"
 done
-# expect: low 5, high 84, max 97  (distinct counts = template active)
+# expect three distinct lengths: low short, high ≠ max (both long) = encoder active
 ```
+Then sanity-check a two-turn tool call (assistant tool call → tool result → user)
+to confirm tool-result ordering is preserved (the high/max tool-JSON failure
+mode from the jinja attempt is gone).
 
-**Rolling back** (e.g. when the next aiden image ships a correct built-in
-chat template): restore the four original bits —
+**Rolling back** (e.g. when a future aiden image ships a correct built-in
+encoder), restore the original bits:
 
-1. Remove the volume line `./chat_template.jinja:/opt/deepseek/chat_template.jinja:ro`.
-2. `--tokenizer-mode hf` → `--tokenizer-mode deepseek_v4`.
-3. Delete the `--chat-template /opt/deepseek/chat_template.jinja` argument.
-4. `thinking_mode=thinking` → `thinking=true` (keep `reasoning_effort=max`).
+1. Remove `DSPARK_ENCODING_FILE` and the `./encoding_dsv4.py:...` volume line.
+2. `--default-chat-template-kwargs.reasoning_effort=low` → `=max`
+   (`thinking=true` stays).
 
-`chat_template.jinja` can stay in the repo (it is inert once unmounted).
+`encoding_dsv4.py` can stay in the repo (it is inert once unmounted).
 The one-step revert is `git checkout main -- deepseek-v4-flash-aiden/` — this
-branch's only diff vs main is this fix. This is the exact original state:
+branch's only runtime diff vs main is this fix. This is the exact original state:
 
 ```bash
 --tokenizer-mode deepseek_v4 --tool-call-parser deepseek_v4 --reasoning-parser deepseek_v4 \

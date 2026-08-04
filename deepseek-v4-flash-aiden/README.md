@@ -30,12 +30,20 @@ as `low`/`high`/`max` do **not** get distinct prompts. It also lacks multi-turn
 tool-result ordering.
 
 **This branch replaces the bundled encoder with the model's official 0731
-encoder** (`encoding/encoding_dsv4.py`) via vLLM's `DSPARK_ENCODING_FILE` hook,
-which installs it into vLLM before import on both ranks. We keep the native
-`deepseek_v4` tokenizer (we do **not** use `--tokenizer-mode hf`), so tool-call /
-reasoning parsing stays on the native path. The official encoder has correct,
-distinct effort prompts — `low` adds nothing, `high` = "Absolute maximum…",
-`max` = "Beyond maximum…" — and implements multi-turn tool-result sorting.
+encoder** (`encoding/encoding_dsv4.py`) by bind-mounting it **directly over** the
+image's bundled `vllm/tokenizers/deepseek_v4_encoding.py`, so vllm loads it at
+import time. We keep the native `deepseek_v4` tokenizer (we do **not** use
+`--tokenizer-mode hf`), so tool-call / reasoning parsing stays on the native
+path. The official encoder has correct, distinct effort prompts — `low` adds
+nothing, `high` = "Absolute maximum…", `max` = "Beyond maximum…" — the bundled
+pre-0731 encoder collapses these (low/high → no prefix, max → the *high* text).
+
+> **Note on `DSPARK_ENCODING_FILE`:** the MiaAI-Lab doc recommends setting this
+> env var to point the runtime at `encoding/encoding_dsv4.py`. That hook is a
+> feature of *their* launcher — verified it is referenced **nowhere** in the
+> aiden image, so it is inert here. That is why this recipe uses a direct file
+> overlay instead. (If a future aiden image starts honoring it, either mechanism
+> works.)
 
 Why not the jinja approach? An earlier attempt mounted a reverse-engineered
 `chat_template.jinja` and switched to `--tokenizer-mode hf`. It produced
@@ -47,9 +55,8 @@ What changed (already in this recipe):
 
 ```yaml
 volumes:
-  - ./encoding_dsv4.py:/opt/deepseek/encoding_dsv4.py:ro
-environment:
-  DSPARK_ENCODING_FILE: /opt/deepseek/encoding_dsv4.py
+  # overlay over the image's bundled encoder
+  - ./encoding_dsv4.py:/opt/venv/lib/python3.12/site-packages/vllm/tokenizers/deepseek_v4_encoding.py:ro
 ```
 ```bash
 --tokenizer-mode deepseek_v4 --tool-call-parser deepseek_v4 --reasoning-parser deepseek_v4 \
@@ -83,7 +90,7 @@ mode from the jinja attempt is gone).
 **Rolling back** (e.g. when a future aiden image ships a correct built-in
 encoder), restore the original bits:
 
-1. Remove `DSPARK_ENCODING_FILE` and the `./encoding_dsv4.py:...` volume line.
+1. Remove the `./encoding_dsv4.py:...` volume overlay line.
 2. `--default-chat-template-kwargs.reasoning_effort=low` → `=max`
    (`thinking=true` stays).
 

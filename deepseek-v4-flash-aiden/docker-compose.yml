@@ -14,9 +14,11 @@ services:
       - /home/sdrew/.cache/huggingface:/root/.cache/huggingface
       - /home/sdrew/.cache/vllm-ds4-dspark:/cache
       - /home/sdrew/.cache/tilelang-ds4:/root/.tilelang
-      # Official DeepSeek-V4 message encoder, installed into vLLM before import
-      # (see README: 'DSPARK_ENCODING_FILE native-encoder fix').
-      - ./encoding_dsv4.py:/opt/deepseek/encoding_dsv4.py:ro
+      # Official 0731 encoder, bind-mounted directly OVER the image's bundled
+      # pre-0731 encoder so vllm loads it at import (see README). NOTE: the
+      # DSPARK_ENCODING_FILE env-var hook from MiaAI's launcher is NOT honored
+      # by this image — hence this direct file overlay.
+      - ./encoding_dsv4.py:/opt/venv/lib/python3.12/site-packages/vllm/tokenizers/deepseek_v4_encoding.py:ro
     deploy:
       resources:
         reservations:
@@ -61,10 +63,6 @@ services:
       VLLM_USE_FLASHINFER_SAMPLER: "1"
       VLLM_DSPARK_REPLICATE_MARKOV_W1: "1"
       # ---- model / serve ----
-      # Point the runtime at the official 0731 encoder (fixes low/high/max effort
-      # + multi-turn tool-result ordering). Reverts to the image's bundled,
-      # pre-0731 encoder if unset/removed.
-      DSPARK_ENCODING_FILE: /opt/deepseek/encoding_dsv4.py
       MODEL_PATH: deepseek-ai/DeepSeek-V4-Flash-0731
       MODEL_REVISION: 9e165c30e2704aec5d9d593cce3eebd58bbef1cb
       SERVED_MODEL_NAME: deepseek-v4-flash

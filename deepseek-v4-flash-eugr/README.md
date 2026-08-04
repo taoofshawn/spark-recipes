@@ -198,6 +198,48 @@ curl -sS http://127.0.0.1:8000/v1/chat/completions \
 
 ---
 
+## Graceful shutdown / stop
+
+The cluster is a set of `vllm_node` containers — one on the **head** node and one
+on the **worker** node. eugr's `launch-cluster.sh` provides a built-in `stop`
+action that sends `docker stop` (SIGTERM → graceful exit → SIGKILL on timeout)
+to the container on **both** nodes, using the nodes + container name from `.env`.
+
+On the head node, from the eugr `b12x` checkout:
+
+```bash
+cd ~/.cache/sparkrun/eugr-spark-vllm-docker   # or wherever you checked out b12x
+./launch-cluster.sh stop
+```
+
+This is the graceful way to tear the cluster down. Verify it stopped:
+
+```bash
+# head
+./launch-cluster.sh status
+# or manually both nodes
+docker ps --filter name=vllm_node
+```
+
+> `status` also works to check health before/after.
+
+**Manual equivalent** (if you only ever tweak the recipe by hand):
+
+```bash
+# on head
+docker stop vllm_node
+# on worker (from the head node)
+ssh sdrew@<worker-ip> docker stop vllm_node
+```
+
+There's no requirement to `docker rm` — the next `run-recipe.py` launch recreates
+the container. The GPU is released once the container stops.
+
+> ⚠️ Only restart after both containers are down. A clean `launch-cluster.sh stop`
+> followed by re-running the recipe is the intended restart flow.
+
+---
+
 ## Troubleshooting
 
 - **`Check failed: num_tokens > 64` / DSpark draft errors** — remove the
@@ -208,7 +250,8 @@ curl -sS http://127.0.0.1:8000/v1/chat/completions \
   to avoid this. If you prefer safetensors, use
   `--load-format safetensors --safetensors-load-strategy lazy`.
 - **Stale b12x image** — the shipped `vllm-node-b12x` may predate the 0731 model /
-  b12x support. Rebuild: `./build-and-copy.sh -c --exp-b12x --force-build`.
+  b12x support. Rebuild: `./build-and-copy.sh -c --exp-b12x` (add `--rebuild-vllm`
+  or `--rebuild-flashinfer` to force source rebuilds).
 - **Model not found** — ensure the HF cache is present on **both** nodes.
 
 ## Reference

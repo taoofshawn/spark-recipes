@@ -55,8 +55,10 @@ What changed (already in this recipe):
 
 ```yaml
 volumes:
-  # overlay over the image's bundled encoder
+  # overlay the image's bundled encoder (fixes low/high/max effort prompts)
   - ./encoding_dsv4.py:/opt/venv/lib/python3.12/site-packages/vllm/tokenizers/deepseek_v4_encoding.py:ro
+  # overlay the tokenizer wrapper (fixes pre-0731 low->high collapse + adds off)
+  - ./deepseek_v4_wrapper.py:/opt/venv/lib/python3.12/site-packages/vllm/tokenizers/deepseek_v4.py:ro
 ```
 ```bash
 --tokenizer-mode deepseek_v4 --tool-call-parser deepseek_v4 --reasoning-parser deepseek_v4 \
@@ -70,7 +72,14 @@ volumes:
 `abc0d26120250dda0ae077dc64aa28836026e61e970854aaeb792445e6a0dde6`), pinned
 from `deepseek-ai/DeepSeek-V4-Flash-0731` path `encoding/encoding_dsv4.py` at
 revision `9e165c30e2704aec5d9d593cce3eebd58bbef1cb` (the same revision pinned
-in this recipe's `MODEL_REVISION`).
+in this recipe's `MODEL_REVISION`). `deepseek_v4_wrapper.py` is the image's own
+`tokenizers/deepseek_v4.py` (2026-06-26 eldritch build) with only the
+`reasoning_effort` mapping corrected.
+
+> **Why the wrapper overlay?** The official encoder fixes the effort **prompts**,
+> but the image's wrapper still maps every non-`none`/non-`max` effort to `high`
+> (pre-0731 bug) — so `low` rendered the same as `high`. The overlay restores
+> `low`→`low`, `high`→`high`, `max`/`xhigh`→`max`, and `none`/`off`→chat (thinking off).
 
 **Verify it is applied** (after restart, adjust model/port as needed):
 
@@ -90,7 +99,8 @@ mode from the jinja attempt is gone).
 **Rolling back** (e.g. when a future aiden image ships a correct built-in
 encoder), restore the original bits:
 
-1. Remove the `./encoding_dsv4.py:...` volume overlay line.
+1. Remove the `./encoding_dsv4.py` and `./deepseek_v4_wrapper.py` volume overlay
+   lines.
 2. `--default-chat-template-kwargs.reasoning_effort=low` → `=max`
    (`thinking=true` stays).
 

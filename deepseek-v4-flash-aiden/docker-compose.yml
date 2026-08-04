@@ -19,6 +19,9 @@ services:
       # DSPARK_ENCODING_FILE env-var hook from MiaAI's launcher is NOT honored
       # by this image — hence this direct file overlay.
       - ./encoding_dsv4.py:/opt/venv/lib/python3.12/site-packages/vllm/tokenizers/deepseek_v4_encoding.py:ro
+      # Corrected deepseek_v4 tokenizer wrapper (pre-0731 wrapper collapses
+      # low->high; this restores low/high/max + off). See README.
+      - ./deepseek_v4_wrapper.py:/opt/venv/lib/python3.12/site-packages/vllm/tokenizers/deepseek_v4.py:ro
     deploy:
       resources:
         reservations:

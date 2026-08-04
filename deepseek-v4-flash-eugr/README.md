@@ -134,7 +134,8 @@ If you prefer to drive `launch-cluster.sh` directly:
   -e VLLM_USE_B12X_SPARSE_INDEXER=1 -e VLLM_USE_V2_MODEL_RUNNER=1 \
   -e B12X_MLA_SM120_UNIFIED=1 -e B12X_MOE_FORCE_A8=1 \
   exec vllm serve deepseek-ai/DeepSeek-V4-Flash-0731 \
-    --port 8888 --host 0.0.0.0 --trust-remote-code \
+    --port 8000 --host 0.0.0.0 --trust-remote-code \
+    --served-model-name deepseek-v4-flash \
     --tensor-parallel-size 2 --kv-cache-dtype fp8 --block-size 256 \
     --max-model-len auto --max-num-seqs 6 --max-num-batched-tokens 8192 \
     --gpu-memory-utilization 0.85 --enable-prefix-caching \
@@ -157,6 +158,7 @@ If you prefer to drive `launch-cluster.sh` directly:
 | knob | value |
 |---|---|
 | model | `deepseek-ai/DeepSeek-V4-Flash-0731` |
+| served name | `deepseek-v4-flash` |
 | container | `vllm-node-b12x` (build arg `--exp-b12x`) |
 | TP | 2 (across 2 nodes) |
 | KV cache | fp8, block 256 |
@@ -167,7 +169,7 @@ If you prefer to drive `launch-cluster.sh` directly:
 | spec tokens | 5 (DSpark) |
 | load format | `instanttensor` |
 | backend | B12X MoE / linear / `B12X_MLA_SPARSE` attention |
-| port | 8888 |
+| port | 8000 |
 
 **Env vars** (set in the recipe):
 
@@ -185,10 +187,10 @@ B12X_MLA_SM120_UNIFIED=1  B12X_MOE_FORCE_A8=1
 ## Verify it's serving
 
 ```bash
-curl -sS http://127.0.0.1:8888/v1/models | jq .
-curl -sS http://127.0.0.1:8888/v1/chat/completions \
+curl -sS http://127.0.0.1:8000/v1/models | jq .
+curl -sS http://127.0.0.1:8000/v1/chat/completions \
   -H 'Content-Type: application/json' \
-  -d '{"model":"deepseek-ai/DeepSeek-V4-Flash-0731",
+  -d '{"model":"deepseek-v4-flash",
        "messages":[{"role":"user","content":"Say hi"}],
        "thinking":true,"reasoning_effort":"high"}' \
   | jq '.choices[0].message'

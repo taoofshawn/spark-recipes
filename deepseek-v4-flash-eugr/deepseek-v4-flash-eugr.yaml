@@ -18,7 +18,7 @@ mods:
   - mods/dsv4-reasoning-effort-fix
 
 defaults:
-  port: 8888
+  port: 8000
   host: 0.0.0.0
   tensor_parallel: 2
   gpu_memory_utilization: 0.85
@@ -49,6 +49,7 @@ command: |
   vllm serve deepseek-ai/DeepSeek-V4-Flash-0731 \
       --host {host} \
       --port {port} \
+      --served-model-name deepseek-v4-flash \
       --trust-remote-code \
       --tensor-parallel-size {tensor_parallel} \
       --kv-cache-dtype fp8 \

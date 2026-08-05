@@ -56,9 +56,9 @@ What changed (already in this recipe):
 ```yaml
 volumes:
   # overlay the image's bundled encoder (fixes low/high/max effort prompts)
-  - ./encoding_dsv4.py:/opt/env/lib/python3.12/site-packages/vllm/tokenizers/deepseek_v4_encoding.py:ro
+  - ./encoding_dsv4.py:/opt/venv/lib/python3.12/site-packages/vllm/tokenizers/deepseek_v4_encoding.py:ro
   # overlay the tokenizer wrapper (fixes pre-0731 low->high collapse + adds off)
-  - ./deepseek_v4_wrapper.py:/opt/env/lib/python3.12/site-packages/vllm/tokenizers/deepseek_v4.py:ro
+  - ./deepseek_v4_wrapper.py:/opt/venv/lib/python3.12/site-packages/vllm/tokenizers/deepseek_v4.py:ro
 ```
 ```bash
 --tokenizer-mode deepseek_v4 --tool-call-parser deepseek_v4 --reasoning-parser deepseek_v4 \
@@ -76,15 +76,12 @@ in this recipe's `MODEL_REVISION`). `deepseek_v4_wrapper.py` is the image's own
 `tokenizers/deepseek_v4.py` (2026-06-26 eldritch build) with only the
 `reasoning_effort` mapping corrected.
 
-> **3.8 image note (`production-3.8`)** — updates this recipe from vLLM
-> `0.11.2` to `0.21.1rc1`, and the overlay target moved from `/opt/venv/...`
-> to `/opt/env/...`. Verified inside the 3.8 image: it does **not** bake in the
-> fix — the encoder still has the pre-0731 mislabeled `REASONING_EFFORT_MAX`
-> and the wrapper still collapses `low`→`high`. Both overlays therefore remain
-> required (paths above), and the tokenizer still routes through the same
-> `deepseek_v4.py` wrapper, so the overlays stay honored. The 0.21 runtime jump
-> may carry other flag/output changes — validate reasoning + tool calls after
-> boot.
+> **Current image: `production-3.75`** (vLLM `0.11.2`), pinned by digest
+> `sha256:3b4d2b5f…`. This recipe was briefly moved to `production-3.8` (vLLM
+> `0.21.1`) then reverted — see "Upgrading to production-3.8" below for why
+> and what to watch for. 3.75 and 3.7 are functionally identical (same vLLM
+> 0.11.2, pre-0731 encoder/wrapper, `/opt/venv`, `FLASHINFER_MLA_SPARSE_DSV4`)
+> and both still need these two overlays.
 
 > **Why the wrapper overlay?** The official encoder fixes the effort **prompts**,
 > but the image's wrapper still maps every non-`none`/non-`max` effort to `high`
@@ -126,6 +123,45 @@ branch's only runtime diff vs main is this fix. This is the exact original state
 --default-chat-template-kwargs.top_p=$${TOP_P} \
 --default-chat-template-kwargs.thinking=true --default-chat-template-kwargs.reasoning_effort=max \
 ```
+
+## Upgrading to production-3.8 (vLLM 0.21) — notes
+
+`production-3.8` upgrades this recipe from vLLM `0.11.2` → `0.21.1rc1`. We tried
+it and reverted to 3.75 because of a DSpark regression (below). Those 3.8-only
+changes live in this repo's commit range `9326714..56997d8` and are listed here
+so a future update can re-apply them:
+
+1. **Image**: `@sha256:3b4d2b5f…` → `@sha256:50b139fb…` (`production-3.8`).
+2. **vllm moved `/opt/venv` → `/opt/env`**: overlay mounts and the launcher must
+   use `/opt/env/...`. The CLI is at `/opt/env/bin/vllm` and the login shell
+   resets PATH, so launch with `exec /opt/env/bin/vllm serve ...` (or export the
+   image's PATH).
+3. **HF_HOME changed to `/cache/huggingface`** in the 3.8 image env, but this
+   recipe mounts the cache at `/root/.cache/huggingface` — set
+   `HF_HOME: /root/.cache/huggingface` or the offline model is "not found".
+4. **Attention backend renamed**: `FLASHINFER_MLA_SPARSE_DSV4` → `B12X_MLA_SPARSE`.
+5. **`VLLM_USE_V2_MODEL_RUNNER` must be `"0"`** (incompatible with the `dspark`
+   speculative method in 0.21).
+6. Harmless 0.21 warnings: `VLLM_PCIE_ALLREDUCE_BACKEND`,
+   `VLLM_PREFIX_CACHE_RETENTION_INTERVAL` are unknown env vars.
+
+**Why we reverted (important):** 3.8 has a DSpark regression —
+`dspark_proposer.py::_trim_rejected_target_context` now requires **uniform
+per-request effective context lengths after rejection trimming**. Under a batch
+of heterogeneous-length requests (which pi's mixed reasoning + tool workload
+produces constantly), it raises `ValueError: DSpark currently requires uniform
+effective per-request target context lengths ...` and kills the whole engine
+(`EngineDeadError`). This check does **not** exist in vLLM 0.11 (3.75/3.7) —
+verified absent by grep — so 3.75 is stable for this workload. The tonyd2wild /
+eugr fork has the same constraint.
+
+To make 3.8 usable you would either (a) disable DSpark (`--speculative-config`),
+or (b) patch `dspark_proposer.py` to degrade gracefully on non-uniform lengths.
+
+**Multi-node start order:** start the **leader (rank 0) first** so its TCP store
+on `master_addr:25000` is up before the follower connects. Starting the follower
+first caused `DistStoreError: 1/2 clients` / `Connection reset by peer` on a
+restart.
 
 ## Reference
 The [discussion thread](https://forums.developer.nvidia.com/t/deepseek-v4-flash-aiden-recipe-from-reddit-1m-token-session-operational-cuda-12-1-tailored-for-dgx-spark-gb10/372268) for this configuration

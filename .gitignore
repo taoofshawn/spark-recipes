@@ -1,0 +1,5 @@
+.worktrees/
+
+# python
+__pycache__/
+*.pyc

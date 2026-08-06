@@ -14,6 +14,15 @@ services:
       - /home/sdrew/.cache/huggingface:/root/.cache/huggingface
       - /home/sdrew/.cache/vllm-ds4-dspark:/cache
       - /home/sdrew/.cache/tilelang-ds4:/root/.tilelang
+      # Official 0731 encoder, bind-mounted directly OVER the image's bundled
+      # pre-0731 encoder so vllm loads it at import (see README). NOTE: the
+      # DSPARK_ENCODING_FILE env-var hook from MiaAI's launcher is NOT honored
+      # by this image — hence this direct file overlay (3.75/3.7 use /opt/venv;
+      # 3.8 uses /opt/env).
+      - ./encoding_dsv4.py:/opt/venv/lib/python3.12/site-packages/vllm/tokenizers/deepseek_v4_encoding.py:ro
+      # Corrected deepseek_v4 tokenizer wrapper (pre-0731 wrapper collapses
+      # low->high; this restores low/high/max + off). See README.
+      - ./deepseek_v4_wrapper.py:/opt/venv/lib/python3.12/site-packages/vllm/tokenizers/deepseek_v4.py:ro
     deploy:
       resources:
         reservations:
@@ -116,7 +125,7 @@ services:
           --generation-config vllm \
           --default-chat-template-kwargs.temperature=$${TEMPERATURE} \
           --default-chat-template-kwargs.top_p=$${TOP_P} \
-          --default-chat-template-kwargs.thinking=true --default-chat-template-kwargs.reasoning_effort=max \
+          --default-chat-template-kwargs.thinking=true --default-chat-template-kwargs.reasoning_effort=low \
           --attention-backend FLASHINFER_MLA_SPARSE_DSV4 --moe-backend b12x \
           --disable-custom-all-reduce \
           --nnodes 2 --node-rank "$${NODE_RANK}" --master-addr "$${MASTER_ADDR}" --master-port 25000 \

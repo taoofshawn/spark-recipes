@@ -98,13 +98,36 @@ to sparkrun's substitution rules:
 | container | `vllm-node-b12x` (build arg `--exp-b12x`) |
 | port | 8000 |
 | TP | 2 (across 2 nodes) |
-| max context | 1M (`auto`) |
+| max context | 1M (`max_model_len: 1048576`, pinned) |
 | KV cache | fp8, block 256 |
-| `max_num_seqs` | 6 |
+| `max_num_seqs` | 6 (bernisse: low seqs enable full context) |
 | spec tokens | 5 (DSpark) |
 | load format | `instanttensor` |
 | backends | B12X MoE / linear / `B12X_MLA_SPARSE` attention |
 | HF | offline (`HF_HUB_OFFLINE=1`, `TRANSFORMERS_OFFLINE=1`) |
+
+## 1M context + thinking levels (bernisse references)
+
+- **1M context:** `max_model_len` is pinned to `1048576` + env
+  `VLLM_ALLOW_LONG_MAX_MODEL_LEN=1`, and `max_num_seqs` stays at **6**.
+  Per bernisse (eugr thread **post #18**: "if you reduce the max number of seqs to
+  6 you can get max context", and Aiden-recipe thread **post #656**: "reducing the
+  max number of sequences to 6" gives max context): keeping sequences low is what
+  makes room for the full 1M. `auto` is fragile here (it resolved small for us), so
+  we pin it explicitly — the same proven setup as the aiden recipe.
+- **Thinking levels (low/high/max + none):** the `dsv4-reasoning-effort-fix` mod
+  is **identical to bernisse's own chat-template fix** (his `run.txt`), patching
+  the container's `deepseek_v4_encoding.py` (official 3-level
+  `REASONING_EFFORT_PROMPTS`) and `deepseek_v4.py` (fixes the `low`→`high`
+  collapse, maps `xhigh`→`max`, `none`→chat/thinking off). So the same
+  low≈short / high≈medium / max≈long render behavior that the aiden recipe gets
+  is applied here at build time via the mod.
+- **Verify (after launch, on :8000):**
+  ```bash
+  curl -s http://127.0.0.1:8000/v1/chat/completions/render \
+    -H 'Content-Type: application/json' \
+    -d '{"model":"deepseek-v4-flash","messages":[{"role":"user","content":"hi"}],"chat_template_kwargs":{"thinking":true,"reasoning_effort":"high"}}'
+  ```
 
 ## Verify
 
@@ -121,6 +144,9 @@ curl -sS http://127.0.0.1:8000/v1/chat/completions \
 ## Reference
 
 - [DSpark forum thread](https://forums.developer.nvidia.com/t/instructions-for-running-deepseek-v4-flash-with-dspark-using-eugrs-repo/376220)
-  (post 18 = bernisse's solution)
+  (**post #18** = bernisse's full solution: eugr b12x build + `max_num_seqs=6` for
+  max context + reasoning-effort fix mod)
+- [Aiden-recipe thread](https://forums.developer.nvidia.com/t/deepseek-v4-flash-aiden-recipe-from-reddit-1m-token-session-operational-cuda-12/372268)
+  (**post #656** = bernisse: reducing max sequences to 6 gets the maximum context)
 - [eugr/spark-vllm-docker](https://github.com/eugr/spark-vllm-docker) (branch `b12x`)
 - `sparkrun` docs: `sparkrun --help`, `sparkrun run --help`

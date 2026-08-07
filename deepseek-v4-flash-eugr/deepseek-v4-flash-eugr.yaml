@@ -22,8 +22,13 @@ defaults:
   host: 0.0.0.0
   tensor_parallel: 2
   gpu_memory_utilization: 0.85
-  max_model_len: auto
+  # Pin the full 1M context (same as the sparkrun recipe). `auto` resolved <1M
+  # at runtime; explicit 1048576 + VLLM_ALLOW_LONG_MAX_MODEL_LEN=1 below is the
+  # proven 1M setup.
+  max_model_len: 1048576
   block_size: 256
+  # bernisse (eugr thread post #18 / post #656): max context (1M) requires
+  # keeping max_num_seqs low — reduce to 6 to make room for the full context.
   max_num_seqs: 6
   max_num_batched_tokens: 8192
   max_cudagraph_capture_size: 64
@@ -31,6 +36,9 @@ defaults:
 
 env:
   CUTE_DSL_ARCH: "sm_121a"
+  # Allow max_model_len > the value the model/container infers (required to pin
+  # the 1M context).
+  VLLM_ALLOW_LONG_MAX_MODEL_LEN: "1"
   VLLM_USE_AOT_COMPILE: "1"
   VLLM_USE_BREAKABLE_CUDAGRAPH: "0"
   VLLM_USE_MEGA_AOT_ARTIFACT: "-1"

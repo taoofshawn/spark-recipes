@@ -140,13 +140,14 @@ before the `exec` action) to stay detached:
   -e VLLM_USE_B12X_WO_PROJECTION=1 -e VLLM_USE_B12X_MHC=1 \
   -e VLLM_USE_B12X_FP8_GEMM=1 -e VLLM_USE_B12X_MOE=1 \
   -e VLLM_USE_B12X_SPARSE_INDEXER=1 -e VLLM_USE_V2_MODEL_RUNNER=1 \
+  -e VLLM_ALLOW_LONG_MAX_MODEL_LEN=1 \
   -e B12X_MLA_SM120_UNIFIED=1 -e B12X_MOE_FORCE_A8=1 \
   -e HF_HUB_OFFLINE=1 -e TRANSFORMERS_OFFLINE=1 \
   exec vllm serve deepseek-ai/DeepSeek-V4-Flash-0731 \
     --port 8000 --host 0.0.0.0 --trust-remote-code \
     --served-model-name deepseek-v4-flash \
     --tensor-parallel-size 2 --kv-cache-dtype fp8 --block-size 256 \
-    --max-model-len auto --max-num-seqs 6 --max-num-batched-tokens 8192 \
+    --max-model-len 1048576 --max-num-seqs 6 --max-num-batched-tokens 8192 \
     --gpu-memory-utilization 0.85 --enable-prefix-caching \
     --tokenizer-mode deepseek_v4 --tool-call-parser deepseek_v4 \
     --enable-auto-tool-choice --reasoning-parser deepseek_v4 \
@@ -171,7 +172,7 @@ before the `exec` action) to stay detached:
 | container | `vllm-node-b12x` (build arg `--exp-b12x`) |
 | TP | 2 (across 2 nodes) |
 | KV cache | fp8, block 256 |
-| `max_model_len` | `auto` (full context; reduce `max_num_seqs` to 6 to keep it) |
+| `max_model_len` | `1048576` pinned (1M; keep `max_num_seqs` at 6 to fit full ctx) |
 | `max_num_seqs` | 6 |
 | `max_num_batched_tokens` | 8192 |
 | `gpu_memory_utilization` | 0.85 |

@@ -1,0 +1,152 @@
+# Sparkrun recipe: DeepSeek-V4-Flash-0731 on 2x DGX Spark.
+#
+# This is the sparkrun-native port of the AIDEN 3.75 build
+# (`deepseek-v4-flash-aiden` docker-compose recipe). Unlike the earlier
+# `deepseek-v4-flash-sparkrun` recipe, it does NOT run sparkrun's eugr
+# source build (`vllm-node-b12x`), which lacked the FLASHINFER_MLA_SPARSE_DSV4
+# backend and could only reach ~340k context. Instead it reuses the proven
+# AIDEN prebuilt image DIRECTLY — the image is literally a sparkrun image
+# (`aidendle94/sparkrun-vllm-ds4-gb10`) and already contains the 1M sparse
+# attention build. We pin `builder: docker-pull` so sparkrun never rebuilds,
+# and apply aiden's encoder/reasoning-effort/tool-arg hardening via a mod
+# (pre_exec overlay inside each container before `vllm serve`).
+#
+# Run (leader node). NOTE: --rootful REQUIRED — the aiden image runs as root
+# (mods write into the root-owned /opt/venv vLLM package; vLLM writes AOT/jit
+# caches into the container root FS). sparkrun's default is rootless, which
+# would fail the overlay + break vLLM cache writes.
+#
+#   sparkrun run deepseek-v4-flash-aiden-sparkrun/deepseek-v4-flash-aiden-sparkrun.yaml \
+#       -H 192.168.0.170,192.168.0.171 --rootful -n   # dry-run first
+#   sparkrun run deepseek-v4-flash-aiden-sparkrun/deepseek-v4-flash-aiden-sparkrun.yaml \
+#       -H 192.168.0.170,192.168.0.171 --rootful
+#   sparkrun logs  deepseek-v4-flash-aiden-sparkrun
+#   sparkrun status # / sparkrun stop deepseek-v4-flash-aiden-sparkrun
+#
+# ⚠️ GPU contention: aiden / tonyd2 / this all share the 2 GPUs per node.
+#    Tear down the currently-running aiden container before starting this.
+
+recipe_version: "2"
+name: deepseek-v4-flash-aiden-sparkrun
+description: DeepSeek-V4-Flash-0731, 1M context, via the aiden 3.75 image through sparkrun (no rebuild)
+
+model: deepseek-ai/DeepSeek-V4-Flash-0731
+model_revision: 9e165c30e2704aec5d9d593cce3eebd58bbef1cb
+runtime: vllm
+
+# Aiden 3.75 image (digest-pinned). docker.io/ prefix => pullable, no src build.
+container: docker.io/aidendle94/sparkrun-vllm-ds4-gb10@sha256:3b4d2b5f7929c2b15d25636e3115f343e693a03fe8a57f94969974432c2c4e8d
+
+# Explicitly the docker-pull builder. This is the critical bit: WITHOUT it,
+# the presence of `mods:` would route sparkrun to the eugr source builder.
+builder: docker-pull
+
+cluster_only: true
+min_nodes: 2
+max_nodes: 2
+
+# Replicate aiden's bind-mount encoder overlay via sparkrun mods (builder-agnostic
+# pre_exec: copies mod dir into container then runs run.sh before vllm serve).
+mods:
+  - aiden-encoder-overlay
+
+metadata:
+  description: aiden 3.75 image run natively through sparkrun; FLASHINFER_MLA_SPARSE_DSV4, fp8 KV, 1M context, DSpark
+  maintainer: sdrew
+  base_recipe: deepseek-v4-flash-aiden
+
+defaults:
+  port: 8000
+  host: 0.0.0.0
+  tensor_parallel: 2
+  gpu_memory_utilization: 0.83
+  max_model_len: 1048576
+  max_num_seqs: 16
+  max_num_batched_tokens: 16384
+  max_cudagraph_capture_size: 256
+  served_model_name: deepseek-v4-flash
+  num_speculative_tokens: 4
+  temperature: 0.95
+  top_p: 0.44
+  # JSON-valued flags live as single defaults values (sparkrun arg_substitute-friendly)
+  compilation_config: '{"cudagraph_mode":"FULL_AND_PIECEWISE","custom_ops":["all"]}'
+  speculative_config: '{"method":"dspark","num_speculative_tokens":4,"draft_sample_method":"probabilistic"}'
+
+env:
+  # Runtime / kernel flags from aiden's working 3.75 config
+  CUTE_DSL_ARCH: "sm_121a"
+  VLLM_USE_AOT_COMPILE: "1"
+  VLLM_USE_MEGA_AOT_ARTIFACT: "0"
+  VLLM_USE_BREAKABLE_CUDAGRAPH: "0"
+  VLLM_USE_V2_MODEL_RUNNER: "1"
+  VLLM_USE_FLASHINFER_SAMPLER: "1"
+  VLLM_DSPARK_REPLICATE_MARKOV_W1: "1"
+  PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"
+  VLLM_PREFIX_CACHE_RETENTION_INTERVAL: "4096"
+  # Use one GPU per node (aiden pins CUDA_VISIBLE_DEVICES=0 with TP=2).
+  CUDA_VISIBLE_DEVICES: "0"
+  CUDA_DEVICE_ORDER: "PCI_BUS_ID"
+  # Offline model serving. sparkrun mounts the host HF cache at /cache/huggingface,
+  # so point HF_HOME there (overrides the image's baked /root/.cache/huggingface).
+  HF_HUB_OFFLINE: "1"
+  TRANSFORMERS_OFFLINE: "1"
+  HF_HOME: "/cache/huggingface"
+  # ---- RoCE / inter-node networking (aiden's proven values for THIS cluster).
+  # Set explicitly so the launch never depends on sparkrun's IB auto-detection.
+  # Recipe env wins over runtime/comm env, so these are honored deterministically.
+  NCCL_NET: "IB"
+  NCCL_IB_DISABLE: "0"
+  NCCL_IB_HCA: "rocep1s0f0,roceP2p1s0f0"
+  NCCL_SOCKET_IFNAME: "enp1s0f0np0,enP2p1s0f0np0"
+  GLOO_SOCKET_IFNAME: "enp1s0f0np0"
+  TP_SOCKET_IFNAME: "enp1s0f0np0"
+  MN_IF_NAME: "enp1s0f0np0"
+  OMPI_MCA_btl_tcp_if_include: "enp1s0f0np0"
+  NCCL_CROSS_NIC: "1"
+  NCCL_PROTO: "LL,LL128,Simple"
+  NCCL_P2P_LEVEL: "SYS"
+  NCCL_IGNORE_CPU_AFFINITY: "1"
+  NCCL_NVLS_ENABLE: "0"
+  NCCL_DEBUG: "WARN"
+  # If the multinode rendezvous still picks the wrong interface, set VLLM_HOST_IP
+  # per node (192.168.0.170 node0 / 192.168.0.171 node1) - not set here because it
+  # is per-node; see README phase-2 knob.
+
+executor_config:
+  privileged: true
+  gpus: all
+  ipc: host
+  shm_size: 32gb
+  network: host
+  devices:
+    - /dev/infiniband
+  ulimit:
+    - "memlock=-1:-1"
+    - "nofile=1048576:1048576"
+    - "stack=67108864:67108864"
+
+command: |
+  vllm serve {model} \
+      --revision {model_revision} \
+      --served-model-name {served_model_name} \
+      --host {host} --port {port} --trust-remote-code \
+      --kv-cache-dtype fp8 --block-size 256 --load-format auto \
+      --tensor-parallel-size {tensor_parallel} \
+      --gpu-memory-utilization {gpu_memory_utilization} \
+      --max-model-len {max_model_len} \
+      --max-num-seqs {max_num_seqs} \
+      --max-num-batched-tokens {max_num_batched_tokens} \
+      --max-cudagraph-capture-size {max_cudagraph_capture_size} \
+      --compilation-config '{compilation_config}' \
+      --async-scheduling --no-scheduler-reserve-full-isl \
+      --enable-chunked-prefill --enable-prefix-caching --enable-flashinfer-autotune \
+      --tokenizer-mode deepseek_v4 --tool-call-parser deepseek_v4 --reasoning-parser deepseek_v4 \
+      --enable-auto-tool-choice \
+      --generation-config vllm \
+      --default-chat-template-kwargs.temperature={temperature} \
+      --default-chat-template-kwargs.top_p={top_p} \
+      --default-chat-template-kwargs.thinking=true \
+      --default-chat-template-kwargs.reasoning_effort=low \
+      --attention-backend FLASHINFER_MLA_SPARSE_DSV4 --moe-backend b12x \
+      --disable-custom-all-reduce \
+      --speculative-config '{speculative_config}'

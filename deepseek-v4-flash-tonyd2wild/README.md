@@ -203,7 +203,7 @@ API serves at `http://HEAD_NODE_IP:4000/v1` (served model `deepseek-v4-flash`).
 First boot takes **~7–8 min** (model load ~3 min + warmup/compile). Watch the leader:
 
 ```bash
-docker logs -f ds4-dspark-t2w
+docker logs -f ds4-dspark
 # wait for: "Application startup complete"
 curl -s http://127.0.0.1:4000/v1/models | python3 -m json.tool
 # expect: "id": "deepseek-v4-flash", "max_model_len": 1048576
@@ -222,7 +222,7 @@ Health markers in the boot log (all confirmed on a working deploy):
 | `Application startup complete` | API up |
 
 Then send a real request and confirm SpecDecoding metrics appear:
-`docker logs --tail 40 ds4-dspark-t2w | grep "SpecDecoding metrics"`.
+`docker logs --tail 40 ds4-dspark | grep "SpecDecoding metrics"`.
 
 ⚠️ **Warm-up / cold-start**: a fresh boot is ~30% slower until a few hundred
 tokens of real traffic pass through, and the warm state decays after idle —

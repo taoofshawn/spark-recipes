@@ -1,7 +1,7 @@
 services:
   ds4:
     image: vllm-dspark-runtime:dspark-nvfp4-stage-c
-    container_name: ds4-dspark-t2w
+    container_name: ds4-dspark
     network_mode: host
     ipc: host
     shm_size: 64g

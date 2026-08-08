@@ -63,8 +63,12 @@ defaults:
   tensor_parallel: 2
   gpu_memory_utilization: 0.83
   max_model_len: 1048576
-  max_num_seqs: 16
-  max_num_batched_tokens: 16384
+  max_num_seqs: 6
+  # Agent-serving profile (SvangenStudios thread 378890): smaller prefill chunk
+  # gives ~2.9x decode share during a long prefill, +~65% KV pool, ~73% lower
+  # output-jitter, at ~7.7% prefill throughput cost. GMU left at 0.83 (changing
+  # it would shrink KV and risk 1M; it is a KV lever, not a safety lever here).
+  max_num_batched_tokens: 2048
   max_cudagraph_capture_size: 256
   served_model_name: deepseek-v4-flash
   num_speculative_tokens: 4

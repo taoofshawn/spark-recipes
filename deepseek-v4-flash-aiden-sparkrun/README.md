@@ -149,6 +149,17 @@ handling. They ship with the recipe, so nothing extra to install.
 
 ## Notes / tuning
 
+- **Batching (agent profile):** `max-num-batched-tokens 2048` + `max-num-seqs 6`.
+  Smaller prefill chunks give much better decode fairness and lower output jitter
+  under concurrent agent traffic (at a modest prefill-throughput cost). The
+  earlier 16384/16 was tuned more toward high-concurrency batching.
+- **GPU memory utilization stays at `0.83`** (the recipe's
+  `gpu_memory_utilization`). Do **not** lower it expecting stability — weights
+  (~80 GiB/node) dominate, so GMU is a KV-cache lever here, and dropping it could
+  shrink the KV pool below what's needed for 1M. **However:** if the server
+  crashes or dies under traffic while you are testing this build, the first knob
+  to try is **lowering `gpu_memory_utilization` (e.g. to `0.78`)** and restarting.
+  That is the fallback documented in the upstream agent-serving thread.
 - **Port:** `8000` (default). Override with `sparkrun run ... --port 8080`.
 - **Reasoning effort** defaults to `low`; `thinking` defaults to `true`.
 - **Interface caveat:** the multi-node master address comes from sparkrun's host

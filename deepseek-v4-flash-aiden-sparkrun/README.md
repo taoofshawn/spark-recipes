@@ -1,64 +1,98 @@
 # deepseek-v4-flash-aiden-sparkrun
 
-DeepSeek-V4-Flash-0731, **1M context**, on 2x DGX Spark, served ENTIRELY through
-`sparkrun` — running the proven **aiden 3.75 image** directly (no rebuild).
+Serve **DeepSeek-V4-Flash-0731** at **1M-token context** on a 2-node DGX Spark
+cluster, run and managed entirely through `sparkrun`.
 
-This supersedes the old `deepseek-v4-flash-sparkrun` recipe, which told sparkrun
-to run the **eugr source build** (`vllm-node-b12x --exp-b12x`). That build lacked
-aiden's `FLASHINFER_MLA_SPARSE_DSV4` sparse-attention backend, so it could only
-reach ~340k context. The aiden **prebuilt** image already contains that backend
-(and is itself literally a sparkrun image, `aidendle94/sparkrun-vllm-ds4-gb10`),
-so the clean fix is: **point sparkrun at the aiden image and stop rebuilding.**
+- **Model:** `deepseek-ai/DeepSeek-V4-Flash-0731`
+- **Context:** 1,048,576 tokens (sparse attention + fp8 KV)
+- **Nodes:** 2 (tensor parallel), leader + worker
+- **Served as:** `deepseek-v4-flash` on port `8000`
 
-## Why this works (research conclusion)
+## Prerequisites
 
-| Concern | Answer |
-|---|---|
-| "sparkrun expects image built a certain way" | Only when using `mods:` + no `builder`, or `build_args:`. We **pin `builder: docker-pull`** so `mods:` never routes to the eugr source build. |
-| Image build needed? | **No.** `container:` is the aiden image (docker.io pullable). `docker-pull` distributes it as-is. |
-| Encoder / reasoning-effort / tool-arg fix | Applied as a **mod** (builder-agnostic `pre_exec`): copies `encoding_dsv4.py` + `deepseek_v4_wrapper.py` over the image's `/opt/venv/.../vllm/tokenizers/` before `vllm serve` — the sparkrun equivalent of aiden's bind-mount overlay. |
-| 1M context | Same aiden flags: `--attention-backend FLASHINFER_MLA_SPARSE_DSV4 --kv-cache-dtype fp8 --max-model-len 1048576`. sparkrun's VRAM estimator will warn "max_model_len exceeds KV budget" — that estimate is non-sparse and **ignored**; aiden's sparse KV is what makes 1M fit. |
-| Root | **Baked into the recipe** — `executor_config` sets `privileged: true` + `security_opt/cap_add/user: null`, which outranks sparkrun's rootless defaults, so the container runs as root **with no `--rootful` flag needed**. |
-| Cluster flags | sparkrun's `vllm-distributed` runtime appends `--nnodes 2 --node-rank --master-addr --master-port 25000` (+`--headless` on the worker) automatically — do NOT put them in the command. |
-| HF model | sparkrun mounts host `~/.cache/huggingface` → `/cache/huggingface`; recipe sets `HF_HOME=/cache/huggingface`. 0731 model is already cached on both nodes (offline). |
-| RoCE/NCCL | Set explicitly from aiden's proven `.env` (recipe env always wins) so the launch never depends on sparkrun's IB auto-detect. |
+On **both** nodes:
 
-## Run (on the leader node)
+- The recipe repo is checked out on this branch (`deepseek-v4-flash-aiden-sparkrun`):
+  ```bash
+  cd ~/code/spark-recipes
+  git fetch origin
+  git checkout deepseek-v4-flash-aiden-sparkrun
+  git pull --ff-only origin deepseek-v4-flash-aiden-sparkrun
+  ```
+- The container image is present (or pullable): `aidendle94/sparkrun-vllm-ds4-gb10`
+- The model `DeepSeek-V4-Flash-0731` is in the local HuggingFace cache
+  (`~/.cache/huggingface`), since serving runs offline.
+- **GPUs are free.** This recipe uses all GPUs on both nodes, so nothing else
+  (any other model container) can be running at the same time.
 
-Hosts do **not** need to be passed: sparkrun uses the saved **default cluster
-`spark`** (`spark-0f0b` head, `spark-6d14` worker). The earlier launch just
-showed `-H 192.168.0.170,192.168.0.171` explicitly — that was for clarity, not a
-requirement. You can omit `-H` (default cluster), or use `--cluster spark`, or
-pass `-H`/`--hosts-file` to override. Rootful is baked into `executor_config`,
-so no `--rootful` flag is needed either.
+## Configure a cluster (only once)
+
+Sparkrun needs a cluster of the two nodes. If one isn't set up yet:
 
 ```bash
-cd ~/code/spark-recipes            # on node0 (192.168.0.170)
+sparkrun cluster create spark \
+  -H spark-0f0b.shawndo.intra,spark-6d14.shawndo.intra
+sparkrun cluster set-default spark
+```
 
-# 0) IMPORTANT: aiden/tonyd2 share the 2 GPUs per node with this recipe.
-#    Stop the currently-running aiden container first (sparkrun uses its own
-#    container names, but the GPUs can only host one recipe at a time).
-#    e.g. on BOTH nodes: docker compose -f deepseek-v4-flash-aiden/docker-compose.yml down
+> Hosts don't have to be spelled out on every run — sparkrun uses the default
+> cluster. To override, pass `-H HOST1,HOST2` or `--cluster NAME`.
 
-# 1) Validate / inspect (no containers started)
+## Run
+
+On the **leader node** (`spark-0f0b`), from the repo root:
+
+```bash
+cd ~/code/spark-recipes
+
+# 1) Check the recipe is valid and see what would happen (no containers started)
 sparkrun recipe validate deepseek-v4-flash-aiden-sparkrun/deepseek-v4-flash-aiden-sparkrun.yaml
 sparkrun run deepseek-v4-flash-aiden-sparkrun/deepseek-v4-flash-aiden-sparkrun.yaml -n
 
-# 2) Launch (detaches by default)
+# 2) Launch (runs in the background)
 sparkrun run deepseek-v4-flash-aiden-sparkrun/deepseek-v4-flash-aiden-sparkrun.yaml
 ```
 
-Boot takes ~7–8 min (155 GiB model + AOT compile + warmup) — same as aiden.
+Boot takes roughly **7–8 minutes** (loading the ~155 GiB model, AOT compilation,
+and warmup). You can watch progress with `sparkrun logs`.
 
-## Verify
+## Verify it's up
 
 ```bash
-sparkrun logs deepseek-v4-flash-aiden-sparkrun
-curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8000/health          # 200
-curl -s http://127.0.0.1:8000/v1/models | python3 -m json.tool                # max_model_len=1048576
+sparkrun logs deepseek-v4-flash-aiden-sparkrun   # follow startup
+
+# Health + model metadata once booted:
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8000/health   # expect 200
+curl -s http://127.0.0.1:8000/v1/models | python3 -m json.tool           # see below
 ```
-The `/v1/models` `max_model_len: 1048576` is the 1M reachability proof (logs show
-`GPU KV cache size` / `Maximum concurrency for 1,048,576 tokens per request`).
+
+Look for:
+
+```json
+"id": "deepseek-v4-flash",
+"max_model_len": 1048576
+```
+
+A `max_model_len` of `1048576` is the 1M-context confirmation. The engine logs
+also print `GPU KV cache size` and `Maximum concurrency for 1,048,576 tokens per
+request`.
+
+## Talk to it
+
+```bash
+curl -s http://127.0.0.1:8000/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"deepseek-v4-flash",
+       "messages":[{"role":"user","content":"Say hi"}],
+       "max_tokens":64,"thinking":true,"reasoning_effort":"low"}' \
+  | jq '.choices[0].message'
+```
+
+- The raw server returns reasoning in the `reasoning` field of the assistant
+  message.
+- To get `reasoning_content` (the DeepSeek-standard field name), go through the
+  sparkrun proxy on port `4000` — it normalizes the field:
+  `curl -s http://127.0.0.1:4000/v1/chat/completions ...` (same body).
 
 ## Stop / status
 
@@ -71,27 +105,26 @@ sparkrun stop deepseek-v4-flash-aiden-sparkrun
 
 ```
 deepseek-v4-flash-aiden-sparkrun/
-├── deepseek-v4-flash-aiden-sparkrun.yaml  # sparkrun recipe
+├── deepseek-v4-flash-aiden-sparkrun.yaml   # sparkrun recipe (image, flags, env, executor)
 ├── README.md
 └── mods/
     └── aiden-encoder-overlay/
-        ├── run.sh                  # installs both overlays into /opt/venv vLLM
-        ├── encoding_dsv4.py        # official 0731 encoder + tool-arg repairs
-        └── deepseek_v4_wrapper.py  # corrected low/high/max reasoning routing
+        ├── run.sh                  # loads the two overlays before vllm serve
+        ├── encoding_dsv4.py        # reasoning-effort prompts + tool-arg repair
+        └── deepseek_v4_wrapper.py  # low/high/max reasoning routing
 ```
 
-The two overlay `.py` files are byte-for-byte the ones used by the
-`deepseek-v4-flash-aiden` recipe (hardened versions from
-`aiden-encoder-toolarg-fix`).
+The `mods/aiden-encoder-overlay` files are applied inside each container before
+the server starts; they fix reasoning-effort levels and tool-call argument
+handling. They ship with the recipe, so nothing extra to install.
 
-## Phase-2 knobs / caveats (if live test needs adjustment)
+## Notes / tuning
 
-- **VLLM_HOST_IP** — not set (it is per-node). If the 2-node rendezvous picks the
-  wrong interface, add it per node (node0 `192.168.0.170`, node1 `192.168.0.171`).
-- **AOT/jit persistence** — sparkrun only persists the HF cache volume
-  (`/cache/huggingface`), not aiden's extra `/cache` (jit/tilelang) volume, so each
-  cold start recompiles AOT (~the boot time). Correctness unaffected; can add a
-  volume later if restarts are frequent.
-- **Start order** — sparkrun launches its own ranked containers (`_node_0`,
-  `_node_1`) and runs the serve steps (head then worker) — no manual node0/node1
-  sequencing needed.
+- **Port:** `8000` (default). Override with `sparkrun run ... --port 8080`.
+- **Reasoning effort** defaults to `low`; `thinking` defaults to `true`.
+- **Interface caveat:** the multi-node master address comes from sparkrun's host
+  detection. If a restart ever fails to rendezvous across the two nodes, set the
+  per-node `VLLM_HOST_IP` (leader `192.168.0.170`, worker `192.168.0.171`).
+- **Cold starts recompile:** only the HuggingFace cache is persisted as a volume,
+  so AOT/JIT artifacts rebuild on each cold start (that's part of the ~7–8 min
+  boot). Correctness is unaffected.

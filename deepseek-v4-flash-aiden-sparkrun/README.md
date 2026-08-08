@@ -59,7 +59,8 @@ and warmup). You can watch progress with `sparkrun logs`.
 ## Verify it's up
 
 ```bash
-sparkrun logs deepseek-v4-flash-aiden-sparkrun   # follow startup
+sparkrun status
+sparkrun logs <id>   # follow startup
 
 # Health + model metadata once booted:
 curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8000/health   # expect 200
@@ -98,7 +99,7 @@ This model build emits chain-of-thought in the assistant message's
 **`reasoning`** field (the native field name for this vLLM image). `content`
 holds the final answer.
 
-The **sparkrun proxy** is a bundled sparkrun component, always available and
+The **sparkrun proxy start** is a bundled sparkrun component, always available and
 listening on **port `4000`** (in front of the server on `8000`). Using the proxy
 adds:
 
@@ -126,7 +127,7 @@ curl -s http://127.0.0.1:4000/v1/chat/completions \
 
 ```bash
 sparkrun status
-sparkrun stop deepseek-v4-flash-aiden-sparkrun
+sparkrun stop <id>
 ```
 
 ## Files

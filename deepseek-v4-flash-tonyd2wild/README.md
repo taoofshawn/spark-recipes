@@ -18,7 +18,7 @@ cluster, built from [tonyd2wild's DSpark stack](https://github.com/tonyd2wild/De
 | sampling | `--generation-config vllm`, no override |
 | thinking default | `false` (clients can drive effort themselves) |
 | context length | 1M (1048576) |
-| serve | port `8000`, served model `deepseek-v4-flash` |
+| serve | port `4000`, served model `deepseek-v4-flash` |
 
 > ⚠️ Keep this recipe's native backend wiring — `nvfp4_ds_mla` KV with the v1
 > runner via `--distributed-executor-backend mp`, and B12X MoE via
@@ -27,10 +27,43 @@ cluster, built from [tonyd2wild's DSpark stack](https://github.com/tonyd2wild/De
 
 ---
 
+# 2026-08 improvements (this branch - audit trail)
+
+_Dev branch for improving accuracy, speed, and tool-calling. Nothing here changes
+the native backend wiring; it adds two overlays + one flag._
+
+1. **Reasoning-effort + tool-argument hardening overlay** - `encoding_dsv4.py` and
+   `deepseek_v4_wrapper.py` bind-mounted to
+   `../vllm/tokenizers/deepseek_v4_encoding.py` and `deepseek_v4.py`.
+   - This runtime's stock encoder only accepts `high`/`max` reasoning_effort (`low`
+     asserts; forum 372268 P510). These overlays restore the official 3-level
+     (low/high/max) `REASONING_EFFORT_PROMPTS` + routing, so effort levels behave
+     like the aiden recipe.
+   - The same files add tool-argument JSON repair/normalization
+     (`normalize_tool_arguments`, `repair_tool_arguments_json`, `parse_tool_arguments`,
+     `dsml_param_to_python`, `normalize_parsed_dsml_tool_args`,
+     `prepare_openai_tool_call_for_execution`) so wrapper-key / truncated / malformed
+     tool args survive as valid JSON. Sourced from the aiden encoder fix
+     (`aiden-encoder-toolarg-fix`).
+2. **DSpark draft MoE backend** - added `"moe_backend":"b12x"` inside the
+   `speculative-config` (forum 378824 P12, srivatsa1): the NVFP4 draft must run its
+   MoE on `b12x` (not the default `flashinfer_b12x`) or the MXFP4 oracle rejects
+   drafts and acceptance collapses (~1.0-1.15 tok/step). This is the flag part of
+   that fix (measured 16.9->64.4 tok/s). The companion source-level
+   draft-quantization / fail-closed-loader patches from that thread are **not**
+   applied here - a possible follow-up if acceptance still sags.
+3. GitHub audit: main repo has 4 commits since the vendored pin - all docs/tooling
+   except a `sparkrun/` deploy harness that reproduces our exact config. No new
+   serving patches to adopt. Other `tonyd2wild` repos use different profiles
+   (FP8 / MTP-lane / other-context) and contradict these NVFP4-1M-DSpark
+   invariants.
+
+---
+
 # Building & deploying from scratch on new DGX Sparks
 
 Everything below is what it takes to go from a pair of fresh GB10 Sparks to a
-serving `deepseek-v4-flash` on :8000. It reflects a real deployment; the gotchas
+serving `deepseek-v4-flash` on :4000. It reflects a real deployment; the gotchas
 marked ⚠️ are ones actually hit.
 
 ## 0) Prerequisites (each node)
@@ -163,16 +196,16 @@ docker compose --env-file .env --env-file .env.node1 up -d
 docker compose --env-file .env --env-file .env.node0 up -d
 ```
 
-API serves at `http://HEAD_NODE_IP:8000/v1` (served model `deepseek-v4-flash`).
+API serves at `http://HEAD_NODE_IP:4000/v1` (served model `deepseek-v4-flash`).
 
 ## 8) Confirm it is healthy
 
 First boot takes **~7–8 min** (model load ~3 min + warmup/compile). Watch the leader:
 
 ```bash
-docker logs -f ds4-dspark-t2w
+docker logs -f ds4-dspark
 # wait for: "Application startup complete"
-curl -s http://127.0.0.1:8000/v1/models | python3 -m json.tool
+curl -s http://127.0.0.1:4000/v1/models | python3 -m json.tool
 # expect: "id": "deepseek-v4-flash", "max_model_len": 1048576
 ```
 
@@ -189,7 +222,7 @@ Health markers in the boot log (all confirmed on a working deploy):
 | `Application startup complete` | API up |
 
 Then send a real request and confirm SpecDecoding metrics appear:
-`docker logs --tail 40 ds4-dspark-t2w | grep "SpecDecoding metrics"`.
+`docker logs --tail 40 ds4-dspark | grep "SpecDecoding metrics"`.
 
 ⚠️ **Warm-up / cold-start**: a fresh boot is ~30% slower until a few hundred
 tokens of real traffic pass through, and the warm state decays after idle —
@@ -213,7 +246,7 @@ never benchmark straight after boot or after a quiet period.
 | `GPU_MEM` | 0.78 | keep ≤0.78 on this stack |
 | `MAX_MODEL_LEN` | 1048576 | 1M is the true YaRN ceiling |
 | `THINKING` | false | server `thinking` default; clients can drive effort themselves |
-| `PORT` | 8000 | serve port |
+| `PORT` | 4000 | serve port |
 
 `MAX_NUM_BATCHED_TOKENS=8192` and `max-cudagraph-capture-size=seqs×(k+1)` are
 derived per the upstream's validated profile — don't touch without re-measuring.

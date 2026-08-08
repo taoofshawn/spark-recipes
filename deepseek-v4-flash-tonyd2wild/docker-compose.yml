@@ -1,7 +1,7 @@
 services:
   ds4:
     image: vllm-dspark-runtime:dspark-nvfp4-stage-c
-    container_name: ds4-dspark-t2w
+    container_name: ds4-dspark
     network_mode: host
     ipc: host
     shm_size: 64g
@@ -11,6 +11,14 @@ services:
       stack: 67108864
     volumes:
       - ${HF_CACHE:-/home/sdrew/.cache/huggingface}:/cache/huggingface
+      # Reasoning-effort + tool-argument hardening overlay (from the aiden fix):
+      # 1) this image's stock encoder only accepts high/max reasoning_effort (`low`
+      #    asserts). Overlay the corrected 3-level encoder (low/high/max) so effort
+      #    routing works and matches the official 0731 semantics.
+      # 2) adds tool-argument JSON repair/normalization so model tool calls survive
+      #    as valid JSON (wrapper keys, truncated/malformed args).
+      - ./encoding_dsv4.py:/opt/env/lib/python3.12/site-packages/vllm/tokenizers/deepseek_v4_encoding.py:ro
+      - ./deepseek_v4_wrapper.py:/opt/env/lib/python3.12/site-packages/vllm/tokenizers/deepseek_v4.py:ro
     deploy:
       resources:
         reservations:
@@ -76,7 +84,7 @@ services:
       MODEL_PATH: deepseek-ai/DeepSeek-V4-Flash-0731
       MODEL_REVISION: 9e165c30e2704aec5d9d593cce3eebd58bbef1cb
       SERVED_MODEL_NAME: deepseek-v4-flash
-      PORT: 8000
+      PORT: 4000
       GPU_MEM: 0.78
       MTP_NUM_TOKENS: 5
       TP_SIZE: 2
@@ -116,7 +124,7 @@ services:
         echo "[dspark] NODE_RANK=$${NODE_RANK} MTP=$${MTP_NUM_TOKENS} GID=$${NCCL_IB_GID_INDEX}"
 
         if [ "$${ASYNC_SCHED:-1}" = "1" ]; then ASYNC_ARG="--async-scheduling"; else ASYNC_ARG=""; fi
-        SPECULATIVE_CONFIG="{\"method\":\"dspark\",\"num_speculative_tokens\":$${MTP_NUM_TOKENS:-5},\"draft_sample_method\":\"probabilistic\"}";
+        SPECULATIVE_CONFIG="{\"method\":\"dspark\",\"num_speculative_tokens\":$${MTP_NUM_TOKENS:-5},\"draft_sample_method\":\"probabilistic\",\"moe_backend\":\"b12x\"}";
 
         exec /opt/env/bin/vllm serve "$${MODEL_PATH}" \
           --revision "$${MODEL_REVISION:-main}" \

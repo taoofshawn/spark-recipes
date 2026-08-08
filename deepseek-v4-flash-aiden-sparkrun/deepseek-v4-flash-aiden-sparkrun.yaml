@@ -11,15 +11,12 @@
 # and apply aiden's encoder/reasoning-effort/tool-arg hardening via a mod
 # (pre_exec overlay inside each container before `vllm serve`).
 #
-# Run (leader node). NOTE: --rootful REQUIRED — the aiden image runs as root
-# (mods write into the root-owned /opt/venv vLLM package; vLLM writes AOT/jit
-# caches into the container root FS). sparkrun's default is rootless, which
-# would fail the overlay + break vLLM cache writes.
+# Run (leader node). Rootful is BAKED INTO the recipe (see executor_config), so
+# no --rootful flag is needed. Hosts: sparkrun uses the saved default cluster
+# 'spark' when -H/--cluster are omitted (head spark-0f0b, worker spark-6d14).
 #
-#   sparkrun run deepseek-v4-flash-aiden-sparkrun/deepseek-v4-flash-aiden-sparkrun.yaml \
-#       -H 192.168.0.170,192.168.0.171 --rootful -n   # dry-run first
-#   sparkrun run deepseek-v4-flash-aiden-sparkrun/deepseek-v4-flash-aiden-sparkrun.yaml \
-#       -H 192.168.0.170,192.168.0.171 --rootful
+#   sparkrun run deepseek-v4-flash-aiden-sparkrun/deepseek-v4-flash-aiden-sparkrun.yaml -n  # dry-run
+#   sparkrun run deepseek-v4-flash-aiden-sparkrun/deepseek-v4-flash-aiden-sparkrun.yaml     # launch
 #   sparkrun logs  deepseek-v4-flash-aiden-sparkrun
 #   sparkrun status # / sparkrun stop deepseek-v4-flash-aiden-sparkrun
 #
@@ -118,7 +115,15 @@ env:
   # is per-node; see README phase-2 knob.
 
 executor_config:
+  # Rootful bake: recipe executor_config OUTRANKS sparkrun's rootless
+  # adjustments, so overriding every field the rootless path touches forces
+  # run-as-root even WITHOUT the --rootful CLI flag. The aiden image runs as
+  # root (mod writes root-owned /opt/venv; vLLM AOT/jit caches go to the
+  # container root FS), so this is required.
   privileged: true
+  security_opt: null
+  cap_add: null
+  user: null
   gpus: all
   ipc: host
   shm_size: 32gb

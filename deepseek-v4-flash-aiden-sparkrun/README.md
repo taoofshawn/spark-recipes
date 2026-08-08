@@ -18,12 +18,19 @@ so the clean fix is: **point sparkrun at the aiden image and stop rebuilding.**
 | Image build needed? | **No.** `container:` is the aiden image (docker.io pullable). `docker-pull` distributes it as-is. |
 | Encoder / reasoning-effort / tool-arg fix | Applied as a **mod** (builder-agnostic `pre_exec`): copies `encoding_dsv4.py` + `deepseek_v4_wrapper.py` over the image's `/opt/venv/.../vllm/tokenizers/` before `vllm serve` — the sparkrun equivalent of aiden's bind-mount overlay. |
 | 1M context | Same aiden flags: `--attention-backend FLASHINFER_MLA_SPARSE_DSV4 --kv-cache-dtype fp8 --max-model-len 1048576`. sparkrun's VRAM estimator will warn "max_model_len exceeds KV budget" — that estimate is non-sparse and **ignored**; aiden's sparse KV is what makes 1M fit. |
-| Root | **`--rootful` is REQUIRED.** The aiden image runs as root (mod writes root-owned `/opt/venv`; vLLM writes AOT/jit to container root FS). sparkrun's default rootless mode would fail both. |
+| Root | **Baked into the recipe** — `executor_config` sets `privileged: true` + `security_opt/cap_add/user: null`, which outranks sparkrun's rootless defaults, so the container runs as root **with no `--rootful` flag needed**. |
 | Cluster flags | sparkrun's `vllm-distributed` runtime appends `--nnodes 2 --node-rank --master-addr --master-port 25000` (+`--headless` on the worker) automatically — do NOT put them in the command. |
 | HF model | sparkrun mounts host `~/.cache/huggingface` → `/cache/huggingface`; recipe sets `HF_HOME=/cache/huggingface`. 0731 model is already cached on both nodes (offline). |
 | RoCE/NCCL | Set explicitly from aiden's proven `.env` (recipe env always wins) so the launch never depends on sparkrun's IB auto-detect. |
 
 ## Run (on the leader node)
+
+Hosts do **not** need to be passed: sparkrun uses the saved **default cluster
+`spark`** (`spark-0f0b` head, `spark-6d14` worker). The earlier launch just
+showed `-H 192.168.0.170,192.168.0.171` explicitly — that was for clarity, not a
+requirement. You can omit `-H` (default cluster), or use `--cluster spark`, or
+pass `-H`/`--hosts-file` to override. Rootful is baked into `executor_config`,
+so no `--rootful` flag is needed either.
 
 ```bash
 cd ~/code/spark-recipes            # on node0 (192.168.0.170)
@@ -35,12 +42,10 @@ cd ~/code/spark-recipes            # on node0 (192.168.0.170)
 
 # 1) Validate / inspect (no containers started)
 sparkrun recipe validate deepseek-v4-flash-aiden-sparkrun/deepseek-v4-flash-aiden-sparkrun.yaml
-sparkrun run deepseek-v4-flash-aiden-sparkrun/deepseek-v4-flash-aiden-sparkrun.yaml \
-    -H 192.168.0.170,192.168.0.171 --rootful -n
+sparkrun run deepseek-v4-flash-aiden-sparkrun/deepseek-v4-flash-aiden-sparkrun.yaml -n
 
 # 2) Launch (detaches by default)
-sparkrun run deepseek-v4-flash-aiden-sparkrun/deepseek-v4-flash-aiden-sparkrun.yaml \
-    -H 192.168.0.170,192.168.0.171 --rootful
+sparkrun run deepseek-v4-flash-aiden-sparkrun/deepseek-v4-flash-aiden-sparkrun.yaml
 ```
 
 Boot takes ~7–8 min (155 GiB model + AOT compile + warmup) — same as aiden.

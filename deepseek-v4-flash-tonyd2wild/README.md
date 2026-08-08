@@ -18,7 +18,7 @@ cluster, built from [tonyd2wild's DSpark stack](https://github.com/tonyd2wild/De
 | sampling | `--generation-config vllm`, no override |
 | thinking default | `false` (clients can drive effort themselves) |
 | context length | 1M (1048576) |
-| serve | port `8000`, served model `deepseek-v4-flash` |
+| serve | port `4000`, served model `deepseek-v4-flash` |
 
 > ⚠️ Keep this recipe's native backend wiring — `nvfp4_ds_mla` KV with the v1
 > runner via `--distributed-executor-backend mp`, and B12X MoE via
@@ -63,7 +63,7 @@ the native backend wiring; it adds two overlays + one flag._
 # Building & deploying from scratch on new DGX Sparks
 
 Everything below is what it takes to go from a pair of fresh GB10 Sparks to a
-serving `deepseek-v4-flash` on :8000. It reflects a real deployment; the gotchas
+serving `deepseek-v4-flash` on :4000. It reflects a real deployment; the gotchas
 marked ⚠️ are ones actually hit.
 
 ## 0) Prerequisites (each node)
@@ -196,7 +196,7 @@ docker compose --env-file .env --env-file .env.node1 up -d
 docker compose --env-file .env --env-file .env.node0 up -d
 ```
 
-API serves at `http://HEAD_NODE_IP:8000/v1` (served model `deepseek-v4-flash`).
+API serves at `http://HEAD_NODE_IP:4000/v1` (served model `deepseek-v4-flash`).
 
 ## 8) Confirm it is healthy
 
@@ -205,7 +205,7 @@ First boot takes **~7–8 min** (model load ~3 min + warmup/compile). Watch the 
 ```bash
 docker logs -f ds4-dspark-t2w
 # wait for: "Application startup complete"
-curl -s http://127.0.0.1:8000/v1/models | python3 -m json.tool
+curl -s http://127.0.0.1:4000/v1/models | python3 -m json.tool
 # expect: "id": "deepseek-v4-flash", "max_model_len": 1048576
 ```
 
@@ -246,7 +246,7 @@ never benchmark straight after boot or after a quiet period.
 | `GPU_MEM` | 0.78 | keep ≤0.78 on this stack |
 | `MAX_MODEL_LEN` | 1048576 | 1M is the true YaRN ceiling |
 | `THINKING` | false | server `thinking` default; clients can drive effort themselves |
-| `PORT` | 8000 | serve port |
+| `PORT` | 4000 | serve port |
 
 `MAX_NUM_BATCHED_TOKENS=8192` and `max-cudagraph-capture-size=seqs×(k+1)` are
 derived per the upstream's validated profile — don't touch without re-measuring.

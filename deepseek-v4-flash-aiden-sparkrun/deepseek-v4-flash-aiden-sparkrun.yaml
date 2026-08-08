@@ -31,6 +31,10 @@ name: deepseek-v4-flash-aiden-sparkrun
 description: DeepSeek-V4-Flash-0731, 1M context, via the aiden 3.75 image through sparkrun (no rebuild)
 
 model: deepseek-ai/DeepSeek-V4-Flash-0731
+# NOTE: model_revision is ALSO repeated in `defaults` below. sparkrun uses the
+# top-level field for the model DISTRIBUTION revision lookup, but only injects
+# `defaults` keys into the command `{placeholder}` substitution — so the
+# revision must live in defaults or `--revision {model_revision}` stays literal.
 model_revision: 9e165c30e2704aec5d9d593cce3eebd58bbef1cb
 runtime: vllm
 
@@ -56,6 +60,7 @@ metadata:
   base_recipe: deepseek-v4-flash-aiden
 
 defaults:
+  model_revision: 9e165c30e2704aec5d9d593cce3eebd58bbef1cb
   port: 8000
   host: 0.0.0.0
   tensor_parallel: 2

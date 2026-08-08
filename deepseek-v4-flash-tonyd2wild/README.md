@@ -27,6 +27,39 @@ cluster, built from [tonyd2wild's DSpark stack](https://github.com/tonyd2wild/De
 
 ---
 
+# 2026-08 improvements (this branch - audit trail)
+
+_Dev branch for improving accuracy, speed, and tool-calling. Nothing here changes
+the native backend wiring; it adds two overlays + one flag._
+
+1. **Reasoning-effort + tool-argument hardening overlay** - `encoding_dsv4.py` and
+   `deepseek_v4_wrapper.py` bind-mounted to
+   `../vllm/tokenizers/deepseek_v4_encoding.py` and `deepseek_v4.py`.
+   - This runtime's stock encoder only accepts `high`/`max` reasoning_effort (`low`
+     asserts; forum 372268 P510). These overlays restore the official 3-level
+     (low/high/max) `REASONING_EFFORT_PROMPTS` + routing, so effort levels behave
+     like the aiden recipe.
+   - The same files add tool-argument JSON repair/normalization
+     (`normalize_tool_arguments`, `repair_tool_arguments_json`, `parse_tool_arguments`,
+     `dsml_param_to_python`, `normalize_parsed_dsml_tool_args`,
+     `prepare_openai_tool_call_for_execution`) so wrapper-key / truncated / malformed
+     tool args survive as valid JSON. Sourced from the aiden encoder fix
+     (`aiden-encoder-toolarg-fix`).
+2. **DSpark draft MoE backend** - added `"moe_backend":"b12x"` inside the
+   `speculative-config` (forum 378824 P12, srivatsa1): the NVFP4 draft must run its
+   MoE on `b12x` (not the default `flashinfer_b12x`) or the MXFP4 oracle rejects
+   drafts and acceptance collapses (~1.0-1.15 tok/step). This is the flag part of
+   that fix (measured 16.9->64.4 tok/s). The companion source-level
+   draft-quantization / fail-closed-loader patches from that thread are **not**
+   applied here - a possible follow-up if acceptance still sags.
+3. GitHub audit: main repo has 4 commits since the vendored pin - all docs/tooling
+   except a `sparkrun/` deploy harness that reproduces our exact config. No new
+   serving patches to adopt. Other `tonyd2wild` repos use different profiles
+   (FP8 / MTP-lane / other-context) and contradict these NVFP4-1M-DSpark
+   invariants.
+
+---
+
 # Building & deploying from scratch on new DGX Sparks
 
 Everything below is what it takes to go from a pair of fresh GB10 Sparks to a

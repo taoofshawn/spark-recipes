@@ -4,6 +4,7 @@ services:
     container_name: ds4-dspark
     network_mode: host
     ipc: host
+    restart: unless-stopped
     shm_size: 64g
     init: true
     ulimits:
@@ -19,6 +20,21 @@ services:
       #    as valid JSON (wrapper keys, truncated/malformed args).
       - ./encoding_dsv4.py:/opt/env/lib/python3.12/site-packages/vllm/tokenizers/deepseek_v4_encoding.py:ro
       - ./deepseek_v4_wrapper.py:/opt/env/lib/python3.12/site-packages/vllm/tokenizers/deepseek_v4.py:ro
+      # Open-PR backport (tonyd2wild Patch 5): don't evaluate client stop strings
+      # inside the reasoning segment. vLLM's v1 detokenizer matches client `stop`
+      # against the whole stream; with think-in-prompt the model starts inside
+      # ` thinking` and a stop firing mid-reasoning yields content:null (a silent
+      # answer loss). Guard arms when the prompt ends on the reasoning-start
+      # marker and keeps stops dormant until ` response` appears.
+      # Opt out: VLLM_SUPPRESS_STOPS_IN_REASONING=0.
+      - ./detokenizer.py:/opt/env/lib/python3.12/site-packages/vllm/v1/engine/detokenizer.py:ro
+      # Open-PR backport (tonyd2wild PR #17): streaming tool-parser fix. The stock
+      # parser passed an explicit empty tool_calls=[] on every content delta once a
+      # request carries tools; with exclude_unset=True that emits `"tool_calls": []`
+      # (truthy in JS), so agent clients route text into the tool-call branch and
+      # drop the answer. DeepSeekV4ToolParser subclasses this V3.2 parser, so this
+      # overlay fixes both.
+      - ./deepseekv32_tool_parser.py:/opt/env/lib/python3.12/site-packages/vllm/tool_parsers/deepseekv32_tool_parser.py:ro
     deploy:
       resources:
         reservations:
@@ -61,6 +77,9 @@ services:
       VLLM_USE_B12X_MOE: "1"
       VLLM_USE_B12X_WO_PROJECTION: "1"
       VLLM_B12X_W4A16_FORCE_BLOCKS_PER_SM: "0"
+      # B12X decode tuning knobs added upstream (Validated C12 profile).
+      VLLM_B12X_W4A16_FORCE_BLOCKS_MAX_M: "16"
+      VLLM_B12X_W4A16_FORCE_TILE_CONFIG: ""
       B12X_W4A16_TC_DECODE: "0"
       VLLM_DSPARK_CONFIDENCE_THRESHOLD: "0.0"
       VLLM_DSPARK_CONFIDENCE_SCHEDULER: off
@@ -85,12 +104,16 @@ services:
       MODEL_REVISION: 9e165c30e2704aec5d9d593cce3eebd58bbef1cb
       SERVED_MODEL_NAME: deepseek-v4-flash
       PORT: 4000
-      GPU_MEM: 0.78
+      GPU_MEM: 0.85
       MTP_NUM_TOKENS: 5
       TP_SIZE: 2
       MAX_MODEL_LEN: 1048576
-      MAX_NUM_SEQS: 6
+      # Upstream-validated C12 concurrency lane (GPU 0.85 / 12 slots): raises KV
+      # capacity well above 1M and improves aggregate throughput. Verify on this
+      # cluster — the prior verified lane was 0.78 / 6.
+      MAX_NUM_SEQS: 12
       MAX_NUM_BATCHED_TOKENS: 8192
+      KV_CACHE_DTYPE: nvfp4_ds_mla
       THINKING: false
       ASYNC_SCHED: 1
 
@@ -131,10 +154,9 @@ services:
           --served-model-name "$${SERVED_MODEL_NAME:-deepseek-v4-flash-dspark}" \
           --host 0.0.0.0 --port "$${PORT:-8888}" --trust-remote-code \
           --tensor-parallel-size "$${TP_SIZE:-2}" --pipeline-parallel-size 1 \
-          --kv-cache-dtype nvfp4_ds_mla --block-size 256 \
-          --max-model-len "$${MAX_MODEL_LEN:-1048576}" --max-num-seqs "$${MAX_NUM_SEQS:-6}" \
+          --kv-cache-dtype "$${KV_CACHE_DTYPE:-nvfp4_ds_mla}" --block-size 256 \
+          --max-model-len "$${MAX_MODEL_LEN:-1048576}" --max-num-seqs "$${MAX_NUM_SEQS:-12}" \
           --max-num-batched-tokens "$${MAX_NUM_BATCHED_TOKENS:-8192}" \
-          --max-cudagraph-capture-size "$$(( $${MAX_NUM_SEQS:-6} * ($${MTP_NUM_TOKENS:-5} + 1) ))" \
           --gpu-memory-utilization "$${GPU_MEM:-0.78}" --enable-prefix-caching \
           $${ASYNC_ARG} --enable-chunked-prefill \
           --speculative-config "$${SPECULATIVE_CONFIG}" \

@@ -124,24 +124,24 @@ def tools_from_openai_format(tools):
 
 
 def tool_calls_from_openai_format(tool_calls):
-    """Convert OpenAI-format tool calls to internal format."""
+    """Convert OpenAI-format tool calls to internal format (args normalized)."""
     return [
         {
             "name": tool_call["function"]["name"],
-            "arguments": tool_call["function"]["arguments"],
+            "arguments": to_json(normalize_tool_arguments(tool_call["function"]["arguments"])),
         }
         for tool_call in tool_calls
     ]
 
 
 def tool_calls_to_openai_format(tool_calls):
-    """Convert internal tool calls to OpenAI format."""
+    """Convert internal tool calls to OpenAI format (args normalized)."""
     return [
         {
             "type": "function",
             "function": {
                 "name": tool_call["name"],
-                "arguments": tool_call["arguments"],
+                "arguments": to_json(normalize_tool_arguments(tool_call["arguments"])),
             }
         }
         for tool_call in tool_calls
@@ -189,13 +189,202 @@ def decode_dsml_to_arguments(tool_name: str, tool_args: Dict[str, Tuple[str, str
     Returns:
         Dict with "name" and "arguments" (JSON string) keys.
     """
-    def _decode_value(key: str, value: str, string: str):
-        if string == "true":
-            value = to_json(value)
-        return f"{to_json(key)}: {value}"
+    flat = normalize_parsed_dsml_tool_args(tool_args)
+    return dict(name=tool_name, arguments=to_json(flat))
 
-    tool_args_json = "{" + ", ".join([_decode_value(k, v, string=is_str) for k, (v, is_str) in tool_args.items()]) + "}"
-    return dict(name=tool_name, arguments=tool_args_json)
+
+# ---------------------------------------------------------------------------
+# Tool-argument robustness (ported from DiegoGiovany/DeepSeekV4FlashEncodingFix)
+# Handles wrapped/misnamed arguments, malformed or truncated JSON, and common
+# model/transport mistakes so tool calls survive as valid JSON objects.
+# ---------------------------------------------------------------------------
+
+_ARGUMENT_WRAPPER_KEYS = ("arguments", "input", "parameters", "params", "raw_arguments")
+_SPURIOUS_TOOL_METADATA_KEYS = frozenset({"name", "type", "id", "tool_call_id", "call_id"})
+
+
+def _parse_argument_object(value: Any) -> Optional[Dict[str, Any]]:
+    """Parse a single argument value into a dict if possible."""
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = json.loads(value)
+            if isinstance(parsed, dict):
+                return parsed
+        except json.JSONDecodeError:
+            return None
+    return None
+
+
+def dsml_param_to_python(value: str, is_str: str) -> Any:
+    """Convert a parsed DSML parameter value to a Python object."""
+    if is_str == "true":
+        return value
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError:
+        return value
+
+
+def normalize_tool_arguments(raw_arguments: Any) -> Dict[str, Any]:
+    """
+    Normalize tool call arguments to a flat parameter dict.
+
+    Handles OpenAI JSON strings, pre-parsed dicts, and mistaken wrapper keys
+    (arguments, input, parameters, etc.) without leaving spurious wrapper params.
+    """
+    if isinstance(raw_arguments, dict):
+        arguments = raw_arguments
+    elif isinstance(raw_arguments, str):
+        return parse_tool_arguments(raw_arguments)
+    else:
+        return {}
+
+    for _ in range(4):
+        unwrapped = False
+        for wrapper_key in _ARGUMENT_WRAPPER_KEYS:
+            if wrapper_key not in arguments:
+                continue
+            inner = _parse_argument_object(arguments[wrapper_key])
+            if inner is None:
+                continue
+            rest = {
+                k: v for k, v in arguments.items()
+                if k != wrapper_key and k not in _SPURIOUS_TOOL_METADATA_KEYS
+            }
+            arguments = {**inner, **rest}
+            unwrapped = True
+            break
+        if not unwrapped:
+            break
+
+    return arguments
+
+
+def repair_tool_arguments_json(raw: str) -> Optional[Dict[str, Any]]:
+    """
+    Parse tool-call argument JSON, repairing common transport/model corruption.
+
+    Handles truncated streaming output (unclosed strings/objects) and returns
+    None when the payload cannot be salvaged.
+    """
+    if not isinstance(raw, str):
+        return None
+
+    stripped = raw.strip()
+    if not stripped:
+        return {}
+
+    try:
+        parsed = json.loads(stripped)
+        if isinstance(parsed, dict):
+            return normalize_tool_arguments(parsed)
+    except json.JSONDecodeError:
+        pass
+
+    if stripped.startswith("{") and not stripped.endswith("}"):
+        stack: List[str] = []
+        in_string = False
+        escape = False
+        for ch in stripped:
+            if in_string:
+                if escape:
+                    escape = False
+                elif ch == "\\":
+                    escape = True
+                elif ch == '"':
+                    in_string = False
+            else:
+                if ch == '"':
+                    in_string = True
+                elif ch == "{":
+                    stack.append("}")
+                elif ch == "[":
+                    stack.append("]")
+                elif ch in "}]" and stack and stack[-1] == ch:
+                    stack.pop()
+
+        candidates: List[str] = []
+        if in_string:
+            candidates.append(stripped + '"' + "".join(reversed(stack)))
+        if stack:
+            candidates.append(stripped + "".join(reversed(stack)))
+        candidates.extend([stripped + "}", stripped + '"}', stripped + '"}'])
+
+        for candidate in candidates:
+            try:
+                parsed = json.loads(candidate)
+                if isinstance(parsed, dict):
+                    return normalize_tool_arguments(parsed)
+            except json.JSONDecodeError:
+                continue
+
+    return None
+
+
+def parse_tool_arguments(raw_arguments: Any) -> Dict[str, Any]:
+    """Parse tool arguments from any common transport shape into a flat dict."""
+    if isinstance(raw_arguments, dict):
+        return normalize_tool_arguments(raw_arguments)
+
+    if isinstance(raw_arguments, str):
+        if not raw_arguments.strip():
+            return {}
+        try:
+            parsed = json.loads(raw_arguments)
+            if isinstance(parsed, dict):
+                return normalize_tool_arguments(parsed)
+        except json.JSONDecodeError:
+            repaired = repair_tool_arguments_json(raw_arguments)
+            if repaired is not None:
+                return repaired
+        return {}
+
+    return {}
+
+
+def prepare_openai_tool_call_for_execution(tool_call: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Normalize an OpenAI-format tool_call before handing it to a tool executor.
+
+    Always produces a valid JSON string via json.dumps — never hand-build JSON
+    strings from DSML parameter values (that breaks on quotes, backslashes, and
+    truncation).
+    """
+    function = tool_call.get("function") or {}
+    normalized = parse_tool_arguments(function.get("arguments"))
+    return {
+        **tool_call,
+        "function": {
+            **function,
+            "arguments": to_json(normalized),
+        },
+    }
+
+
+def normalize_parsed_dsml_tool_args(tool_args: Dict[str, Tuple[str, str]]) -> Dict[str, Any]:
+    """
+    Convert parsed DSML parameters to a flat argument dict, repairing common
+    model/transport mistakes (wrapped arguments, commands vs command, etc.).
+    """
+    flat: Dict[str, Any] = {
+        name: dsml_param_to_python(value, is_str)
+        for name, (value, is_str) in tool_args.items()
+    }
+
+    flat = normalize_tool_arguments(flat)
+
+    if "command" not in flat and "commands" in flat:
+        command = flat.pop("commands")
+        if isinstance(command, list) and command:
+            command = command[0]
+        flat["command"] = command
+
+    if "file_path" not in flat and "path" in flat:
+        flat["file_path"] = flat.pop("path")
+
+    return flat
 
 
 def render_tools(tools: List[Dict[str, Union[str, Dict[str, Any]]]]) -> str:

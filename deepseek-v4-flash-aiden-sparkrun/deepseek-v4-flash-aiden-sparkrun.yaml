@@ -58,7 +58,7 @@ metadata:
 
 defaults:
   model_revision: 9e165c30e2704aec5d9d593cce3eebd58bbef1cb
-  port: 8000
+  port: 4000
   host: 0.0.0.0
   tensor_parallel: 2
   gpu_memory_utilization: 0.83

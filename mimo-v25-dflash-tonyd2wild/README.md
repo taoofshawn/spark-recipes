@@ -51,7 +51,7 @@ docker compose --env-file .env --env-file .env.node0 up -d
 ### Verify
 
 ```bash
-curl http://192.168.0.170:8000/v1/chat/completions \
+curl http://192.168.0.170:4000/v1/chat/completions \
   -H 'Content-Type: application/json' \
   -d '{"model":"MiMo-V2.5-NVFP4-DFlash-FP8KV","messages":[{"role":"user","content":"Reply exactly: OK DFLASH LIVE"}],"max_tokens":16,"temperature":0}'
 ```

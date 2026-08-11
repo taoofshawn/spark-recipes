@@ -143,7 +143,7 @@ before the `exec` action) to stay detached:
   -e B12X_MLA_SM120_UNIFIED=1 -e B12X_MOE_FORCE_A8=1 \
   -e HF_HUB_OFFLINE=1 -e TRANSFORMERS_OFFLINE=1 \
   exec vllm serve deepseek-ai/DeepSeek-V4-Flash-0731 \
-    --port 8000 --host 0.0.0.0 --trust-remote-code \
+    --port 4000 --host 0.0.0.0 --trust-remote-code \
     --served-model-name deepseek-v4-flash \
     --tensor-parallel-size 2 --kv-cache-dtype fp8 --block-size 256 \
     --max-model-len auto --max-num-seqs 6 --max-num-batched-tokens 8192 \
@@ -178,7 +178,7 @@ before the `exec` action) to stay detached:
 | spec tokens | 5 (DSpark) |
 | load format | `instanttensor` |
 | backend | B12X MoE / linear / `B12X_MLA_SPARSE` attention |
-| port | 8000 |
+| port | 4000 |
 
 **Env vars** (set in the recipe):
 
@@ -197,8 +197,8 @@ HF_HUB_OFFLINE=1  TRANSFORMERS_OFFLINE=1
 ## Verify it's serving
 
 ```bash
-curl -sS http://127.0.0.1:8000/v1/models | jq .
-curl -sS http://127.0.0.1:8000/v1/chat/completions \
+curl -sS http://127.0.0.1:4000/v1/models | jq .
+curl -sS http://127.0.0.1:4000/v1/chat/completions \
   -H 'Content-Type: application/json' \
   -d '{"model":"deepseek-v4-flash",
        "messages":[{"role":"user","content":"Say hi"}],

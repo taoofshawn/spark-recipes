@@ -65,7 +65,10 @@ services:
       # ---- runtime (Stage-C NVFP4 overlay image) ----
       HF_HOME: /cache/huggingface
       VLLM_CACHE_ROOT: /cache/huggingface/vllm-cache
-      HF_HUB_OFFLINE: "0"
+      # Never touch the HF Hub — the model is served from the local cache
+      # on both nodes (156G snapshot pinned by MODEL_REVISION).
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
       HF_HUB_DISABLE_XET: "1"
       DSPARK_SLOT_CLAMP: "1"
       VLLM_ALLOW_LONG_MAX_MODEL_LEN: "1"

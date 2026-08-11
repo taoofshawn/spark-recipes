@@ -70,7 +70,7 @@ services:
       MODEL_REVISION: a147dd04d6cf861e43b2d783dcde23b53ab7ee68
       DFLASH_REVISION: 1f58446181abcaa01030fdbde835fbd38ae9a2b1
       SERVED_MODEL_NAME: mimo-v25-dflash
-      PORT: 4000
+      PORT: "${PORT:-4000}"
       DFLASH_SPEC_TOKENS: ${DFLASH_SPEC_TOKENS:-7}
       ATTENTION_BACKEND: triton_attn
       KV_CACHE_DTYPE: fp8

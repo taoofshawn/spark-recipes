@@ -107,7 +107,7 @@ services:
       MODEL_REVISION: 9e165c30e2704aec5d9d593cce3eebd58bbef1cb
       SERVED_MODEL_NAME: deepseek-v4-flash
       PORT: 4000
-      GPU_MEM: 0.85
+      GPU_MEM: 0.83
       MTP_NUM_TOKENS: 5
       TP_SIZE: 2
       MAX_MODEL_LEN: 1048576

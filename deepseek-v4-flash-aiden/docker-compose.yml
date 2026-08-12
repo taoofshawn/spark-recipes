@@ -73,8 +73,8 @@ services:
       PORT: "${PORT:-4000}"
       GPU_MEM: 0.83
       SPEC_TOKENS: 4
-      TEMPERATURE: 0.95
-      TOP_P: 0.44
+      TEMPERATURE: "1.0"
+      TOP_P: "0.95"
       TP_SIZE: 2
       MAX_MODEL_LEN: 1048576
       MAX_NUM_SEQS: 16

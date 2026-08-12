@@ -144,6 +144,7 @@ services:
           --reasoning-config '{"reasoning_parser":"deepseek_v4","reasoning_start_str":" thinking","reasoning_end_str":" response"}' \
           --default-chat-template-kwargs "{\"thinking\":$${THINKING:-false}}" \
           --generation-config vllm \
+          --override-generation-config '{"temperature":1.0,"top_p":0.95}' \
           --enable-flashinfer-autotune \
           --nnodes 2 --node-rank "$${NODE_RANK}" --master-addr "$${MASTER_ADDR}" --master-port "$${MASTER_PORT:-25000}" \
           $${HEADLESS:+--headless}

@@ -4,6 +4,7 @@ services:
     container_name: ds4-dspark
     network_mode: host
     ipc: host
+    restart: unless-stopped
     shm_size: 32g
     init: true
     ulimits:
@@ -23,6 +24,14 @@ services:
       # Corrected deepseek_v4 tokenizer wrapper (pre-0731 wrapper collapses
       # low->high; this restores low/high/max + off). See README.
       - ./deepseek_v4_wrapper.py:/opt/venv/lib/python3.12/site-packages/vllm/tokenizers/deepseek_v4.py:ro
+      # Open-PR backport (tonyd2wild Patch 5, ported): don't evaluate client
+      # stop strings inside the reasoning segment. With thinking=true the
+      # prompt ends on ` thinking`, and vLLM's v1 detokenizer matching a
+      # client stop against the whole stream yields content:null (silent
+      # answer loss). Guard arms on the reasoning-start marker and keeps
+      # stops dormant until ` response` appears.
+      # Opt out: VLLM_SUPPRESS_STOPS_IN_REASONING=0.
+      - ./detokenizer.py:/opt/venv/lib/python3.12/site-packages/vllm/v1/engine/detokenizer.py:ro
     deploy:
       resources:
         reservations:

@@ -96,7 +96,7 @@ to sparkrun's substitution rules:
 | model | `deepseek-ai/DeepSeek-V4-Flash-0731` |
 | served name | `deepseek-v4-flash` |
 | container | `vllm-node-b12x` (build arg `--exp-b12x`) |
-| port | 8000 |
+| port | 4000 |
 | TP | 2 (across 2 nodes) |
 | max context | 1M (`auto`) |
 | KV cache | fp8, block 256 |
@@ -109,8 +109,8 @@ to sparkrun's substitution rules:
 ## Verify
 
 ```bash
-curl -sS http://127.0.0.1:8000/v1/models | jq .
-curl -sS http://127.0.0.1:8000/v1/chat/completions \
+curl -sS http://127.0.0.1:4000/v1/models | jq .
+curl -sS http://127.0.0.1:4000/v1/chat/completions \
   -H 'Content-Type: application/json' \
   -d '{"model":"deepseek-v4-flash",
        "messages":[{"role":"user","content":"Say hi"}],

@@ -92,7 +92,7 @@ in this recipe's `MODEL_REVISION`). `deepseek_v4_wrapper.py` is the image's own
 
 ```bash
 for effort in low high max; do
-  curl -sS http://127.0.0.1:8000/v1/chat/completions/render \
+  curl -sS http://127.0.0.1:4000/v1/chat/completions/render \
     -H 'Content-Type: application/json' \
     -d "{\"model\":\"deepseek-v4-flash\",\"messages\":[{\"role\":\"user\",\"content\":\"Test\"}],\"add_generation_prompt\":true,\"chat_template_kwargs\":{\"thinking\":true,\"reasoning_effort\":\"$effort\"}}" |
   jq -r "[\"$effort\", (.token_ids | length)] | @tsv"

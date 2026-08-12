@@ -6,7 +6,7 @@ cluster, run and managed entirely through `sparkrun`.
 - **Model:** `deepseek-ai/DeepSeek-V4-Flash-0731`
 - **Context:** 1,048,576 tokens (sparse attention + fp8 KV)
 - **Nodes:** 2 (tensor parallel), leader + worker
-- **Served as:** `deepseek-v4-flash` on port `8000`
+- **Served as:** `deepseek-v4-flash` on port `4000`
 
 ## Prerequisites
 
@@ -63,8 +63,8 @@ sparkrun status
 sparkrun logs <id>   # follow startup
 
 # Health + model metadata once booted:
-curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8000/health   # expect 200
-curl -s http://127.0.0.1:8000/v1/models | python3 -m json.tool           # see below
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:4000/health   # expect 200
+curl -s http://127.0.0.1:4000/v1/models | python3 -m json.tool           # see below
 ```
 
 Look for:
@@ -81,7 +81,7 @@ request`.
 ## Talk to it
 
 ```bash
-curl -s http://127.0.0.1:8000/v1/chat/completions \
+curl -s http://127.0.0.1:4000/v1/chat/completions \
   -H 'Content-Type: application/json' \
   -d '{"model":"deepseek-v4-flash",
        "messages":[{"role":"user","content":"Say hi"}],
@@ -89,30 +89,14 @@ curl -s http://127.0.0.1:8000/v1/chat/completions \
   | jq '.choices[0].message'
 ```
 
-For how the reasoning is surfaced and what the proxy adds, see
-[Reasoning fields & the sparkrun proxy](#reasoning-fields--the-sparkrun-proxy)
-below.
+Reasoning is surfaced in the assistant message's `reasoning` field (see below).
 
-## Reasoning fields & the sparkrun proxy
+## Reasoning field
 
 This model build emits chain-of-thought in the assistant message's
-**`reasoning`** field (the native field name for this vLLM image). `content`
-holds the final answer.
-
-The **sparkrun proxy start** is a bundled sparkrun component, always available and
-listening on **port `4000`** (in front of the server on `8000`). Using the proxy
-adds:
-
-- **Standard field names** — it maps the model's `reasoning` to
-  **`reasoning_content`**, the common OpenAI/DeepSeek field name, so clients
-  that expect `reasoning_content` work without changes (the original text is
-  also mirrored under `provider_specific_fields`).
-- **A stable route** — it exposes the model as `deepseek-v4-flash` at
-  `http://<host>:4000/v1` and forwards to the running server, so you can point
-  your client at one endpoint and swap the backend underneath.
-
-Both endpoints serve the same model; the proxy just normalizes the response
-shape. Example (same request body, proxy on `4000`):
+**`reasoning`** field (the native field name for this vLLM image); `content`
+holds the final answer. Clients that read `reasoning` (the current standard)
+work directly against the server on port `4000`.
 
 ```bash
 curl -s http://127.0.0.1:4000/v1/chat/completions \
@@ -120,7 +104,7 @@ curl -s http://127.0.0.1:4000/v1/chat/completions \
   -d '{"model":"deepseek-v4-flash",
        "messages":[{"role":"user","content":"Say hi"}],
        "max_tokens":64,"thinking":true,"reasoning_effort":"low"}' \
-  | jq '.choices[0].message'   # reasoning_content is populated
+  | jq '.choices[0].message'   # reasoning is populated
 ```
 
 ## Stop / status
@@ -160,7 +144,7 @@ handling. They ship with the recipe, so nothing extra to install.
   crashes or dies under traffic while you are testing this build, the first knob
   to try is **lowering `gpu_memory_utilization` (e.g. to `0.78`)** and restarting.
   That is the fallback documented in the upstream agent-serving thread.
-- **Port:** `8000` (default). Override with `sparkrun run ... --port 8080`.
+- **Port:** `4000` (default). Override with `sparkrun run ... --port 8080`.
 - **Reasoning effort** defaults to `low`; `thinking` defaults to `true`.
 - **Interface caveat:** the multi-node master address comes from sparkrun's host
   detection. If a restart ever fails to rendezvous across the two nodes, set the

@@ -58,7 +58,7 @@ metadata:
 
 defaults:
   model_revision: 9e165c30e2704aec5d9d593cce3eebd58bbef1cb
-  port: 8000
+  port: 4000
   host: 0.0.0.0
   tensor_parallel: 2
   gpu_memory_utilization: 0.83
@@ -72,8 +72,8 @@ defaults:
   max_cudagraph_capture_size: 256
   served_model_name: deepseek-v4-flash
   num_speculative_tokens: 4
-  temperature: 0.95
-  top_p: 0.44
+  temperature: 1.0
+  top_p: 0.95
   # JSON-valued flags live as single defaults values (sparkrun arg_substitute-friendly)
   compilation_config: '{"cudagraph_mode":"FULL_AND_PIECEWISE","custom_ops":["all"]}'
   speculative_config: '{"method":"dspark","num_speculative_tokens":4,"draft_sample_method":"probabilistic"}'

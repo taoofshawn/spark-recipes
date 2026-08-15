@@ -163,7 +163,7 @@ services:
           --max-model-len "$${MAX_MODEL_LEN}" --max-num-seqs "$${MAX_NUM_SEQS}" \
           --max-num-batched-tokens "$${MAX_NUM_BATCHED_TOKENS}" \
           --max-cudagraph-capture-size "$${GRAPH_CAP}" \
-          --compilation-config '{"cudagraph_mode":"FULL_AND_PIECEWISE","custom_ops":["all"],"cudagraph_capture_sizes":$${CUDAGRAPH_CAPTURE_SIZES}}' \
+          --compilation-config "{\"cudagraph_mode\":\"FULL_AND_PIECEWISE\",\"custom_ops\":[\"all\"],\"cudagraph_capture_sizes\":$${CUDAGRAPH_CAPTURE_SIZES}}" \
           $${ASYNC_ARG} --no-scheduler-reserve-full-isl \
           --enable-chunked-prefill --enable-prefix-caching --enable-flashinfer-autotune \
           --tokenizer-mode deepseek_v4 --tool-call-parser deepseek_v4 --reasoning-parser deepseek_v4 \

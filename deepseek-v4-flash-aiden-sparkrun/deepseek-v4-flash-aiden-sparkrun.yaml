@@ -61,9 +61,11 @@ defaults:
   port: 4000
   host: 0.0.0.0
   tensor_parallel: 2
-  # GMU 0.88 (aiden 3.75-validated range 0.87-0.90, forum 372268 #677/#682):
-  # bigger KV pool. Don't drop toward 0.78 - that is NVFP4-stack advice.
-  gpu_memory_utilization: 0.88
+  # GMU kept at 0.83 (validated 3.2x @1M). The 3.75 forum validated 0.87-0.90
+  # (372268 #677/#682) as optional headroom only; owner prefers 0.83 after
+  # long-session degradation with high settings. Don't drop toward 0.78 - that
+  # is NVFP4-stack advice.
+  gpu_memory_utilization: 0.83
   max_model_len: 1048576
   max_num_seqs: 6
   # Agent-serving profile (SvangenStudios thread 378890): smaller prefill chunk

@@ -135,8 +135,9 @@ handling. They ship with the recipe, so nothing extra to install.
 
 - **Updates (2026-08-15):** this recipe mirrors the compose recipe refresh —
   see `deepseek-v4-flash-aiden/README.md` § "Recipe updates (2026-08-15)" for
-  the full rationale. Summary: agent profile 2048/6 with k=4 retained; GMU **0.88**
-  (thread-validated on 3.75, not the NVFP4 0.78 advice); `reasoning_effort=high`
+  the full rationale. Summary: agent profile 2048/6 with k=4 retained; GMU **0.83**
+  (0.87-0.90 thread-validated on 3.75 as optional headroom only - owner prefers 0.83);
+  `reasoning_effort=high`
   default; explicit `cudagraph_capture_sizes` incl. 30/36; spec config
   `"moe_backend":"b12x"`; `VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS=0` + parity
   envs; explicit `--reasoning-config` markers.
@@ -144,11 +145,10 @@ handling. They ship with the recipe, so nothing extra to install.
   Smaller prefill chunks give much better decode fairness and lower output jitter
   under concurrent agent traffic (at a modest prefill-throughput cost). If draft
   acceptance ever drops under load, raise the batch toward 8192–16384.
-- **GPU memory utilization is `0.88`** (was 0.83). The aiden 3.75 forum
-  validated 0.87–0.90 (0.90 → ~3.1M-token KV pool; #682: +46% KV). Don't lower it
-  for "stability" — the 0.78 advice is NVFP4/tonyd2wild-specific. **However:** if
-  the server crashes or dies under traffic while testing, the first knob to try
-  is lowering `gpu_memory_utilization` (e.g. back to `0.83`, then `0.78`).
+- **GPU memory utilization stays at `0.83`** (deliberate — see compose README
+  "Recipe updates" for the long-session-degradation reasoning; 0.87–0.90 remains
+  an optional one-line headroom lever). Don't lower it for "stability" — the
+  0.78 advice is NVFP4/tonyd2wild-specific.
 - **Port:** `4000` (default). Override with `sparkrun run ... --port 8080`.
 - **Reasoning effort** defaults to `high` (community A/B sweet spot);
   `thinking` defaults to `true`; `max` is per-request only (no win + safety

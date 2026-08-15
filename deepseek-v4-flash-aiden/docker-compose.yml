@@ -46,7 +46,7 @@ services:
       CUDA_VISIBLE_DEVICES: "0"
       CUDA_DEVICE_ORDER: PCI_BUS_ID
       CUTE_DSL_ARCH: sm_121a
-      GPU_MEMORY_UTILIZATION: ${GPU_MEMORY_UTILIZATION:-0.88}
+      GPU_MEMORY_UTILIZATION: ${GPU_MEMORY_UTILIZATION:-0.83}
       # ---- RoCE networking (site-specific — match YOUR NICs) ----
       NCCL_NET: IB
       NCCL_IB_DISABLE: "0"
@@ -90,11 +90,16 @@ services:
       MODEL_REVISION: 9e165c30e2704aec5d9d593cce3eebd58bbef1cb
       SERVED_MODEL_NAME: deepseek-v4-flash
       PORT: "${PORT:-4000}"
-      # GPU memory utilization. On 3.75 the aiden forum validated 0.87-0.90
-      # (372268 #677: 0.90 -> 3.1M-token KV pool; #682: 0.85->0.90 = +46% KV).
-      # 0.88 is a safe midpoint. Do NOT drop toward ~0.78 for "stability" -
-      # that number is specific to the NVFP4/tonyd2wild stack.
-      GPU_MEM: 0.88
+      # GPU memory utilization kept conservative at 0.83 (matches the validated
+      # sparkrun port; 1M is comfortably reachable ~3.2x). The aiden forum
+      # validated 0.87-0.90 on 3.75 (372268 #677: 0.90 -> 3.1M-token KV pool;
+      # #682: 0.85->0.90 = +46% KV) - that headroom is OPTIONAL and can be
+      # enabled later if more long-context concurrency is needed. Raised GMU
+      # was empirically NOT any faster per-session, and the owner prefers the
+      # lower setting after noticing degradation on long sessions with high
+      # settings. Do NOT drop toward ~0.78 for "stability" - that number is
+      # specific to the NVFP4/tonyd2wild stack.
+      GPU_MEM: 0.83
       # DSpark speculative depth. DeepSeek-V4-Flash drafter block = 5, so k must
       # be <=5 or a multiple of 5. On the aiden/fp8 stack the community default
       # is k=4 ("3=balanced, 5=code-heavy", 372268 #513/#687).

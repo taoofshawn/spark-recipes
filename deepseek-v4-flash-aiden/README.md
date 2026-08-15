@@ -176,11 +176,22 @@ tunables refreshed on evidence:
   agent traffic (validated on the sparkrun port; SvangenStudios 378890; forum
   372268 #678 "2048 for better agentic workout"). If draft acceptance ever drops
   under load, raise the batch toward 8192–16384 (acceptance-optimal per #687).
-- **GPU memory utilization `0.88`** (was 0.83). The aiden 3.75 forum validated
-  0.87–0.90: 0.90 → 3.1M-token KV pool (#677); 0.85→0.90 = +46% KV (#682). The
-  "lower it to 0.78" advice is NVFP4/tonyd2wild-stack-specific — do **not** apply
-  it here. If the server dies under traffic anyway, GMU remains the first knob
-  (drop to ~0.83, then 0.78).
+- **GPU memory utilization stays at `0.83`** (deliberate). The aiden 3.75 forum
+  validated 0.87–0.90 as *optional headroom* (0.90 → 3.1M-token KV pool #677;
+  0.85→0.90 = +46% KV #682), but it buys no per-session speed and the operator
+  prefers 0.83 after seeing degradation on long sessions with high settings. If
+  more long-context concurrency is ever needed, raising to 0.88–0.90 is a
+  one-line, community-validated lever. Do **not** drop toward 0.78 for
+  "stability" — that is NVFP4/tonyd2wild-specific advice.
+- **Known "slow after a long session" symptom (not swap — checked):** if it
+  recurs, troubleshoot in this order before touching GMU: (1) GB10 lockstep
+  power-state trap — a node stuck at ~22 W / ~2.0 GHz throttles the TP=2 pair
+  (`nvidia-smi -q -d POWER|CLOCK`; fix `nvidia-smi -lgc <max>` on BOTH nodes, or
+  a full power cycle); (2) KV starvation under concurrency — engine metrics show
+  near-0 gen tok/s with high KV usage and spec acceptance collapse (notably
+  positions 2-4); (3) driver regressions (580.159.03 measured slower on GB10);
+  (4) "cutout mode" one-die-underclock glitch → unplug ≥1 min. Restarting the
+  engine recovers KV-starvation/degradation cases that GMU alone cannot fix.
 - **`reasoning_effort` default `high`** (was low). #520 A/B: +7 tool tests passed
   for +5.5% wall time / +5.8% tokens. `max` measured no better and adds a safety
   regression (#639) — keep `max` per-request only. Our encoder overlay makes the

@@ -101,9 +101,12 @@ services:
       # specific to the NVFP4/tonyd2wild stack.
       GPU_MEM: 0.83
       # DSpark speculative depth. DeepSeek-V4-Flash drafter block = 5, so k must
-      # be <=5 or a multiple of 5. On the aiden/fp8 stack the community default
-      # is k=4 ("3=balanced, 5=code-heavy", 372268 #513/#687).
-      SPEC_TOKENS: 4
+      # be <=5 or a multiple of 5. k=5 + greedy-draft (0rand serving stack,
+      # validated on the GA checkpoint, GD 2026-08-16). The aiden/fp8 forum
+      # default was k=4 ("3=balanced, 5=code-heavy", 372268 #513/#687) with
+      # draft_sample_method=probabilistic - both one flag back if acceptance or
+      # quality ever regresses on a live A/B.
+      SPEC_TOKENS: 5
       # 0731 official sampling: temp 1.0 / top_p 0.95. reasoning_effort=high is
       # the agentic sweet spot (372268 #520: +7 passes for +5.5% wall time;
       # max = no win + safety regression; low = weaker).
@@ -121,8 +124,9 @@ services:
       MAX_NUM_SEQS: 6
       MAX_NUM_BATCHED_TOKENS: 2048
       GRAPH_CAP: 256
-      # Steady-state decode batch = MAX_NUM_SEQS x (SPEC_TOKENS+1) = 6x5 = 30
-      # (36 if you run k=5). The auto-generated capture list omits these; an
+      # Steady-state decode batch = MAX_NUM_SEQS x (SPEC_TOKENS+1) = 6x6 = 36
+      # (k=5 is active; 36 is in the capture list below). The auto-generated
+      # capture list omits these hot shapes; an
       # uncaptured hot shape silently truncates CUDA-graph replay under
       # concurrency (RUNTIME-BAKEOFF + PR#5: ~+9-14% at c4-c6).
       CUDAGRAPH_CAPTURE_SIZES: "[1,2,4,8,16,24,30,32,36,40,48,56,64,72,80,88,96,104,112,120,128,136,144,152,160,168,176,184,192,200,208,216,224,232,240,248,256]"
@@ -177,4 +181,4 @@ services:
           --disable-custom-all-reduce \
           --nnodes 2 --node-rank "$${NODE_RANK}" --master-addr "$${MASTER_ADDR}" --master-port 25000 \
           $${HEADLESS:+--headless} \
-          --speculative-config "{\"method\":\"dspark\",\"num_speculative_tokens\":$${SPEC_TOKENS},\"draft_sample_method\":\"probabilistic\",\"moe_backend\":\"b12x\"}"
+          --speculative-config "{\"method\":\"dspark\",\"num_speculative_tokens\":$${SPEC_TOKENS},\"draft_sample_method\":\"greedy\",\"moe_backend\":\"b12x\"}"

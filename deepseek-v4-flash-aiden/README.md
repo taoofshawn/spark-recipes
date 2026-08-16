@@ -197,13 +197,15 @@ tunables refreshed on evidence:
   regression (#639) — keep `max` per-request only. Our encoder overlay makes the
   three levels actually correct (pre-fix, high silently ran as low).
 - **CUDA-graph steady-state capture:** explicit `cudagraph_capture_sizes` now
-  include 30 (= 6 seqs × (k+1)) and 36 (if k=5). The auto-generated list omitted
-  them — a missed hot shape truncates graph replay at concurrency (bakeoff +
-  PR#5: ~+9–14% at c4–c6).
+  include 36 (= 6 seqs × (k+1), active at k=5) and 30 (k=4 fallback). The
+  auto-generated list omitted them — a missed hot shape truncates graph replay
+  at concurrency (bakeoff + PR#5: ~+9–14% at c4–c6).
 - **DSpark spec config** now explicitly sets `"moe_backend":"b12x"` (draft must
   use the native B12X MoE oracle, not flashinfer_b12x — srivatsa1 378824).
-  k stays **4** — the aiden-stack community default (#513 "3=balanced,
-  5=code-heavy"; #687 best at 4); drafter block is 5 (k ≤ 5 or multiple of 5).
+  k was **4** with `draft_sample_method:"probabilistic"` on 08-15 (#513
+  "3=balanced, 5=code-heavy"; #687 best at 4); updated 08-16 to **k=5 + greedy
+  draft** (see "Recipe updates (2026-08-16)" below). Drafter block is 5 (k ≤ 5
+  or a multiple of 5); the 36 shape is already in the capture list.
 - **`VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS=0`** — stop reserving full graph
   memory in the profiler; KV gets the budget (verified honored in this build).
   Plus explicit parity envs (`VLLM_ALLOW_LONG_MAX_MODEL_LEN=1`,
@@ -212,6 +214,24 @@ tunables refreshed on evidence:
   explicit for diagnosing from the container env).
 - **`--reasoning-config`** with explicit `" thinking"` / `" response"` start/end
   markers (tonyd2wild + 372268 #119/#184) so thinking never leaks into content.
+
+## Recipe updates (2026-08-16) — k=5 + greedy draft
+
+Follow-up to the 08-15 refresh after comparing against `0rand/DeepSeek-v4-DSpark-Aidendle94-GB10-ServingStack`
+(the same `production-3.75` image + official 0731 GA checkpoint, validated on a
+live 2-node cluster). No image change; no temperature / top_p / GMU / serving-profile
+changes — defaults stay: temp 1.0 / top_p 0.95 / GMU 0.83 / agent profile 6 & 2048.
+
+- **Spec tokens 4 → 5, draft `probabilistic` → `greedy`.** The 0rand GA stack
+  validated k=5 with `draft_sample_method:"greedy"` on the official 0731
+  checkpoint (tool-eval-bench 93/100; steadier, higher acceptance pre-GA vs GA
+  shift noted in their README). Drafter block = 5, so k=5 is the natural max
+  (k ≤ 5 or a multiple of 5). The steady-state decode shape becomes
+  6 × (5+1) = **36**, which is already in `cudagraph_capture_sizes`.
+- **Revert path:** every prior choice is one flag back — `SPEC_TOKENS: 4` and
+  `draft_sample_method:"probabilistic"` (the aiden-forum default, 372268
+  #513/#687). Revert only if a live A/B shows acceptance or answer-quality
+  regression.
 
 **Engine-level fixes already in 3.75 (verified by inspection):**
 `stacked_params_mapping` includes the shared-expert `gate_up_proj` w1/w3 rows

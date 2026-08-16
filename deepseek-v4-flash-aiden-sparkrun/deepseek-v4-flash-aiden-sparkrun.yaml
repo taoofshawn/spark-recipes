@@ -75,14 +75,19 @@ defaults:
   max_num_batched_tokens: 2048
   max_cudagraph_capture_size: 256
   served_model_name: deepseek-v4-flash
-  num_speculative_tokens: 4
+  # k=5 + greedy draft (0rand GA serving stack: steadier/higher acceptance on
+  # the official 0731 checkpoint; tool-eval 93/100, GD 2026-08-16). Drafter
+  # block = 5 so k <= 5 or a multiple of 5; the capture list below already
+  # covers 36 = max_num_seqs x (k+1). Revert to 4/probabilistic if a live A/B
+  # regresses.
+  num_speculative_tokens: 5
   temperature: 1.0
   top_p: 0.95
   # JSON-valued flags live as single defaults values (sparkrun arg_substitute-friendly)
-  # Steady-state decode batch = max_num_seqs x (k+1) = 6x5 = 30 (36 if k=5);
+  # Steady-state decode batch = max_num_seqs x (k+1) = 6x6 = 36 (k=5 active);
   # the auto list omits these -> include them for CUDA-graph replay at concurrency.
   compilation_config: '{"cudagraph_mode":"FULL_AND_PIECEWISE","custom_ops":["all"],"cudagraph_capture_sizes":[1,2,4,8,16,24,30,32,36,40,48,56,64,72,80,88,96,104,112,120,128,136,144,152,160,168,176,184,192,200,208,216,224,232,240,248,256]}'
-  speculative_config: '{"method":"dspark","num_speculative_tokens":4,"draft_sample_method":"probabilistic","moe_backend":"b12x"}'
+  speculative_config: '{"method":"dspark","num_speculative_tokens":5,"draft_sample_method":"greedy","moe_backend":"b12x"}'
   # Explicit reasoning markers (tonyd2wild + forum 372268 #119/#184): robust
   # start/end strings so thinking never leaks into content.
   reasoning_config: '{"reasoning_parser":"deepseek_v4","reasoning_start_str":" thinking","reasoning_end_str":" response"}'

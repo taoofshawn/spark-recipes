@@ -133,9 +133,12 @@ handling. They ship with the recipe, so nothing extra to install.
 
 ## Notes / tuning
 
-- **Updates (2026-08-15):** this recipe mirrors the compose recipe refresh —
-  see `deepseek-v4-flash-aiden/README.md` § "Recipe updates (2026-08-15)" for
-  the full rationale. Summary: agent profile 2048/6 with k=4 retained; GMU **0.83**
+- **Updates (2026-08-15 / 08-16):** this recipe mirrors the compose recipe
+  refresh — see `deepseek-v4-flash-aiden/README.md` § "Recipe updates
+  (2026-08-15)" and § "Recipe updates (2026-08-16)" for the full rationale.
+  Summary: agent profile 2048/6; k=4 on 08-15, updated 08-16 to **k=5 + greedy
+  draft** (0rand GA stack, tool-eval 93/100; 36 already in the capture list);
+  GMU **0.83**
   (0.87-0.90 thread-validated on 3.75 as optional headroom only - owner prefers 0.83);
   `reasoning_effort=high`
   default; explicit `cudagraph_capture_sizes` incl. 30/36; spec config

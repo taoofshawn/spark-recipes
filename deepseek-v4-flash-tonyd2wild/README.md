@@ -32,6 +32,19 @@ cluster, built from [tonyd2wild's DSpark stack](https://github.com/tonyd2wild/De
 _Dev branch for improving accuracy, speed, and tool-calling. Nothing here changes
 the native backend wiring; it adds two overlays + one flag._
 
+## 2026-08-20 (later) — tool-arg normalize: narrow the auto-unwrap (fix false positive)
+
+`normalize_tool_arguments` in `encoding_dsv4.py` used to unwrap a wrapper key
+whenever it was present, e.g. `{"endpoint":"/x","parameters":{"page":2}}` became
+`{"endpoint":"/x","page":2}` — corrupting calls where `parameters`/`input`/
+`arguments` is a **legitimate nested parameter**, not a malformed wrapper.
+
+Now the unwrap only happens when the wrapper key is the **only** real top-level
+key (besides spurious metadata such as `name`/`type`/`id`). Common single-wrapper
+repair still works: `{"arguments":{"city":"Paris"}}` → `{"city":"Paris"}`, and
+truncated-JSON repair is unchanged. Applied to all three copies of
+`encoding_dsv4.py` (tonyd2wild, aiden, aiden-sparkrun) to keep them in sync.
+
 ## 2026-08-20 — upstream review: JIT-cache hardening + engine-ready timeout
 
 Re-reviewed `tonyd2wild/DeepSeek-v4-Flash-0731-DSpark-1M-NVFP4-KV-2x-DGX-Spark`

@@ -32,6 +32,38 @@ cluster, built from [tonyd2wild's DSpark stack](https://github.com/tonyd2wild/De
 _Dev branch for improving accuracy, speed, and tool-calling. Nothing here changes
 the native backend wiring; it adds two overlays + one flag._
 
+## 2026-08-20 — upstream review: JIT-cache hardening + engine-ready timeout
+
+Re-reviewed `tonyd2wild/DeepSeek-v4-Flash-0731-DSpark-1M-NVFP4-KV-2x-DGX-Spark`
+against the vendored pin (`d728faee`, 2026-07-31). It has 13 new commits
+(PRs #14/#17/#19/#21/#24/#28 and issue sweeps). Most were already backported
+into this recipe (Patch 5 stop-suppression, PR #17 tool parser); the
+tokenizer/encoder rewrite in PR #24 was **not** adopted because it drops the
+tool-argument repair functions this recipe deliberately carries. Two fixes
+from upstream were worth adopting here:
+
+1. **Node-local JIT/compile caches (upstream issue #27, adopted).** This recipe
+   previously put `VLLM_CACHE_ROOT` inside the HF cache tree
+   (`/cache/huggingface/vllm-cache`). If the HF cache is ever mounted on a
+   shared/NFS path, seven concurrently-written caches (vLLM compile, DeepGEMM,
+   FlashInfer workspace, TileLang, TorchInductor, Triton, torch extensions)
+   corrupt one another in confusing ways — including an ABI-mismatched
+   FlashInfer `sampling.so` loaded silently because
+   `FLASHINFER_DISABLE_VERSION_CHECK=1`. The compose now mounts a dedicated
+   node-local `/vllm-cache` volume (host `JIT_CACHE_DIR`, default
+   `~/.cache/vllm-dspark`) and points all seven caches at it.
+2. **Engine-ready timeout 600→3600 s (upstream PR #19, adopted).** The stock
+   600 s timeout can trip `torch.distributed` teardown on a warm restart of
+   this 155 GiB model, killing the second startup with no useful error. Now
+   `VLLM_ENGINE_READY_TIMEOUT_S=3600` matches the sparkrun profile.
+
+Not adopted (documented so future reviews don't re-litigate): PR #24's
+`deepseek_v4_encoding.py` rewrite (drops tool-arg repair), GLOO/TP socket
+ifname fallback (this recipe already sets them from `.env`), `LOCAL_MODELS_DIR`
+(we serve from the HF cache), KV-dtype override and server-side chat-template
+kwargs (already covered by this recipe's knobs), and the upstream sparkrun
+recipe (this recipe is compose-based).
+
 1. **Reasoning-effort + tool-argument hardening overlay** - `encoding_dsv4.py` and
    `deepseek_v4_wrapper.py` bind-mounted to
    `../vllm/tokenizers/deepseek_v4_encoding.py` and `deepseek_v4.py`.

@@ -12,6 +12,15 @@ services:
       stack: 67108864
     volumes:
       - ${HF_CACHE:-/home/sdrew/.cache/huggingface}:/cache/huggingface
+      # NODE-LOCAL JIT/compile caches — deliberately a SEPARATE mount from
+      # HF_CACHE (upstream issue #27). Seven caches are written concurrently
+      # by both ranks; if they land on a shared (NFS) HF cache the failures
+      # are serial and misleading — torch.compile makedirs races, DeepGEMM
+      # "runtime != nullptr" from half-written cubins, and an ABI-mismatched
+      # FlashInfer sampling.so built by one node and silently loaded by the
+      # other (silent because the stack runs FLASHINFER_DISABLE_VERSION_CHECK=1).
+      # Keep JIT_CACHE_DIR on local disk on every node.
+      - ${JIT_CACHE_DIR:-/home/sdrew/.cache/vllm-dspark}:/vllm-cache
       # Reasoning-effort + tool-argument hardening overlay (from the aiden fix):
       # 1) this image's stock encoder only accepts high/max reasoning_effort (`low`
       #    asserts). Overlay the corrected 3-level encoder (low/high/max) so effort
@@ -64,7 +73,21 @@ services:
       VLLM_HOST_IP: "${ROCE_IP}"
       # ---- runtime (Stage-C NVFP4 overlay image) ----
       HF_HOME: /cache/huggingface
-      VLLM_CACHE_ROOT: /cache/huggingface/vllm-cache
+      # All seven JIT/workspace caches point at the node-local /vllm-cache
+      # volume above, NOT at the HF cache tree (upstream issue #27). The set
+      # matters — they were found one crash at a time.
+      VLLM_CACHE_ROOT: /vllm-cache
+      DG_JIT_CACHE_DIR: /vllm-cache/deepgemm-cache
+      FLASHINFER_WORKSPACE_BASE: /vllm-cache/flashinfer
+      TILELANG_CACHE_DIR: /vllm-cache/tilelang
+      TORCHINDUCTOR_CACHE_DIR: /vllm-cache/torchinductor-cache
+      TRITON_CACHE_DIR: /vllm-cache/triton-cache
+      TORCH_EXTENSIONS_DIR: /vllm-cache/torch_extensions
+      # Engine-ready timeout. The stock 600 s trips torch.distributed teardown
+      # on a warm restart of this model (loads 155 GiB across two nodes); the
+      # second startup then dies with no useful error. 3600 matches the
+      # sparkrun profile (upstream PR #19) — this is the compose-side mirror.
+      VLLM_ENGINE_READY_TIMEOUT_S: "${VLLM_ENGINE_READY_TIMEOUT_S:-3600}"
       # Never touch the HF Hub — the model is served from the local cache
       # on both nodes (156G snapshot pinned by MODEL_REVISION).
       HF_HUB_OFFLINE: "1"

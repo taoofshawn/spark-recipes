@@ -249,11 +249,20 @@ def normalize_tool_arguments(raw_arguments: Any) -> Dict[str, Any]:
             inner = _parse_argument_object(arguments[wrapper_key])
             if inner is None:
                 continue
-            rest = {
-                k: v for k, v in arguments.items()
-                if k != wrapper_key and k not in _SPURIOUS_TOOL_METADATA_KEYS
-            }
-            arguments = {**inner, **rest}
+            # Narrow unwrap: only when the wrapper key is the ONLY real
+            # top-level key (spurious metadata keys aside). If other real
+            # params coexist, a key named "input"/"parameters"/"arguments" is
+            # more likely a legitimate parameter than a wrapper (e.g.
+            # {"endpoint":"/x","parameters":{"page":2}}) — unwrapping there
+            # would silently corrupt the schema. This fixes the
+            # false-positive class while keeping the common single-wrapper
+            # repair intact.
+            real_keys = [
+                k for k in arguments if k not in _SPURIOUS_TOOL_METADATA_KEYS
+            ]
+            if len(real_keys) != 1 or real_keys[0] != wrapper_key:
+                continue
+            arguments = {**inner}
             unwrapped = True
             break
         if not unwrapped:

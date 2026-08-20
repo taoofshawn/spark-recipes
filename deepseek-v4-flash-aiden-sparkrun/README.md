@@ -133,19 +133,29 @@ handling. They ship with the recipe, so nothing extra to install.
 
 ## Notes / tuning
 
+- **Updates (2026-08-15 / 08-16):** this recipe mirrors the compose recipe
+  refresh — see `deepseek-v4-flash-aiden/README.md` § "Recipe updates
+  (2026-08-15)" and § "Recipe updates (2026-08-16)" for the full rationale.
+  Summary: agent profile 2048/6; k=4 on 08-15, updated 08-16 to **k=5 + greedy
+  draft** (0rand GA stack, tool-eval 93/100; 36 already in the capture list);
+  GMU **0.83**
+  (0.87-0.90 thread-validated on 3.75 as optional headroom only - owner prefers 0.83);
+  `reasoning_effort=high`
+  default; explicit `cudagraph_capture_sizes` incl. 30/36; spec config
+  `"moe_backend":"b12x"`; `VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS=0` + parity
+  envs; explicit `--reasoning-config` markers.
 - **Batching (agent profile):** `max-num-batched-tokens 2048` + `max-num-seqs 6`.
   Smaller prefill chunks give much better decode fairness and lower output jitter
-  under concurrent agent traffic (at a modest prefill-throughput cost). The
-  earlier 16384/16 was tuned more toward high-concurrency batching.
-- **GPU memory utilization stays at `0.83`** (the recipe's
-  `gpu_memory_utilization`). Do **not** lower it expecting stability — weights
-  (~80 GiB/node) dominate, so GMU is a KV-cache lever here, and dropping it could
-  shrink the KV pool below what's needed for 1M. **However:** if the server
-  crashes or dies under traffic while you are testing this build, the first knob
-  to try is **lowering `gpu_memory_utilization` (e.g. to `0.78`)** and restarting.
-  That is the fallback documented in the upstream agent-serving thread.
+  under concurrent agent traffic (at a modest prefill-throughput cost). If draft
+  acceptance ever drops under load, raise the batch toward 8192–16384.
+- **GPU memory utilization stays at `0.83`** (deliberate — see compose README
+  "Recipe updates" for the long-session-degradation reasoning; 0.87–0.90 remains
+  an optional one-line headroom lever). Don't lower it for "stability" — the
+  0.78 advice is NVFP4/tonyd2wild-specific.
 - **Port:** `4000` (default). Override with `sparkrun run ... --port 8080`.
-- **Reasoning effort** defaults to `low`; `thinking` defaults to `true`.
+- **Reasoning effort** defaults to `high` (community A/B sweet spot);
+  `thinking` defaults to `true`; `max` is per-request only (no win + safety
+  regression on 0731).
 - **Interface caveat:** the multi-node master address comes from sparkrun's host
   detection. If a restart ever fails to rendezvous across the two nodes, set the
   per-node `VLLM_HOST_IP` (leader `192.168.0.170`, worker `192.168.0.171`).

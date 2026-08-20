@@ -163,6 +163,89 @@ on `master_addr:25000` is up before the follower connects. Starting the follower
 first caused `DistStoreError: 1/2 clients` / `Connection reset by peer` on a
 restart.
 
+## Recipe updates (2026-08-15) — aiden 3.75 unchanged, config refreshed
+
+Reviewed against the tonyd2wild recipe and the aiden/DS4F-DSpark forum threads
+(372268, 374846, 376220, 378824, 378890). No image change — `production-3.75`
+already carries every *engine-level* fix (DSpark shared-expert loader mapping,
+Patch-3 cold-start garble guard, stop-string suppression; see below). Config
+tunables refreshed on evidence:
+
+- **Agent-serving profile:** `max-num-seqs 6` / `max-num-batched-tokens 2048`
+  (was 16 / 16384). Massively larger KV pool + decode fairness under concurrent
+  agent traffic (validated on the sparkrun port; SvangenStudios 378890; forum
+  372268 #678 "2048 for better agentic workout"). If draft acceptance ever drops
+  under load, raise the batch toward 8192–16384 (acceptance-optimal per #687).
+- **GPU memory utilization stays at `0.83`** (deliberate). The aiden 3.75 forum
+  validated 0.87–0.90 as *optional headroom* (0.90 → 3.1M-token KV pool #677;
+  0.85→0.90 = +46% KV #682), but it buys no per-session speed and the operator
+  prefers 0.83 after seeing degradation on long sessions with high settings. If
+  more long-context concurrency is ever needed, raising to 0.88–0.90 is a
+  one-line, community-validated lever. Do **not** drop toward 0.78 for
+  "stability" — that is NVFP4/tonyd2wild-specific advice.
+- **Known "slow after a long session" symptom (not swap — checked):** if it
+  recurs, troubleshoot in this order before touching GMU: (1) GB10 lockstep
+  power-state trap — a node stuck at ~22 W / ~2.0 GHz throttles the TP=2 pair
+  (`nvidia-smi -q -d POWER|CLOCK`; fix `nvidia-smi -lgc <max>` on BOTH nodes, or
+  a full power cycle); (2) KV starvation under concurrency — engine metrics show
+  near-0 gen tok/s with high KV usage and spec acceptance collapse (notably
+  positions 2-4); (3) driver regressions (580.159.03 measured slower on GB10);
+  (4) "cutout mode" one-die-underclock glitch → unplug ≥1 min. Restarting the
+  engine recovers KV-starvation/degradation cases that GMU alone cannot fix.
+- **`reasoning_effort` default `high`** (was low). #520 A/B: +7 tool tests passed
+  for +5.5% wall time / +5.8% tokens. `max` measured no better and adds a safety
+  regression (#639) — keep `max` per-request only. Our encoder overlay makes the
+  three levels actually correct (pre-fix, high silently ran as low).
+- **CUDA-graph steady-state capture:** explicit `cudagraph_capture_sizes` now
+  include 36 (= 6 seqs × (k+1), active at k=5) and 30 (k=4 fallback). The
+  auto-generated list omitted them — a missed hot shape truncates graph replay
+  at concurrency (bakeoff + PR#5: ~+9–14% at c4–c6).
+- **DSpark spec config** now explicitly sets `"moe_backend":"b12x"` (draft must
+  use the native B12X MoE oracle, not flashinfer_b12x — srivatsa1 378824).
+  k was **4** with `draft_sample_method:"probabilistic"` on 08-15 (#513
+  "3=balanced, 5=code-heavy"; #687 best at 4); updated 08-16 to **k=5 + greedy
+  draft** (see "Recipe updates (2026-08-16)" below). Drafter block is 5 (k ≤ 5
+  or a multiple of 5); the 36 shape is already in the capture list.
+- **`VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS=0`** — stop reserving full graph
+  memory in the profiler; KV gets the budget (verified honored in this build).
+  Plus explicit parity envs (`VLLM_ALLOW_LONG_MAX_MODEL_LEN=1`,
+  `VLLM_DSPARK_CONFIDENCE_SCHEDULER=off`, `_THRESHOLD=0.0`,
+  `VLLM_DSPARK_FUSED_MARKOV_ARGMAX=0` — all already the build's defaults; kept
+  explicit for diagnosing from the container env).
+- **`--reasoning-config`** with explicit `" thinking"` / `" response"` start/end
+  markers (tonyd2wild + 372268 #119/#184) so thinking never leaks into content.
+
+## Recipe updates (2026-08-16) — k=5 + greedy draft
+
+Follow-up to the 08-15 refresh after comparing against `0rand/DeepSeek-v4-DSpark-Aidendle94-GB10-ServingStack`
+(the same `production-3.75` image + official 0731 GA checkpoint, validated on a
+live 2-node cluster). No image change; no temperature / top_p / GMU / serving-profile
+changes — defaults stay: temp 1.0 / top_p 0.95 / GMU 0.83 / agent profile 6 & 2048.
+
+- **Spec tokens 4 → 5, draft `probabilistic` → `greedy`.** The 0rand GA stack
+  validated k=5 with `draft_sample_method:"greedy"` on the official 0731
+  checkpoint (tool-eval-bench 93/100; steadier, higher acceptance pre-GA vs GA
+  shift noted in their README). Drafter block = 5, so k=5 is the natural max
+  (k ≤ 5 or a multiple of 5). The steady-state decode shape becomes
+  6 × (5+1) = **36**, which is already in `cudagraph_capture_sizes`.
+- **Revert path:** every prior choice is one flag back — `SPEC_TOKENS: 4` and
+  `draft_sample_method:"probabilistic"` (the aiden-forum default, 372268
+  #513/#687). Revert only if a live A/B shows acceptance or answer-quality
+  regression.
+
+**Engine-level fixes already in 3.75 (verified by inspection):**
+`stacked_params_mapping` includes the shared-expert `gate_up_proj` w1/w3 rows
+(the +69% decode fix; tonyd615 378824) — present; scheduler `update_draft_token_ids`
+guards `is_prefill_chunk` (Patch 3 cold-start garble) — present; detokenizer
+`VLLM_SUPPRESS_STOPS_IN_REASONING` — present. The PR #17 streaming
+`tool_calls: []` leak does **not** reproduce on 0.11.2 (verified live: 0/30
+deltas) — no port needed.
+
+> **Stay on `production-3.75`.** `production-3.8` upstream has a DSpark
+> uniform-length regression (EngineDeadError under heterogeneous agent batches);
+> the author himself says "there's not suppose to be a 3.8" (#662). This recipe
+> pins the 3.75 digest.
+
 ## Reference
 The [discussion thread](https://forums.developer.nvidia.com/t/deepseek-v4-flash-aiden-recipe-from-reddit-1m-token-session-operational-cuda-12-1-tailored-for-dgx-spark-gb10/372268) for this configuration
 

@@ -46,7 +46,7 @@ services:
       CUDA_VISIBLE_DEVICES: "0"
       CUDA_DEVICE_ORDER: PCI_BUS_ID
       CUTE_DSL_ARCH: sm_121a
-      GPU_MEMORY_UTILIZATION: ${GPU_MEMORY_UTILIZATION:-0.85}
+      GPU_MEMORY_UTILIZATION: ${GPU_MEMORY_UTILIZATION:-0.83}
       # ---- RoCE networking (site-specific — match YOUR NICs) ----
       NCCL_NET: IB
       NCCL_IB_DISABLE: "0"
@@ -75,20 +75,61 @@ services:
       VLLM_USE_V2_MODEL_RUNNER: "1"
       VLLM_USE_FLASHINFER_SAMPLER: "1"
       VLLM_DSPARK_REPLICATE_MARKOV_W1: "1"
+      # ---- DSpark / memory parity knobs (canonical aiden forum env set;
+      #      verified honored by this build via envs.py / dspark speculator) ----
+      VLLM_DSPARK_CONFIDENCE_SCHEDULER: "off"
+      VLLM_DSPARK_CONFIDENCE_THRESHOLD: "0.0"
+      VLLM_DSPARK_FUSED_MARKOV_ARGMAX: "0"
+      VLLM_ALLOW_LONG_MAX_MODEL_LEN: "1"
+      # KV gets the budget: don't reserve full-CUDA-graph memory in the profiler
+      # (372268 #55; perf-pass-1 set). More KV == more long-context concurrency.
+      # Revert to "1" only if boot ever OOMs during graph capture.
+      VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS: "0"
       # ---- model / serve ----
       MODEL_PATH: deepseek-ai/DeepSeek-V4-Flash-0731
       MODEL_REVISION: 9e165c30e2704aec5d9d593cce3eebd58bbef1cb
       SERVED_MODEL_NAME: deepseek-v4-flash
       PORT: "${PORT:-4000}"
+      # GPU memory utilization kept conservative at 0.83 (matches the validated
+      # sparkrun port; 1M is comfortably reachable ~3.2x). The aiden forum
+      # validated 0.87-0.90 on 3.75 (372268 #677: 0.90 -> 3.1M-token KV pool;
+      # #682: 0.85->0.90 = +46% KV) - that headroom is OPTIONAL and can be
+      # enabled later if more long-context concurrency is needed. Raised GMU
+      # was empirically NOT any faster per-session, and the owner prefers the
+      # lower setting after noticing degradation on long sessions with high
+      # settings. Do NOT drop toward ~0.78 for "stability" - that number is
+      # specific to the NVFP4/tonyd2wild stack.
       GPU_MEM: 0.83
-      SPEC_TOKENS: 4
+      # DSpark speculative depth. DeepSeek-V4-Flash drafter block = 5, so k must
+      # be <=5 or a multiple of 5. k=5 + greedy-draft (0rand serving stack,
+      # validated on the GA checkpoint, GD 2026-08-16). The aiden/fp8 forum
+      # default was k=4 ("3=balanced, 5=code-heavy", 372268 #513/#687) with
+      # draft_sample_method=probabilistic - both one flag back if acceptance or
+      # quality ever regresses on a live A/B.
+      SPEC_TOKENS: 5
+      # 0731 official sampling: temp 1.0 / top_p 0.95. reasoning_effort=high is
+      # the agentic sweet spot (372268 #520: +7 passes for +5.5% wall time;
+      # max = no win + safety regression; low = weaker).
       TEMPERATURE: "1.0"
       TOP_P: "0.95"
+      REASONING_EFFORT: high
       TP_SIZE: 2
       MAX_MODEL_LEN: 1048576
-      MAX_NUM_SEQS: 16
-      MAX_NUM_BATCHED_TOKENS: 16384
+      # Agent-serving profile (chunked prefill 2048 / 6 slots): much larger KV
+      # pool + decode fairness (validated on the sparkrun port; SvangenStudios
+      # 378890; ajvazan 372268 #678 "2048 for better agentic workout"). NOTE:
+      # acceptance-optimal batch on this drafter is 8192-16384 (#687) - if
+      # acceptance drops under load, raise MAX_NUM_BATCHED_TOKENS. (On the
+      # eugr/b12x stack 2048 can crash EngineCore under c4; not seen on aiden.)
+      MAX_NUM_SEQS: 6
+      MAX_NUM_BATCHED_TOKENS: 2048
       GRAPH_CAP: 256
+      # Steady-state decode batch = MAX_NUM_SEQS x (SPEC_TOKENS+1) = 6x6 = 36
+      # (k=5 is active; 36 is in the capture list below). The auto-generated
+      # capture list omits these hot shapes; an
+      # uncaptured hot shape silently truncates CUDA-graph replay under
+      # concurrency (RUNTIME-BAKEOFF + PR#5: ~+9-14% at c4-c6).
+      CUDAGRAPH_CAPTURE_SIZES: "[1,2,4,8,16,24,30,32,36,40,48,56,64,72,80,88,96,104,112,120,128,136,144,152,160,168,176,184,192,200,208,216,224,232,240,248,256]"
       ASYNC_SCHED: 1
 
       NODE_RANK: "${NODE_RANK}"
@@ -126,17 +167,18 @@ services:
           --max-model-len "$${MAX_MODEL_LEN}" --max-num-seqs "$${MAX_NUM_SEQS}" \
           --max-num-batched-tokens "$${MAX_NUM_BATCHED_TOKENS}" \
           --max-cudagraph-capture-size "$${GRAPH_CAP}" \
-          --compilation-config '{"cudagraph_mode":"FULL_AND_PIECEWISE","custom_ops":["all"]}' \
+          --compilation-config "{\"cudagraph_mode\":\"FULL_AND_PIECEWISE\",\"custom_ops\":[\"all\"],\"cudagraph_capture_sizes\":$${CUDAGRAPH_CAPTURE_SIZES}}" \
           $${ASYNC_ARG} --no-scheduler-reserve-full-isl \
           --enable-chunked-prefill --enable-prefix-caching --enable-flashinfer-autotune \
           --tokenizer-mode deepseek_v4 --tool-call-parser deepseek_v4 --reasoning-parser deepseek_v4 \
+          --reasoning-config '{"reasoning_parser":"deepseek_v4","reasoning_start_str":" thinking","reasoning_end_str":" response"}' \
           --enable-auto-tool-choice \
           --generation-config vllm \
           --default-chat-template-kwargs.temperature=$${TEMPERATURE} \
           --default-chat-template-kwargs.top_p=$${TOP_P} \
-          --default-chat-template-kwargs.thinking=true --default-chat-template-kwargs.reasoning_effort=low \
+          --default-chat-template-kwargs.thinking=true --default-chat-template-kwargs.reasoning_effort=$${REASONING_EFFORT} \
           --attention-backend FLASHINFER_MLA_SPARSE_DSV4 --moe-backend b12x \
           --disable-custom-all-reduce \
           --nnodes 2 --node-rank "$${NODE_RANK}" --master-addr "$${MASTER_ADDR}" --master-port 25000 \
           $${HEADLESS:+--headless} \
-          --speculative-config "{\"method\":\"dspark\",\"num_speculative_tokens\":$${SPEC_TOKENS},\"draft_sample_method\":\"probabilistic\"}"
+          --speculative-config "{\"method\":\"dspark\",\"num_speculative_tokens\":$${SPEC_TOKENS},\"draft_sample_method\":\"greedy\",\"moe_backend\":\"b12x\"}"

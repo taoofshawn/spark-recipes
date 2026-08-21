@@ -140,7 +140,8 @@ services:
       MAX_NUM_SEQS: 12
       MAX_NUM_BATCHED_TOKENS: 8192
       KV_CACHE_DTYPE: nvfp4_ds_mla
-      THINKING: false
+      THINKING: true
+      REASONING_EFFORT: high
       ASYNC_SCHED: 1
 
       NODE_RANK: "${NODE_RANK}"
@@ -190,7 +191,7 @@ services:
           --tool-call-parser deepseek_v4 --enable-auto-tool-choice \
           --reasoning-parser deepseek_v4 \
           --reasoning-config '{"reasoning_parser":"deepseek_v4","reasoning_start_str":" thinking","reasoning_end_str":" response"}' \
-          --default-chat-template-kwargs "{\"thinking\":$${THINKING:-false}}" \
+          --default-chat-template-kwargs "{\"thinking\":$${THINKING:-true},\"reasoning_effort\":\"$${REASONING_EFFORT:-high}\"}" \
           --generation-config vllm \
           --override-generation-config '{"temperature":1.0,"top_p":0.95}' \
           --enable-flashinfer-autotune \

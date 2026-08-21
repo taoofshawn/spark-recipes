@@ -16,7 +16,7 @@ cluster, built from [tonyd2wild's DSpark stack](https://github.com/tonyd2wild/De
 | `max_cudagraph_capture_size` | `seqs×(k+1)` = 36 |
 | `gpu_memory_utilization` | 0.78 (0.80 "boots-then-dies" on this stack) |
 | sampling | `--generation-config vllm`, no override |
-| thinking default | `false` (clients can drive effort themselves) |
+| thinking default | `true` (server `reasoning_effort=high`; clients can override per request) |
 | context length | 1M (1048576) |
 | serve | port `4000`, served model `deepseek-v4-flash` |
 
@@ -31,6 +31,15 @@ cluster, built from [tonyd2wild's DSpark stack](https://github.com/tonyd2wild/De
 
 _Dev branch for improving accuracy, speed, and tool-calling. Nothing here changes
 the native backend wiring; it adds two overlays + one flag._
+
+## 2026-08-21 — default thinking on + reasoning_effort=high
+
+Server-side defaults now match the other DeepSeek recipes: `THINKING=true` and a
+new `REASONING_EFFORT=high` knob (passed as
+`--default-chat-template-kwargs '{"thinking":true,"reasoning_effort":"high"}'`).
+Clients can still override per request via `chat_template_kwargs`. aiden,
+aiden-sparkrun, and eugr-sparkrun already shipped thinking=true +
+reasoning_effort=high; this closes the last gap.
 
 ## 2026-08-20 (later) — tool-arg normalize: narrow the auto-unwrap (fix false positive)
 
@@ -290,7 +299,8 @@ never benchmark straight after boot or after a quiet period.
 | `MAX_NUM_SEQS` | 6 | concurrency cap (6 is measured-best at 1M; 12 is riskier) |
 | `GPU_MEM` | 0.78 | keep ≤0.78 on this stack |
 | `MAX_MODEL_LEN` | 1048576 | 1M is the true YaRN ceiling |
-| `THINKING` | false | server `thinking` default; clients can drive effort themselves |
+| `THINKING` | true | server `thinking` default; clients can override per request |
+| `REASONING_EFFORT` | high | server `reasoning_effort` default (low/high/max; high is the agentic sweet spot) |
 | `PORT` | 4000 | serve port |
 
 `MAX_NUM_BATCHED_TOKENS=8192` and `max-cudagraph-capture-size=seqs×(k+1)` are

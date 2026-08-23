@@ -37,6 +37,14 @@ services:
       # marker and keeps stops dormant until ` response` appears.
       # Opt out: VLLM_SUPPRESS_STOPS_IN_REASONING=0.
       - ./detokenizer.py:/opt/env/lib/python3.12/site-packages/vllm/v1/engine/detokenizer.py:ro
+      # fastokens runtime hook: honors VLLM_USE_FASTOKENS=1 by calling
+      # fastokens.patch_transformers() at interpreter start. This image's vLLM
+      # (0.21.x fork) defines the env var in its envs.py overlay but has no
+      # consumer for it (0.21 only ships --tokenizer-mode fastokens, which
+      # would drop the deepseek_v4 wrapper). The hook swaps the inner Rust BPE
+      # backend of the HF fast tokenizer while keeping the deepseek_v4
+      # wrapper/encoder overlays intact. Opt out: VLLM_USE_FASTOKENS=0.
+      - ./sitecustomize.py:/opt/env/lib/python3.12/site-packages/sitecustomize.py:ro
       # Open-PR backport (tonyd2wild PR #17): streaming tool-parser fix. The stock
       # parser passed an explicit empty tool_calls=[] on every content delta once a
       # request carries tools; with exclude_unset=True that emits `"tool_calls": []`
@@ -140,6 +148,11 @@ services:
       MAX_NUM_SEQS: 12
       MAX_NUM_BATCHED_TOKENS: 8192
       KV_CACHE_DTYPE: nvfp4_ds_mla
+      # fastokens shim: swap the HF fast-tokenizer Rust BPE backend for the
+      # crusoecloud fastokens package (10x+ faster tokenize; TTFT win at large
+      # context). Installed at boot if missing (see command block); applied by
+      # the bind-mounted sitecustomize.py. Opt out: VLLM_USE_FASTOKENS=0.
+      VLLM_USE_FASTOKENS: "1"
       THINKING: true
       REASONING_EFFORT: high
       ASYNC_SCHED: 1
@@ -175,6 +188,26 @@ services:
 
         if [ "$${ASYNC_SCHED:-1}" = "1" ]; then ASYNC_ARG="--async-scheduling"; else ASYNC_ARG=""; fi
         SPECULATIVE_CONFIG="{\"method\":\"dspark\",\"num_speculative_tokens\":$${MTP_NUM_TOKENS:-5},\"draft_sample_method\":\"probabilistic\",\"moe_backend\":\"b12x\"}";
+
+        # fastokens: install on first boot if VLLM_USE_FASTOKENS=1 and the
+        # package is missing. Kept out of the vendored upstream Dockerfile —
+        # this is the recipe-level customization layer. The bind-mounted
+        # sitecustomize.py applies the shim at interpreter start, before vLLM
+        # loads the deepseek_v4 tokenizer.
+        if [ "$${VLLM_USE_FASTOKENS:-0}" = "1" ]; then
+          if /opt/env/bin/python -c 'import fastokens' >/dev/null 2>&1; then
+            echo "[fastokens] fastokens already installed"
+          else
+            echo "[fastokens] installing fastokens (VLLM_USE_FASTOKENS=1)..."
+            /opt/env/bin/python -m pip install --no-cache-dir 'fastokens>=0.2.0'
+            if ! /opt/env/bin/python -c 'import fastokens' >/dev/null 2>&1; then
+              echo "[fastokens] FATAL: fastokens could not be installed (offline?); VLLM_USE_FASTOKENS=1 requires it." >&2
+              echo "[fastokens] Unset VLLM_USE_FASTOKENS or pre-install fastokens into the image." >&2
+              exit 1
+            fi
+            echo "[fastokens] installed"
+          fi
+        fi
 
         exec /opt/env/bin/vllm serve "$${MODEL_PATH}" \
           --revision "$${MODEL_REVISION:-main}" \

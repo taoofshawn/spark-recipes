@@ -60,6 +60,24 @@ TTFT win on long prompts) behind the existing-but-unconsumed
   `Error in sitecustomize`; tokenize/TTFT delta at large context not yet
   measured — benchmark before/after with the repo's usual curl/jq harness.
 
+## 2026-08-23 (later) — fastokens hook refinement + inert env-var cleanup
+
+Follow-ups from the first cluster boot with `VLLM_USE_FASTOKENS=1`:
+
+- **`sitecustomize.py` now warns instead of raising.** The strict ImportError
+  printed `Error in sitecustomize` once per first boot — the compose boot
+  script's "is fastokens installed?" probe runs before the package exists.
+  `sitecustomize` runs in every python process, so it is the wrong layer for a
+  fatal guard; the authoritative guard stays in the compose boot script (it
+  installs `fastokens` and hard-fails the boot if the install fails). A
+  missing/too-old package now logs a greppable `[fastokens] WARNING` and the
+  process continues without the shim.
+- **Dropped `VLLM_TRITON_MLA_SPARSE` and `VLLM_SKIP_INIT_MEMORY_CHECK` from the
+  compose env.** Both logged `Unknown vLLM environment variable` at boot and
+  have no references anywhere in this image's vLLM code — they were inert
+  leftovers from an older/newer upstream config. (They remain in the vendored
+  `upstream/` files, which are untouched.)
+
 ## 2026-08-21 — default thinking on + reasoning_effort=high
 
 Server-side defaults now match the other DeepSeek recipes: `THINKING=true` and a

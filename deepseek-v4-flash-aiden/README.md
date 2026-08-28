@@ -152,8 +152,8 @@ of heterogeneous-length requests (which pi's mixed reasoning + tool workload
 produces constantly), it raises `ValueError: DSpark currently requires uniform
 effective per-request target context lengths ...` and kills the whole engine
 (`EngineDeadError`). This check does **not** exist in vLLM 0.11 (3.75/3.7) —
-verified absent by grep — so 3.75 is stable for this workload. The tonyd2wild /
-eugr fork has the same constraint.
+verified absent by grep — so 3.75 is stable for this workload. The tonyd2wild
+fork has the same constraint.
 
 To make 3.8 usable you would either (a) disable DSpark (`--speculative-config`),
 or (b) patch `dspark_proposer.py` to degrade gracefully on non-uniform lengths.

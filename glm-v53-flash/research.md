@@ -51,6 +51,22 @@ benchmarked. DFlash2 on the NVFP4-KV lane is partial (chunked prefill >3K
 kills rank-0) — stay on fp8 KV. First inference after enabling is ~10 tok/s
 (drafter JIT), measure warm. Acceptance ~0.15 = broken aux capture.
 
+**Second sync same day (16:02Z): TP2 KV ceiling raised.** Upstream walked the
+`--kv-cache-memory` pin up with DFlash2 attached, watchdog-free: 10 GiB killed
+warmup, 7.5 GiB served then died on the FIRST real request, **7 GiB =
+727,583 tokens survived serving + a 500-token generation (41.6 tok/s, 0.616
+acceptance)** — +8% over the 672,606 record. Our compose now defaults the
+DFLASH2=1 pin to 7 GiB (7516192768) with the ladder documented; MTP lane
+stays at 4.14 GiB (the MTP draft head costs ~5 GB, the DFlash2 drafter costs
+zero). Caveats: requires running watchdog-free (our default — we arm no
+memory watchdog), and "serving is not survival": gate any KV increase on a
+real generation. Also in the sync: the repo's "four defects" commit
+(3a2b7930) is docs-only (bind-mount + /health-polling instructions) — our
+recipe already handles both by baking the top-k fix into the image and
+probing /health; plus a tuning note that `enable_thinking: false` buys +8%
+acceptance but emits untagged reasoning-prose into `content` (README
+tool-calling notes updated; THINKING default stays true).
+
 **RedHatAI/GLM-5.3-Flash-NVFP4 vs LibertAIDAI (user question).** Verdict: keep
 LibertAIDAI. RedHatAI is W4A4 (compressed-tensors, FP4 weights AND FP4
 activations, LLM Compressor); LibertAIDAI is weight-only (ModelOpt, FP4

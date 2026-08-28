@@ -24,6 +24,7 @@ model on GB10 — with eight SM121 kernel patches baked into a local image
 | KV cache | `fp8_e4m3` (patched NoPE-MLA path) |
 | KV pool | 507K tokens @ 4.14 GiB/rank (default, 3/3 reliable) · 672K @ 5.5 GiB (local-weights record) |
 | Spec decode | MTP 3 default · **DFlash2 opt-in** (`DFLASH2=1`, 2.15x upstream — see below; non-commercial drafter license) |
+| DFlash2 KV pool | 727,583 tokens @ 7 GiB pin (upstream watchdog-free ceiling; 7.5 GiB dies on first request) |
 | `gpu_memory_utilization` | 0.85 (0.78/0.80 starve the bf16 KV at 131K+) |
 | `max_num_seqs` | 6 · `block-size` 2304 (kpool page invariant) · `--moe-backend marlin` |
 | Context | 262,144 (TP2 ceiling — the model-native 1M needs TP4 / 4 nodes) |
@@ -125,6 +126,11 @@ python3 tools/load_test_glm.py
 - `max_tokens` includes reasoning tokens when thinking is on (a short
   answer with `high` effort cost ~330 completion tokens vs 41 without).
   Keep it generous for agentic use.
+- **Thinking off = +8% draft acceptance, but leaks reasoning prose.**
+  Upstream measured `enable_thinking: false` as faster (reasoning traces
+  draft worse), and it is now a real toggle — but with thinking off GLM
+  emits untagged reasoning-prose into `content`, which some agent
+  harnesses mis-parse. One more reason the default stays on.
 
 ## DFlash2 fast drafting (opt-in, `DFLASH2=1`)
 

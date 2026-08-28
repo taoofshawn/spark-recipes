@@ -63,20 +63,20 @@ p.write_text(s.replace(old, new))
 p = base / "v1/attention/backends/mla/flashinfer_mla_sparse_sm90.py"
 s = p.read_text()
 
-old = "    def supports_compute_capability(cls, capability: DeviceCapability) -> bool:
+old = """    def supports_compute_capability(cls, capability: DeviceCapability) -> bool:
         return capability.major == 9
-"
-new = "    def supports_compute_capability(cls, capability: DeviceCapability) -> bool:
+"""
+new = """    def supports_compute_capability(cls, capability: DeviceCapability) -> bool:
         return capability.major in (9, 12)
-"
+"""
 if s.count(old) != 1:
     raise SystemExit("unexpected sm90 capability gate; refusing to patch")
 s = s.replace(old, new)
 
-old = '            backend="fa3",
-'
-new = '            backend=("fa3" if torch.cuda.get_device_capability()[0] == 9 else "fa2"),
-'
+old = """            backend="fa3",
+"""
+new = """            backend=("fa3" if torch.cuda.get_device_capability()[0] == 9 else "fa2"),
+"""
 if s.count(old) != 1:
     raise SystemExit("unexpected sm90 wrapper backend literal; refusing to patch")
 s = s.replace(old, new)

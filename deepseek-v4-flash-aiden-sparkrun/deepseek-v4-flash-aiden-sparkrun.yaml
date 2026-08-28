@@ -1,15 +1,12 @@
 # Sparkrun recipe: DeepSeek-V4-Flash-0731 on 2x DGX Spark.
 #
 # This is the sparkrun-native port of the AIDEN 3.75 build
-# (`deepseek-v4-flash-aiden` docker-compose recipe). Unlike the earlier
-# `deepseek-v4-flash-sparkrun` recipe, it does NOT run sparkrun's eugr
-# source build (`vllm-node-b12x`), which lacked the FLASHINFER_MLA_SPARSE_DSV4
-# backend and could only reach ~340k context. Instead it reuses the proven
+# (`deepseek-v4-flash-aiden` docker-compose recipe). It reuses the proven
 # AIDEN prebuilt image DIRECTLY — the image is literally a sparkrun image
 # (`aidendle94/sparkrun-vllm-ds4-gb10`) and already contains the 1M sparse
-# attention build. We pin `builder: docker-pull` so sparkrun never rebuilds,
-# and apply aiden's encoder/reasoning-effort/tool-arg hardening via a mod
-# (pre_exec overlay inside each container before `vllm serve`).
+# attention build. We pin `builder: docker-pull` so sparkrun never rebuilds
+# from source, and apply aiden's encoder/reasoning-effort/tool-arg hardening
+# via a mod (pre_exec overlay inside each container before `vllm serve`).
 #
 # Run (leader node). Rootful is BAKED INTO the recipe (see executor_config), so
 # no --rootful flag is needed. Hosts: sparkrun uses the saved default cluster
@@ -39,7 +36,8 @@ runtime: vllm
 container: docker.io/aidendle94/sparkrun-vllm-ds4-gb10@sha256:3b4d2b5f7929c2b15d25636e3115f343e693a03fe8a57f94969974432c2c4e8d
 
 # Explicitly the docker-pull builder. This is the critical bit: WITHOUT it,
-# the presence of `mods:` would route sparkrun to the eugr source builder.
+# the presence of `mods:` would route sparkrun to a source build instead of
+# pulling this prebuilt image.
 builder: docker-pull
 
 cluster_only: true

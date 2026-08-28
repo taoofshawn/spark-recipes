@@ -37,9 +37,9 @@ the native backend wiring; it adds two overlays + one flag._
 Server-side defaults now match the other DeepSeek recipes: `THINKING=true` and a
 new `REASONING_EFFORT=high` knob (passed as
 `--default-chat-template-kwargs '{"thinking":true,"reasoning_effort":"high"}'`).
-Clients can still override per request via `chat_template_kwargs`. aiden,
-aiden-sparkrun, and eugr-sparkrun already shipped thinking=true +
-reasoning_effort=high; this closes the last gap.
+Clients can still override per request via `chat_template_kwargs`. aiden and
+aiden-sparkrun already shipped thinking=true + reasoning_effort=high; this
+closes the last gap.
 
 ## 2026-08-20 (later) — tool-arg normalize: narrow the auto-unwrap (fix false positive)
 

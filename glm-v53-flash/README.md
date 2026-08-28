@@ -1,9 +1,9 @@
 # glm-v53-flash - GLM-5.3-Flash NVFP4 (2× DGX Spark, vLLM)
 
-> **DRAFT: not tested** — this recipe has NOT been launched on this cluster yet.
-> Boot markers, KV-pool sizes, and tok/s numbers in this README are upstream /
-> NVIDIA-forum measurements and must be re-verified here. Research, upstream
-> evaluation, and the "where to watch for updates" list live in
+> **Status: tested on this cluster (2026-08-28).** Boot markers, KV-pool size,
+> and tok/s below are measured here, not just upstream. See the audit trail for
+> this deployment's numbers and the one recipe fix it required. Research,
+> upstream evaluation, and the "where to watch for updates" list live in
 > [`research.md`](./research.md).
 
 Serves **GLM-5.3-Flash** (arch `glm5_next` — 320B total / 18B active hybrid
@@ -149,14 +149,19 @@ research.md             # research notes + future-work handoff for agents
 
 # Audit trail
 
-- **2026-08-28 — initial recipe (DRAFT, not tested).** GLM-5.3-Flash NVFP4 on
-  2× DGX Spark via vLLM (the repo's native engine), translated from
-  tonyd2wild's world-first deploy into the repo's docker-compose conventions
-  (port 4000, offline HF cache on both nodes, worker-first start, GID
-  auto-detect). Consolidates tonyd2wild's v1→v8 patch ladder (SM121 NoPE-MLA,
-  FlashInfer 0.6.18, NCCL/cutlass re-pins, PDL off, indexer hardening, fp8 KV,
-  persistent_topk gate) into one reproducible Dockerfile. v9 (InstantTensor)
-  deliberately excluded (unstable in TP2). Defaults: MTP3 (measured TP2
-  winner), KV pin 4.14 GiB (3/3 reliable; 5.5 GiB local-weights record
-  documented as the upgrade). Not yet launched — full upstream evaluation +
-  watch-list: `research.md`.
+- **2026-08-28 — first successful launch on this cluster (2× GB10, TP2).**
+  Boot markers verified on head + worker: `MARLIN` NvFp4 MoE backend engaged
+  (no FP4-corruption silent loop), `fp8_e4m3` KV cache, `Initial free memory
+  110.73 GiB, reserved 4.14 GiB for KV Cache` (KV slab pinned, no phantom
+  backing death), `GPU KV cache size: 527,879 tokens` (≈507K expected),
+  `NCCL 2.30.7` + cutlass-dsl 4.6.2 re-pins held, MTP3 spec decode active,
+  no `pe_dim=64` assert, `/v1/models` → `glm-5.3-flash`, `max_model_len
+  262144`, `/health` 200. Measured (first boot, cold JIT): weight load
+  181.29 GiB in ~795 s, engine init (profile/KV/warmup) ~150 s; 6-way
+  concurrent load test **PASS** (all streams clean, tool calls working;
+  single-stream decode ~23–28 tok/s, aggregate ~51–62 tok/s at C6) — matches
+  upstream 21.8–28.3 tok/s. **Recipe fix required before this boot:** patch
+  layer 1 in `patches/Dockerfile` had malformed Python (single-quote
+  multiline strings → `SyntaxError` at `cuda.py` step 2); rewritten to
+  triple-quoted strings, content unchanged (commit 5fbd006). A fresh warm boot
+  is expected to be faster than these cold-start numbers.

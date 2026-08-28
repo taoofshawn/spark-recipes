@@ -258,14 +258,22 @@ targets 50–70 tok/s when DFlash2/DSpark lands. Watch the forum + tonyd2wild.
 6. **InstantTensor loader (v9)** — re-test when upstream moves (multi-node
    direct-I/O). Loads drop 10 min → 40-100 s and it bypasses the page-cache
    KV wall, but it was TP2-unstable in all four test boots.
-7. **Thinking default parity with the other recipes (WANTED, BLOCKED).** The
-   other recipes default `thinking=true` (+ reasoning_effort). GLM-5.3's
-   day-0 stack has thinking+tools issues (SGLang #36669 shows `!`
-   degeneration under multi-tool agentic prompts; the GLM family has the same
-   token-0 class as Qwen). When upstream fixes land (or a flag emerges that
-   gives thinking + structured tools together), flip `THINKING=true` and
-   re-run `tools/load_test_glm.py`. GLM's `reasoning_effort` levels are
-   low/high/max (default max; `clear_thinking=true` for chat).
+7. **Thinking default parity with the other recipes (DONE 2026-08-28).** The
+   other recipes default `thinking=true` (+ reasoning_effort). Investigation
+   on the live cluster found the original `THINKING=false` knob was a no-op:
+   the pinned `chat_template.jinja` has **no `enable_thinking` gate** — the
+   generation prompt always opens a ` ++)  block, the effort header is always
+   emitted (undefined → max), and no-effort requests were observed to
+   degenerate (800 tokens, empty reasoning and content). The recipe now pins
+   `--default-chat-template-kwargs '{"reasoning_effort": "high"}'`
+   (all-recipes parity: thinking on, high, temp 1.0 / top_p 0.95 via the
+   checkpoint's own generation_config.json). Verified live: top-level
+   OpenAI `reasoning_effort` overrides engage thinking (glm45 parser →
+   `reasoning` field), ~330 completion tokens for a short high-effort answer
+   vs 41 without. Remaining watch: thinking + structured tools on the vLLM
+   day-0 stack (SGLang #36669 degeneration class) — re-run
+   `tools/load_test_glm.py` with thinking if agents misbehave. GLM's
+   `reasoning_effort` levels are low/high/max (template default max).
 8. **The NVFP4-KV + b12x lane (drowzeys)** as the path to 1M ctx on 2 nodes —
    the single most valuable capacity upgrade; needs the zero-pad shim.
 9. **Re-pin / de-duplicate patches when vLLM #53906 lands.** The patch guards

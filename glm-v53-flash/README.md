@@ -27,7 +27,7 @@ model on GB10 — with eight SM121 kernel patches baked into a local image
 | `gpu_memory_utilization` | 0.85 (0.78/0.80 starve the bf16 KV at 131K+) |
 | `max_num_seqs` | 6 · `block-size` 2304 (kpool page invariant) · `--moe-backend marlin` |
 | Context | 262,144 (TP2 ceiling — the model-native 1M needs TP4 / 4 nodes) |
-| Thinking | **off** server-side (agent-safe default — see Tool-calling notes) |
+| Thinking | **on, `high`** server-side (all-recipes parity — see Tool-calling notes) |
 | Serve | port `4000`, served model `glm-5.3-flash` |
 
 Measured upstream references on 2× DGX Spark: **21.8–28.3 tok/s** single-stream
@@ -100,16 +100,28 @@ python3 tools/load_test_glm.py
 
 - `--tool-call-parser glm47` — the plain `glm` parser **fails silently**
   (empty `content` + `tool_calls: null`). `--reasoning-parser glm45` splits
-  the template's thinking block out of `content`.
-- `THINKING=false` server-side (`--default-chat-template-kwargs
-  '{"enable_thinking": false}'`). The day-0 stack has thinking+tools issues
-  (SGLang #36669 shows `!` degeneration under multi-tool agentic prompts on
-  this model family); the off default is the agent-safe lane. Clients can opt
-  in per request with `"chat_template_kwargs": {"enable_thinking": true}`.
-- `max_tokens` includes reasoning tokens when thinking is on.
-- The checkpoint is multimodal; keep `LANGUAGE_MODEL_ONLY=0` (default) to
-  preserve vision. Set `LANGUAGE_MODEL_ONLY=1` for a text-only endpoint that
-  skips the ~15.7 GB multimodal processor (frees memory under pressure).
+  the template's thinking block into the `reasoning` field (note: this
+  stack exposes it as `reasoning`, not `reasoning_content`).
+- **Thinking is structurally always-on for this template.** The
+  `chat_template.jinja` at the pinned revision has **no `enable_thinking`
+  gate**: the generation prompt always opens a ` ++)
+  block and an effort header is always emitted
+  (`reasoning_effort` undefined → **max**). An earlier draft of this recipe
+  passed `{"enable_thinking": false}` — a no-op — and requests without any
+  effort param were observed to **degenerate** (800 tokens, empty
+  `reasoning` and empty `content`). The recipe therefore always pins an
+  effort server-side.
+- Default: **`REASONING_EFFORT=high`** (all-recipes parity: thinking on,
+  high, temp 1.0, top_p 0.95). Clients override per request with the
+  OpenAI-style `"reasoning_effort": "low" | "high"` top-level field —
+  verified: vLLM merges it into the chat-template kwargs and the glm45
+  parser routes the thinking into `reasoning`.
+- Sampling defaults (temp 1.0, top_p 0.95) come from the checkpoint's own
+  `generation_config.json`; the boot log confirms vLLM adopts them. No
+  `--generation-config`/`--override-generation-config` flags are needed.
+- `max_tokens` includes reasoning tokens when thinking is on (a short
+  answer with `high` effort cost ~330 completion tokens vs 41 without).
+  Keep it generous for agentic use.
 
 ## Known issues & gotchas (day-0/day-1; from upstream + forum)
 
@@ -165,3 +177,16 @@ research.md             # research notes + future-work handoff for agents
   multiline strings → `SyntaxError` at `cuda.py` step 2); rewritten to
   triple-quoted strings, content unchanged (commit 5fbd006). A fresh warm boot
   is expected to be faster than these cold-start numbers.
+- **2026-08-28 — thinking defaults fixed (all-recipes parity).** Found while
+  verifying the HF commit history: our pin (`aa28e1f5`) already contains the
+  upstream chat-template sync and parser notes (verified: snapshot files
+  byte-identical to HF HEAD). But the template has **no `enable_thinking`
+  gate** — the original `THINKING=false` default-chat-template-kwargs was a
+  no-op, and no-effort requests degenerate (800 tokens, empty output).
+  Changed the server default to `--default-chat-template-kwargs
+  '{"reasoning_effort": "high"}'` (env `REASONING_EFFORT`, default `high`);
+  temp 1.0 / top_p 0.95 already flow from the checkpoint's
+  `generation_config.json` (confirmed in the boot log). omp client
+  registration updated (`reasoning: true`, effort levels low/high/max,
+  default high). Applied on the NEXT container restart (not yet bounced at
+  the time of writing).

@@ -32,8 +32,13 @@ This repo is deployed on a specific pair of nodes. Do not invent other hardware 
 | node 0 (leader, rank 0, API server) | `spark-0f0b.shawndo.intra` | `192.168.0.170` | also called "head" |
 | node 1 (follower, rank 1, headless) | `spark-6d14.shawndo.intra` | `192.168.0.171` | also called "worker" |
 
-- Both nodes must have the repo checked out at `~/code/spark-recipes` and the model cached in
-  `~/.cache/huggingface` (serving is **offline**: `HF_HUB_OFFLINE=1`, `TRANSFORMERS_OFFLINE=1`).
+- **SSH to the nodes via their DNS hostnames, NEVER the RoCE crossover IPs.** The
+  `192.168.0.x` addresses above are the RoCE/control-plane fabric between the two boxes and are
+  **not routable from the management network** (`ssh 192.168.0.170` times out). Use:
+  `ssh spark-0f0b.shawndo.intra` (node 0 / head) and `ssh spark-6d14.shawndo.intra` (node 1 /
+  worker). SSH hops run from the local workstation (`eve`), which resolves the `.shawndo.intra`
+  DNS zone; the IPs are for in-cluster `MASTER_ADDR`/`ROCE_IP` config, not for reaching the
+  boxes.
 - Inter-node networking: **RoCE/InfiniBand** for the NCCL data plane
   (`IB_PORTS=rocep1s0f0,roceP2p1s0f0`) and **Ethernet** for control plane
   (`ETH_IF=enp1s0f0np0`, `ETH_IF2=enP2p1s0f0np0`). These are the actual NIC names on this

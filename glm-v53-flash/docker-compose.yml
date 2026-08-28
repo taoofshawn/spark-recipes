@@ -122,8 +122,12 @@ services:
       # MIT; the drafter is not). When enabled, the KV pin defaults to
       # 3221225472 (3 GiB) for concurrency headroom unless KV_CACHE_MEMORY is
       # set explicitly, and SPEC_TOKENS must be 7 (drafter block 8 - 1).
-      # With DFLASH2=1 the KV pin defaults to 7 GiB (727,583 tokens — the
-      # upstream watchdog-free TP2 ceiling; 7.5 GiB dies on first request).
+      # With DFLASH2=1 the KV pin drops to 3221225472 (3 GiB — upstream's
+      # shipped DFlash2 launcher value) for concurrency headroom. Do NOT
+      # chase ceiling pins: upstream withdrew its 7 GiB figure (2026-08-28
+      # correction) — pinned pools skip the activation-headroom subtraction
+      # and die on the first long prompt. Profiler-sized: 581,040 tokens
+      # (DFlash2) / 965,166 (no drafter) @ 262K.
       DFLASH2: "${DFLASH2:-0}"
       DFLASH2_REVISION: "${DFLASH2_REVISION:-7d74cdd881ed7e32c31175984a67823127b66cfe}"
       # Use the vendored chat template that honors enable_thinking (upstream
@@ -241,12 +245,14 @@ services:
             exit 1
           }
           if [ "$${KV_PIN}" = "4445787956" ]; then
-            # Upstream 2026-08-28 ladder (watchdog-free, DFlash2 attached):
-            # 10 GiB killed warmup, 7.5 served-then-died on first request,
-            # 7 GiB (727,583 tokens) survived serving + a 500-token
-            # generation at 41.6 tok/s. NOT yet measured on this cluster.
-            KV_PIN="7516192768"
-            echo "[glm53] DFLASH2=1: KV pin raised to 7516192768 (7 GiB ceiling; set KV_CACHE_MEMORY to override)"
+            # Upstream's shipped DFlash2 pin is 3 GiB; keep it unless the
+            # operator set KV_CACHE_MEMORY explicitly. The once-published
+            # 7 GiB/727,583-token ceiling was WITHDRAWN upstream (2026-08-28):
+            # pinned pools skip activation-headroom subtraction and die on
+            # the first long prompt. Profiler-sized figure: 581,040 tokens @
+            # 262K.
+            KV_PIN="3221225472"
+            echo "[glm53] DFLASH2=1: KV pin 3221225472 (3 GiB, upstream shipped value; set KV_CACHE_MEMORY to override)"
           fi
           SPEC_CFG="{\"method\":\"dflash\",\"model\":\"$${D2DIR}\",\"num_speculative_tokens\":7}"
           echo "[glm53] DFlash2 drafter: $${D2DIR}"

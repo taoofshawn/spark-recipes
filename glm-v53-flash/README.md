@@ -24,7 +24,7 @@ model on GB10 — with eight SM121 kernel patches baked into a local image
 | KV cache | `fp8_e4m3` (patched NoPE-MLA path) |
 | KV pool | 507K tokens @ 4.14 GiB/rank (default, 3/3 reliable) · 672K @ 5.5 GiB (local-weights record) |
 | Spec decode | MTP 3 default · **DFlash2 opt-in** (`DFLASH2=1`, 2.15x upstream — see below; non-commercial drafter license) |
-| DFlash2 KV pool | 727,583 tokens @ 7 GiB pin (upstream watchdog-free ceiling; 7.5 GiB dies on first request) |
+| DFlash2 KV pool | 581,040 tokens @ 262K context, profiler-sized (upstream 2026-08-28 correction; see DFlash2 section) |
 | `gpu_memory_utilization` | 0.85 (0.78/0.80 starve the bf16 KV at 131K+) |
 | `max_num_seqs` | 6 · `block-size` 2304 (kpool page invariant) · `--moe-backend marlin` |
 | Context | 262,144 (TP2 ceiling — the model-native 1M needs TP4 / 4 nodes) |
@@ -148,7 +148,11 @@ hf download incoai/GLM-5.3-Flash-DFlash2 --revision 7d74cdd881ed7e32c31175984a67
 
 # Then in .env (or per-node env): DFLASH2=1
 # SPEC_TOKENS must be 7 (drafter block 8 - 1) — the compose refuses anything else.
-# KV pin auto-drops to 3221225472 (3 GiB) unless you set KV_CACHE_MEMORY.
+# KV pin drops to 3221225472 (3 GiB, upstream's shipped DFlash2 value) unless
+# you set KV_CACHE_MEMORY. Do NOT raise it to chase KV headroom: upstream
+# withdrew its 7 GiB "ceiling" (2026-08-28) — pinned pools skip the activation
+# reservation and die on the first long prompt. Profiler-sized is 581,040
+# tokens @ 262K. If you must pin higher, validate with a >=28K-token prompt.
 ```
 
 Boot signatures to confirm: `Using Eagle3 auxiliary layers from config:
@@ -161,6 +165,29 @@ Cautions (upstream issue #7, still open): a second 2x GB10 pair reports only
 28-31 tok/s at 0.35 acceptance with an overlay built FROM v9/InstantTensor —
 our stack is FROM the stable v8-equivalent, but benchmark before trusting
 46.9 as guaranteed. Do not combine with `--load-format instanttensor`.
+
+### Upstream open problems (2026-08-28, docs/OPEN-PROBLEMS.md) — affects us
+
+- **KV pin trap:** `--kv-cache-memory` makes vLLM skip subtracting the measured
+  activation peak — allocates, warms, answers short prompts, then **dies on the
+  first long request**. Reproduced at 7.5 GiB, 300K ctx, 700K ctx, and 12 GiB.
+  Upstream withdrew its 7 GiB ceiling figure rather than restate it.
+- **TP worker rank profiles 4-5 GiB less KV headroom than the head** (min across
+  ranks binds the pool) — explains why pool figures drift between boots; not a
+  config error, looks like an upstream vLLM issue.
+- **`--load-format instanttensor`** is fast (~40-100 s loads) but silently
+  unstable multi-node: a rank dies ~1 min post-load in 4/4 upstream TP2 boots.
+  We already avoid it.
+- **UVM livelock:** with swap active, the kernel can page vLLM out mid-load →
+  unrecoverable spin (`UVM GPU` kthread hot, 96% GPU util at ~10 W). Upstream
+  requires `vm.swappiness=0` on every node (does not survive reboot; put it in
+  `/etc/sysctl.d/`) and a `swapoff -a && swapon -a` before launch.
+- **vision is not speculated:** image requests work but get no DFlash2 speedup
+  (drafter takes text-only draft inputs).
+- **CUDA graphs trap (vllm#53030):** piecewise-graph `BatchDescriptor` collision
+  silently pins acceptance at exactly 1.00 — check
+  `vllm:spec_decode_num_accepted_tokens_per_pos_total` after any graph-enabled
+  boot. We run `--enforce-eager`, unaffected.
 
 ## Known issues & gotchas (day-0/day-1; from upstream + forum)
 
@@ -203,6 +230,18 @@ research.md             # research notes + future-work handoff for agents
 
 # Audit trail
 
+- **2026-08-28 — upstream KV-ceiling correction adopted (drop 7 GiB pin).**
+  Upstream withdrew its published 7 GiB / 727,583-token DFlash2 ceiling
+  (commit 53853387): pinned `--kv-cache-memory` pools skip the measured
+  activation-headroom subtraction and die on the first LONG prompt (verified
+  upstream at 7.5 GiB, 300K ctx, 700K ctx, 12 GiB). Deep-dive profiler-sized
+  figures at 262K context: 581,040 tokens with DFlash2 (verified through a
+  28,818-token prompt) / 965,166 without a drafter. Our DFLASH2=1 pin
+  reverted from 7516192768 (7 GiB) to upstream's shipped 3221225472 (3 GiB);
+  MTP default 4445787956 unchanged. Also adopted `docs/OPEN-PROBLEMS.md`
+  findings (rank-1 KV asymmetry, InstantTensor instability, UVM livelock /
+  `vm.swappiness=0`, vision-not-speculated, CUDA-graph acceptance trap) into
+  the DFlash2 section — see "Upstream open problems".
 - **2026-08-28 — upstream sync: DFlash2 (opt-in) + enable_thinking template
   fix.** Adopted from tonyd2wild's repo update (overlay-dflash2, commits
   64c92e9/3238536/53912b4/a5c4b19): (1) patch layers 9-10 — the DFlash2

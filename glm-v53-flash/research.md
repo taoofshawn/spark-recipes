@@ -51,21 +51,43 @@ benchmarked. DFlash2 on the NVFP4-KV lane is partial (chunked prefill >3K
 kills rank-0) — stay on fp8 KV. First inference after enabling is ~10 tok/s
 (drafter JIT), measure warm. Acceptance ~0.15 = broken aux capture.
 
-**Second sync same day (16:02Z): TP2 KV ceiling raised.** Upstream walked the
-`--kv-cache-memory` pin up with DFlash2 attached, watchdog-free: 10 GiB killed
-warmup, 7.5 GiB served then died on the FIRST real request, **7 GiB =
-727,583 tokens survived serving + a 500-token generation (41.6 tok/s, 0.616
-acceptance)** — +8% over the 672,606 record. Our compose now defaults the
-DFLASH2=1 pin to 7 GiB (7516192768) with the ladder documented; MTP lane
-stays at 4.14 GiB (the MTP draft head costs ~5 GB, the DFlash2 drafter costs
-zero). Caveats: requires running watchdog-free (our default — we arm no
-memory watchdog), and "serving is not survival": gate any KV increase on a
-real generation. Also in the sync: the repo's "four defects" commit
-(3a2b7930) is docs-only (bind-mount + /health-polling instructions) — our
-recipe already handles both by baking the top-k fix into the image and
-probing /health; plus a tuning note that `enable_thinking: false` buys +8%
-acceptance but emits untagged reasoning-prose into `content` (README
-tool-calling notes updated; THINKING default stays true).
+**Second sync same day (16:02Z): TP2 KV ceiling raised — then WITHDRAWN.**
+Upstream walked the `--kv-cache-memory` pin up with DFlash2 attached,
+watchdog-free: 10 GiB killed warmup, 7.5 GiB served then died on the FIRST
+real request, and **7 GiB = 727,583 tokens** seemed to survive serving + a
+500-token generation. Our compose adopted that pin. **Then upstream corrected
+itself the same evening (18:45Z, commit 53853387): the 727,583 figure is
+withdrawn** — pinning `--kv-cache-memory` makes vLLM skip subtracting the
+measured activation peak (gpu_worker.py:475-495), so the pool allocates,
+warms, answers a SHORT prompt, then **dies on the first long request**;
+reproduced at 7.5 GiB, 300K ctx, 700K ctx and 12 GiB (locked the node), and
+no log of the 727,583 measurement survived. **Operationally: let vLLM's
+profiler size the pool; profiler-verified figures at 262K context are
+581,040 tokens with DFlash2 (survived a 28,818-token prompt) and 965,166
+without a drafter.** Our compose's DFLASH2=1 pin is back to upstream's
+shipped 3221225472 (3 GiB). MTP lane stays at 4.14 GiB (the MTP draft head
+costs ~5 GB; the DFlash2 drafter slot-shares MLA tensors so costs zero KV
+pool tokens, but ~4.8 GiB of KV headroom — a real trade: +91% decode for
+-40% pool). Also in this sync: the repo's "four defects" commit (3a2b7930)
+is docs-only (bind-mount + /health-polling instructions) — our recipe already
+handles both by baking the top-k fix into the image and probing /health; and
+a tuning note that `enable_thinking: false` buys +8% acceptance but emits
+untagged reasoning-prose into `content` (README tool-calling notes updated;
+THINKING default stays true).
+
+**Third sync same day (18:48Z): docs/OPEN-PROBLEMS.md.** Upstream opened a
+failure catalog with next probes. Notable for us: (1) the TP worker rank
+profiles 4-5 GiB LESS KV headroom than the head (min-across-ranks binds the
+pool; not a config error, looks upstream-vLLM); (2) InstantTensor
+direct-I/O loads are 15x faster but silently unstable multi-node (rank dies
+~1 min post-load in 4/4 TP2 boots — we already avoid it); (3) UVM driver
+livelock under memory pressure — `vm.swappiness=0` mandatory on every node
+(does NOT survive reboot; /etc/sysctl.d/), plus `swapoff -a && swapon -a`
+before launch; (4) vision is not speculated on either drafter (text-only
+draft inputs); (5) CUDA-graph trap vllm#53030 can pin acceptance at exactly
+1.00 (we run --enforce-eager, unaffected); (6) temp-0 is free throughput
+(+13-21%) via the rejection sampler's exact top-1 match. Condensed into the
+README's DFlash2 section.
 
 **RedHatAI/GLM-5.3-Flash-NVFP4 vs LibertAIDAI (user question).** Verdict: keep
 LibertAIDAI. RedHatAI is W4A4 (compressed-tensors, FP4 weights AND FP4

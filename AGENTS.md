@@ -53,23 +53,21 @@ This repo is deployed on a specific pair of nodes. Do not invent other hardware 
 README.md                       # short index; stable recipes in main, in-progress on branches
 deepseek-v4-flash-aiden/                    # docker-compose recipe (the "reference" compose)
 deepseek-v4-flash-aiden-sparkrun/           # sparkrun port of aiden (no rebuild, docker-pull)
-deepseek-v4-flash-eugr-sparkrun/            # sparkrun port of eugr's B12X source build
 deepseek-v4-flash-tonyd2wild/               # docker-compose recipe (NVFP4 DS-MLA KV stack)
   └── upstream/                             # VENDORED upstream repo — do NOT edit (see below)
 mimo-v25-dflash-tonyd2wild/                 # docker-compose recipe (MiMo-V2.5 + DFlash)
 ```
 
-### The three DeepSeek recipes: pick the right one
+### The two DeepSeek recipes: pick the right one
 
-All three serve the same model/port (deepseek-v4-flash :4000, 1M context) but differ in HOW the
+Both serve the same model/port (deepseek-v4-flash :4000, 1M context) but differ in HOW the
 runtime is obtained and which backend flags apply. **Flags and env vars are NOT interchangeable
 between them** — each belongs to a specific image/build; mixing them fails at startup.
 
 | recipe | mechanism | image / backend | status notes |
 |---|---|---|---|
 | `deepseek-v4-flash-aiden` | docker-compose | prebuilt `aidendle94/sparkrun-vllm-ds4-gb10` (digest-pinned, "3.75"), `FLASHINFER_MLA_SPARSE_DSV4` attention | the battle-tested baseline; most documented |
-| `deepseek-v4-flash-aiden-sparkrun` | sparkrun recipe (`.yaml`) | same aiden image, `builder: docker-pull` (critical — without it sparkrun picks the eugr source builder) | sparkrun-native management, no rebuild |
-| `deepseek-v4-flash-eugr-sparkrun` | sparkrun recipe | `vllm-node-b12x` built from source via eugr (`build_args: --exp-b12x`), `B12X_MLA_SPARSE` attention | needs a ~20–40 min source build on first run; repo's only source-built recipe |
+| `deepseek-v4-flash-aiden-sparkrun` | sparkrun recipe (`.yaml`) | same aiden image, `builder: docker-pull` (critical — without it sparkrun does a source build instead) | sparkrun-native management, no rebuild |
 | `deepseek-v4-flash-tonyd2wild` | docker-compose | locally built `vllm-dspark-runtime:dspark-nvfp4-stage-c` (4-stage overlay), `nvfp4_ds_mla` KV | most patched; full from-scratch build guide in its README |
 
 `aiden-sparkrun` is the same as `aiden` but managed through sparkrun (cluster abstraction). If a
@@ -91,14 +89,14 @@ change targets one, the other usually needs the equivalent change.
 - Verify: `curl http://127.0.0.1:4000/v1/models` should show `"id":"deepseek-v4-flash"` and
   `"max_model_len":1048576`.
 
-### sparkrun recipes (`deepseek-v4-flash-aiden-sparkrun`, `deepseek-v4-flash-eugr-sparkrun`)
+### sparkrun recipe (`deepseek-v4-flash-aiden-sparkrun`)
 
 - Single `.yaml` with `defaults` (templating values), `env`, `command`, and `executor_config`.
 - Run from the leader: `sparkrun run <path>.yaml` (dry-run with `-n`, force rebuild with
   `--force-build`, watch `sparkrun logs <id>`, stop with `sparkrun stop <id>`).
 - **Templating gotcha:** sparkrun substitutes `{key}` from `defaults` as a single unit, so
   JSON-valued flags (`speculative_config`, `compilation_config`, …) must live as single
-  `defaults` values used as `'{key}'` — not eugr-style `{{...}}` escapes.
+  `defaults` values used as `'{key}'` — not `{{...}}` double-brace escapes.
 - **`model_revision` must appear in BOTH the top-level field and `defaults`** (top-level drives
   model-distribution lookup; only `defaults` keys get `{placeholder}`-substituted).
 - The recipe yaml files carry lengthy explanatory comments — they are the best in-file
@@ -130,7 +128,7 @@ Tool-arg hardening functions to grep for: `normalize_tool_arguments`, `repair_to
 `deepseek_v4_wrapper.py`, update ALL recipes that carry copies.
 
 **Image path differences matter:** aiden 3.75/3.7 keep vLLM at `/opt/venv/lib/python3.12/...`;
-production-3.8 and the tonyd2wild/ eugr images use `/opt/env/...`. Every overlay/mod/executor
+production-3.8 and the tonyd2wild image use `/opt/env/...`. Every overlay/mod/executor
 config hard-codes one of these. Wrong path = overlay silently not applied.
 
 ## Key technical vocabulary
@@ -144,10 +142,10 @@ config hard-codes one of these. Wrong path = overlay silently not applied.
   NVFP4). `VLLM_USE_B12X_MOE=1` and `—moe-backend b12x` are the speed-critical switches;
   removing them silently tanks decode to ~29 tok/s (falls back to DEEPGEMM_MXFP4). Boot-log
   marker: `Using 'B12X' Mxfp4 MoE backend`.
-- **NVFP4 / fp8 KV caches** — `kv-cache-dtype nvfp4_ds_mla` (tonyd2wild) vs `fp8` (aiden/eugr).
+- **NVFP4 / fp8 KV caches** — `kv-cache-dtype nvfp4_ds_mla` (tonyd2wild) vs `fp8` (aiden).
   These flags are image-specific.
 - **gpu_memory_utilization / GPU_MEM** — tuned per stack: aiden `0.83` (a KV lever, don't
-  lower lightly), tonyd2wild ≤ `0.78` (`0.80` "boots-then-dies"), eugr `0.85`, mimo `0.83`.
+  lower lightly), tonyd2wild ≤ `0.78` (`0.80` "boots-then-dies"), mimo `0.83`.
   Values are NOT transferable between recipes.
 - **GMU is a KV-cache lever, and ~155 GiB of weights are the floor** — lowering it shrinks the
   KV pool and can break 1M context; but if a server crashes under traffic, lowering GMU (e.g.
@@ -155,7 +153,7 @@ config hard-codes one of these. Wrong path = overlay silently not applied.
 - **max_num_seqs** — concurrency cap; 6 is the validated agent-serving value for DSv4 (12 is
   "riskier"; mimo uses 6). **max_num_batched_tokens** — the newer aiden-sparkrun profile uses
   2048 (better decode fairness under agent traffic; the older aiden compose still ships
-  16384), tonyd2wild 8192, eugr 10240. Not common between recipes.
+  16384), tonyd2wild 8192. Not common between recipes.
 - **AOT/JIT** — `VLLM_USE_AOT_COMPILE=1`; cold starts recompile (~7–8 min boot) because only
   the HF cache is persisted as a volume. Warm-up penalty: fresh boot is ~30% slower until a few
   hundred tokens of traffic pass; never benchmark right after boot.
@@ -240,7 +238,6 @@ until you have the posts newer than your last check (each post has `post_number`
 | thread ID | why it matters |
 |---|---|
 | `372268` | "DeepSeek v4 Flash (Aiden Recipe from Reddit), 1M token ses…" — **the aiden recipe parent thread**; 700+ posts, still active. Source of the aiden image, encoder/tool-arg fixes, GMU notes. |
-| `376220` | "Instructions for running Deepseek-v4-flash with DSpark using Eugr's repo" (post 18 = bernisse's B12X solution) — parent of the eugr recipe. |
 | `378824` | "DeepSeek-v4-Flash-0731-DSpark-1M-NVFP4-KV-2x-DGX-Spark" — **tonyd2wild's own announcement thread**; patch/version updates land here. |
 | `378890` | "Agent Serving on 2× DGX Spark with DeepSeek V4 Flash 0731: KV-cache, …" — the agent-serving tuning profile (smaller prefill chunks). |
 | `379863` / `376884` | 1×/2× Spark DSpark tuning, tok/s claims, acceptance metrics. Useful cross-checks when a number in a README looks stale. |
@@ -281,18 +278,12 @@ repos (`The-Sparky-Command-Center`, `2Wild-Coding-Agent-Latency-Monitor`). The t
 README's troubleshooting table explicitly tells agents to search "his other public repos first"
 when a module is missing.
 
-### 3) eugr's repo — direct source for the eugr recipe + sparkrun semantics
+### 3) sparkrun semantics — the CLI and recipe registries
 
-**`eugr/spark-vllm-docker`** (branch `b12x`) is where the eugr recipe's runtime and build come
-from. It is also where the **sparkrun** recipe-format semantics originate (the repo is 450+ stars
-and very active — multiple commits and PRs per week). Check its open PRs and issues too; several
-have already fed this repo's recipe yaml (e.g. JSON-valued-arg substitution fixes, new DSv4
-recipes, `--apply-vllm-pr` support). `eugr/llama-benchy` is his benchmark suite (useful for
-verifying throughput claims). Search: `GET /repos/eugr/spark-vllm-docker/pulls?state=open`.
-
-Also relevant: **`spark-arena/sparkrun`** (the sparkrun CLI/tool itself, docs at sparkrun.dev)
-and third-party sparkrun recipe registries (`styles01/sparkrun-recipes`,
-`brainchillz/sparkrun-dspark-registry`) — good for spotting new flags or config patterns.
+The one surviving sparkrun recipe (`deepseek-v4-flash-aiden-sparkrun`) uses the **sparkrun** CLI
+(`spark-arena/sparkrun`, docs at sparkrun.dev). Third-party sparkrun recipe registries
+(`styles01/sparkrun-recipes`, `brainchillz/sparkrun-dspark-registry`) are good for spotting new
+flags or config patterns to adopt there.
 
 ### 4) Container images and model checkpoints — the "what changed" sources
 
@@ -321,7 +312,7 @@ and third-party sparkrun recipe registries (`styles01/sparkrun-recipes`,
    the last scan). Pull each returned thread's newest posts. Look for: new image tags, new
    patches, new tuning knobs with measured numbers, and regression reports (especially the ones
    that could hit this cluster's config).
-3. **GitHub pass:** for tonyd2wild primary + the eugr repo, list open PRs/issues + recent
+3. **GitHub pass:** for tonyd2wild primary, list open PRs/issues + recent
    commits; grab the diff of anything touching DSpark/encoder/loader/batching.
 4. **Image/model pass:** check Docker Hub tags for aiden, HF model `lastModified`/siblings.
 5. **Evaluate before adopting:** every candidate must (a) apply to our pinned image/revision,

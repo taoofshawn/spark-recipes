@@ -119,8 +119,7 @@ services:
       # pool + decode fairness (validated on the sparkrun port; SvangenStudios
       # 378890; ajvazan 372268 #678 "2048 for better agentic workout"). NOTE:
       # acceptance-optimal batch on this drafter is 8192-16384 (#687) - if
-      # acceptance drops under load, raise MAX_NUM_BATCHED_TOKENS. (On the
-      # eugr/b12x stack 2048 can crash EngineCore under c4; not seen on aiden.)
+      # acceptance drops under load, raise MAX_NUM_BATCHED_TOKENS.
       MAX_NUM_SEQS: 6
       MAX_NUM_BATCHED_TOKENS: 2048
       GRAPH_CAP: 256

@@ -31,6 +31,12 @@
 #     persistent_topk hard-crashes ANY decode past ~24K context on GB10 (its
 #     FilteredTopK fallback needs 128KB smem/block; SM121 has ~101KB). The
 #     overlay routes small-SM parts to top_k_per_row_decode instead.
+#  9. DFlash2 drafter support   (v11) — port of vLLM PR #52816 + GLM-5.3
+#     target glue (Eagle3 aux capture, drafter KV group that slot-shares the
+#     MLA tensors). Inert unless method "dflash" is selected (DFLASH2=1).
+# 10. chat template fix        (53912b4) — the shipped template ignored
+#     enable_thinking (thinking was always on). Vendored fixed
+#     chat_template_mm.jinja + --chat-template wiring.
 #
 # Upstream: https://github.com/tonyd2wild/GLM-5.3-Flash-NVFP4-2x-DGX-Spark
 #   (docker/Dockerfile.glm53-sm121* + patch_v7.py + patch_v8_fp8.py +
@@ -166,8 +172,42 @@ RUN python3 /tmp/patch_v8_fp8.py && rm /tmp/patch_v8_fp8.py
 # small-SM gate (routes persistent_topk to top_k_per_row_decode below 78 SMs).
 COPY sparse_attn_indexer_kpool.py /usr/local/lib/python3.12/dist-packages/vllm/model_executor/layers/sparse_attn_indexer_kpool.py
 
+# ---- 9) DFlash2 block-diffusion drafter support (upstream v11 overlay) -------
+# Port of vLLM PR #52816 + GLM-5.3 target glue, from
+# tonyd2wild's overlay-dflash2/ (built FROM the v8-equivalent = our stack).
+# Inert unless the serve args select --speculative-config method "dflash"
+# (registry entry + speculator routing + aux capture only activate with a
+# DFlash2 drafter attached). See overlay-dflash2/NOTES.md + GLUE-NOTES.md.
+COPY overlay-dflash2/qwen3_dflash2.py /usr/local/lib/python3.12/dist-packages/vllm/model_executor/models/qwen3_dflash2.py
+COPY overlay-dflash2/dflash2/ /usr/local/lib/python3.12/dist-packages/vllm/v1/worker/gpu/spec_decode/dflash2/
+COPY overlay-dflash2/patch_registry_and_select.py /tmp/patch_registry_and_select.py
+COPY overlay-dflash2/patch_glm_aux_capture.py /tmp/patch_glm_aux_capture.py
+COPY overlay-dflash2/patch_kv_page_lcm2.py /tmp/patch_kv_page_lcm2.py
+COPY overlay-dflash2/patch_glm5_drafter_group.py /tmp/patch_glm5_drafter_group.py
+RUN python3 /tmp/patch_registry_and_select.py \
+ && python3 /tmp/patch_glm_aux_capture.py \
+ && python3 /tmp/patch_kv_page_lcm2.py \
+ && python3 /tmp/patch_glm5_drafter_group.py \
+ && python3 -c "from vllm.model_executor.models.registry import ModelRegistry; assert 'DFlash2DraftModel' in ModelRegistry.get_supported_archs(); print('v12 drafter-group build check OK')" \
+ && rm /tmp/patch_registry_and_select.py /tmp/patch_glm_aux_capture.py /tmp/patch_kv_page_lcm2.py /tmp/patch_glm5_drafter_group.py
+
+# ---- 10) chat template: honor enable_thinking (upstream 53912b4) -------------
+# The checkpoint's shipped template ALWAYS opens a think block (the
+# enable_thinking flag was ignored). This vendored copy adds the gate so
+# --default-chat-template-kwargs {"enable_thinking": ...} means something.
+# Wired via --chat-template in docker-compose.yml (TEMPLATE_FIX=1 default).
+COPY chat_template_mm.jinja /opt/glm53/chat_template_mm.jinja
+
 # ---- syntax-check everything we touched --------------------------------------
 RUN python3 -m py_compile \
       /usr/local/lib/python3.12/dist-packages/vllm/platforms/cuda.py \
       /usr/local/lib/python3.12/dist-packages/vllm/v1/attention/backends/mla/flashinfer_mla_sparse_sm90.py \
-      /usr/local/lib/python3.12/dist-packages/vllm/model_executor/layers/sparse_attn_indexer_kpool.py
+      /usr/local/lib/python3.12/dist-packages/vllm/model_executor/layers/sparse_attn_indexer_kpool.py \
+      /usr/local/lib/python3.12/dist-packages/vllm/model_executor/models/qwen3_dflash2.py \
+      /usr/local/lib/python3.12/dist-packages/vllm/v1/worker/gpu/spec_decode/dflash2/speculator.py \
+      /usr/local/lib/python3.12/dist-packages/vllm/model_executor/models/glm5next/nvidia/model.py \
+      /usr/local/lib/python3.12/dist-packages/vllm/model_executor/models/qwen3_dflash.py \
+      /usr/local/lib/python3.12/dist-packages/vllm/model_executor/models/registry.py \
+      /usr/local/lib/python3.12/dist-packages/vllm/v1/worker/gpu/spec_decode/__init__.py \
+      /usr/local/lib/python3.12/dist-packages/vllm/config/vllm.py \
+      /usr/local/lib/python3.12/dist-packages/vllm/model_executor/layers/logits_processor.py

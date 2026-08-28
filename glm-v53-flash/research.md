@@ -1,15 +1,67 @@
 # GLM-5.3-Flash — Research & Handoff Notes
 
-**Status: DRAFT, not tested.** Everything below was gathered 2026-08-28
-(model released 2026-08-26) from the NVIDIA Developer Forum, GitHub, Docker
-Hub, and HuggingFace (sizes measured from safetensors index metadata, not
-README claims). It is the context for `README.md` plus the watch-list for
-future improvement passes. Treat every number as day-0/day-1 community data
-until re-measured on this cluster.
+**Status: launched and measured on this cluster 2026-08-28** (see the README
+audit trail: MTP3 lane PASS, 23-28 tok/s single-stream). Everything below was
+gathered 2026-08-28 (model released 2026-08-26) from the NVIDIA Developer
+Forum, GitHub, Docker Hub, and HuggingFace (sizes measured from safetensors
+index metadata, not README claims). It is the context for `README.md` plus
+the watch-list for future improvement passes.
 
 Quick links: recipe `README.md` · primary upstream
 [tonyd2wild/GLM-5.3-Flash-NVFP4-2x-DGX-Spark](https://github.com/tonyd2wild/GLM-5.3-Flash-NVFP4-2x-DGX-Spark) ·
 forum threads 381433 / 381429.
+
+---
+
+## 0. 2026-08-28 upstream sync — DFlash2, template fix, RedHatAI (adopted)
+
+Upstream moved: the repo was renamed to
+`tonyd2wild/GLM-5.3-Flash-NVFP4-DFlash2-2x-DGX-Spark` and added **DFlash2** —
+inco.ai's block-diffusion drafter (vLLM PR #52816 port) — **proven at TP2 on
+our exact lane** (fp8 KV, marlin, block-size 2304): 46.9 tok/s single-stream
+at 74.1% acceptance (2.15x MTP-4), 56.2 tok/s aggregate @ C5, zero failures;
+structured/agentic output 54-61 tok/s (~2.5-2.8x). The drafter costs zero KV
+pool (slot-shares the MLA tensors). "dspark2" (as seen on the forum) is this —
+not a separate method, and NOT TP4-only: TP2 was the first-proven lane; the
+TP4 flagship (68.5 tok/s @ 1M ctx) lives in a sibling repo.
+
+**Adopted (this sync):**
+1. Patch layer 9 — the 4-file DFlash2 overlay vendored into
+   `patches/overlay-dflash2/` (FROM the v8-equivalent = our stack), inert
+   unless `--speculative-config method "dflash"` is selected. Opt-in via
+   `DFLASH2=1` (drafter `incoai/GLM-5.3-Flash-DFlash2` rev `7d74cdd`, 2.34 GB,
+   **CC-BY-NC-ND-4.0 non-commercial** — MTP3 stays the license-free default).
+   `num_speculative_tokens` must be 7 (block 8 - 1); KV pin auto-drops to
+   3,221,225,472 for concurrency headroom (upstream shipping value).
+2. Patch layer 10 — chat template fix (`53912b4`): the shipped template
+   ignored `enable_thinking` (structurally always-on). Vendored fixed
+   `chat_template_mm.jinja` + `--chat-template`; `THINKING` env is now a real
+   toggle (default true = pre-fix behavior, all-recipes parity).
+3. `tools/fleet_watchdog.sh` — adapted for our 2-node compose layout;
+   probes `/health` NOT `/v1/models` (200 with a dead engine); orchestrated
+   worker-first relaunch (vLLM v1 cannot recover a dead engine core).
+4. Verified our `sparse_attn_indexer_kpool.py` gate matches upstream
+   `a5c4b19` (multi_processor_count >= 78 -> persistent_topk, else
+   top_k_per_row_decode) — no change needed.
+
+**Cautions:** upstream issue #7 (OPEN) — another 2x GB10 pair with an overlay
+built FROM v9/InstantTensor gets only 28-31 tok/s @ 0.35 acceptance; our stack
+is FROM the stable v8-equivalent, but treat 46.9 as unmeasured-here until
+benchmarked. DFlash2 on the NVFP4-KV lane is partial (chunked prefill >3K
+kills rank-0) — stay on fp8 KV. First inference after enabling is ~10 tok/s
+(drafter JIT), measure warm. Acceptance ~0.15 = broken aux capture.
+
+**RedHatAI/GLM-5.3-Flash-NVFP4 vs LibertAIDAI (user question).** Verdict: keep
+LibertAIDAI. RedHatAI is W4A4 (compressed-tensors, FP4 weights AND FP4
+activations, LLM Compressor); LibertAIDAI is weight-only (ModelOpt, FP4
+experts / BF16 everything else). Activation-FP4 buys zero memory (expert
+weights ~175 GB either way) and is a datacenter speed lever with quality risk
+on this KDA + sparse-MLA arch. Zero 2x GB10 deployments use RedHatAI (all 8
+community recipes pin LibertAIDAI; RedHatAI's own recipe is TP4
+datacenter-only); format mismatch means an untested load path on sm_121.
+RedHatAI publishes evals (GPQA-D 90.57, AIME25 86.67) while LibertAIDAI
+publishes round-trip cosine 0.99665 + every GB10 pitfall. Full report:
+`/tmp/redhatai-report.md` (2026-08-28 snapshot).
 
 ---
 
@@ -51,9 +103,10 @@ Revision `aa28e1f54130286c95fee10d0705c74ce8743734` (this recipe's pin).
 - Other NVFP4 quants exist (RedHatAI = activations also FP4, no GB10
   validation; local-inference-lab is misleadingly named — actually BF16
   mirror per engine research; vcruz305 quantized on a single Spark).
-- `incoai/GLM-5.3-Flash-DFlash2` (0.4B block-diffusion drafter) is faster than
-  MTP on GB300 but **CC BY-NC-ND (non-commercial) — do not use**; native MTP
-  (BF16 head, in-checkpoint) is the license-free path.
+- `incoai/GLM-5.3-Flash-DFlash2` (0.4B block-diffusion drafter) is faster
+  than MTP and now **works at TP2 on this stack** (see section 0) — adopted
+  as an opt-in lane gated on its **CC BY-NC-ND (non-commercial)** license;
+  native MTP (BF16 head, in-checkpoint) remains the license-free default.
 
 ### Revisions to pin (all public HF repos)
 
@@ -170,8 +223,9 @@ much smaller (64K ctx @ 2 reqs). 0xSero's pinned runtime
 **Spec-decode:** native MTP (BF16, layer 45, license-free) is the only usable
 path. **MTP3 is the measured TP2 winner** (chishiki37: 28.3 tok/s vs 21.8 for
 MTP4; per-position acceptance [0.83, 0.59, 0.34, 0.18] — draft positions ≥3
-mostly pay verify cost). MTP5 can gibberish (forum 353069). DSpark/DFlash2 for
-GLM-5.3 does not exist yet (GLM-5.2 has it) — the biggest expected speed lever.
+mostly pay verify cost). MTP5 can gibberish (forum 353069). DFlash2 has since landed for GLM-5.3 at
+TP2 and is adopted as an opt-in lane (section 0) — 2.15x single-stream over
+MTP-4 upstream.
 
 ---
 
@@ -225,20 +279,20 @@ Discourse JSON API: `https://forums.developer.nvidia.com/<path>.json`.
   and re-verify the quant still loads.
 - **HF `zai-org/GLM-5.3-Flash*`** — official FP8/BF16 (for reference/TP4).
 
-### 4.4 The big expected speedup: DSpark/DFlash2 for GLM-5.3
-Not available yet (GLM-5.2 has it; `incoai/GLM-5.3-Flash-DFlash2` is SGLang +
-non-commercial licensed). tonyd615 "update coming soon with DFLASH"; renek
-targets 50–70 tok/s when DFlash2/DSpark lands. Watch the forum + tonyd2wild.
+### 4.4 DFlash2 for GLM-5.3 — landed and adopted (2026-08-28)
+TP2-proven upstream (46.9 tok/s C1, 74.1% acceptance); adopted as the
+`DFLASH2=1` opt-in lane (section 0). Watch for: issue #7 resolution
+(reproduction gap), a commercial-friendly drafter or the DSpark port, and
+GLM-5.2-style DFlash1 licensing. Forum projects 50-70 tok/s once settled.
 
 ---
 
 ## 5. Known improvements / fixes to track (with blockers)
 
-1. **Measure this cluster's actual numbers** (recipe is DRAFT). Record: boot
-   time (15–25 min expected), KV pool from the boot line, decode tok/s
-   (`stream:false` + `usage.completion_tokens`; streamed deltas under-report
-   spec decode), prefill tok/s, TTFT, and the deep-decode gate (28–32K prompt,
-   ≥100 decoded tokens — proves the persistent_topk overlay).
+1. **Measure this cluster's actual numbers** (partly done — README audit
+   trail has first-boot numbers; MTP3 23-28 tok/s single, 51-62 agg C6).
+   Still to record: prefill tok/s, TTFT, and the deep-decode gate (28–32K
+   prompt, ≥100 decoded tokens — proves the persistent_topk overlay).
 2. **KV upgrade to 5.5 GiB (672K tokens).** Default is 4.14 GiB (3/3 reliable,
    NFS-safe). 5.5 GiB is tonyd2wild's stress-verified local-weights record —
    our cluster has local weights on both ranks, so try `KV_CACHE_MEMORY=5905580032`
@@ -274,9 +328,15 @@ targets 50–70 tok/s when DFlash2/DSpark lands. Watch the forum + tonyd2wild.
    day-0 stack (SGLang #36669 degeneration class) — re-run
    `tools/load_test_glm.py` with thinking if agents misbehave. GLM's
    `reasoning_effort` levels are low/high/max (template default max).
-8. **The NVFP4-KV + b12x lane (drowzeys)** as the path to 1M ctx on 2 nodes —
+8. **Benchmark DFlash2 on this cluster** (adopted 2026-08-28, not yet
+   measured here). Gate before trusting 46.9 tok/s: upstream issue #7 shows a
+   v9-based overlay pair at 28-31 tok/s @ 0.35 acceptance. Check `/metrics`
+   acceptance 0.6-0.8 and the Eagle3 aux-layer boot line. Confirm the DFlash2
+   drafter revision fingerprint stays `8931dc522be0aa31…` (issue #7 asked the
+   same of upstream).
+9. **The NVFP4-KV + b12x lane (drowzeys)** as the path to 1M ctx on 2 nodes —
    the single most valuable capacity upgrade; needs the zero-pad shim.
-9. **Re-pin / de-duplicate patches when vLLM #53906 lands.** The patch guards
+10. **Re-pin / de-duplicate patches when vLLM #53906 lands.** The patch guards
    (`refusing to patch` on count mismatch) make re-pinning mechanical; keep
    the ladder-through-experiment-lane workflow (tonyd2wild's method).
 

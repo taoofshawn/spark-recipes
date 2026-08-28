@@ -114,19 +114,37 @@ services:
       # --language-model-only skips the multimodal processor (~15.7 GB of API
       # front-end memory) for a text-only endpoint. Keep vision by default.
       LANGUAGE_MODEL_ONLY: "${LANGUAGE_MODEL_ONLY:-0}"
+      # DFlash2 block-diffusion drafter (OPT-IN; 2.15x single-stream vs MTP
+      # upstream, 56.2 tok/s agg @ C5). Requires the drafter checkpoint on
+      # BOTH nodes (2.34 GB):
+      #   hf download incoai/GLM-5.3-Flash-DFlash2 --revision 7d74cdd881ed7e32c31175984a67823127b66cfe
+      # LICENSE: CC-BY-NC-ND-4.0 — NON-COMMERCIAL use only (the base model is
+      # MIT; the drafter is not). When enabled, the KV pin defaults to
+      # 3221225472 (3 GiB) for concurrency headroom unless KV_CACHE_MEMORY is
+      # set explicitly, and SPEC_TOKENS must be 7 (drafter block 8 - 1).
+      DFLASH2: "${DFLASH2:-0}"
+      DFLASH2_REVISION: "${DFLASH2_REVISION:-7d74cdd881ed7e32c31175984a67823127b66cfe}"
+      # Use the vendored chat template that honors enable_thinking (upstream
+      # commit 53912b4). 0 = fall back to the checkpoint's stock template,
+      # which IGNORES the flag (thinking always on).
+      TEMPLATE_FIX: "${TEMPLATE_FIX:-1}"
+      # Thinking toggle — effective ONLY with TEMPLATE_FIX=1 (the stock
+      # template ignores the flag and is structurally always-on). Default
+      # true = the pre-fix serving behavior (all-recipes parity: thinking on
+      # at REASONING_EFFORT); set false to actually turn thinking off now
+      # that the vendored template honors it.
+      THINKING: "${THINKING:-true}"
       DROP_CACHES: "${DROP_CACHES:-1}"
       # --enforce-eager: default torch.compile wedges multi-node GB10 (GLM and
       # Qwen-vLLM day-0 lesson). Keep on unless you have measured a fix.
       ENFORCE_EAGER: "${ENFORCE_EAGER:-1}"
       # Tool calling: GLM-5.3 uses the glm47 parser + glm45 reasoning parser.
-      # Thinking default ON at high effort (all-recipes parity). NOTE: the
-      # GLM-5.3-Flash chat template has NO enable_thinking gate — the
-      # generation prompt always opens a <think> block and the effort header
-      # is always emitted (undefined -> max). Requests that pass no
-      # reasoning_effort can degenerate (verified: 800 tokens, no content),
-      # so we always pin an effort server-side. Clients override per request
-      # via the OpenAI reasoning_effort field (verified: vLLM merges it into
-      # the chat template kwargs). See Tool-calling notes in README.
+      # reasoning_effort is always pinned server-side (undefined -> max, and
+      # no-effort requests can degenerate: 800 tokens, no content). Clients
+      # override per request via the OpenAI reasoning_effort field.
+      # enable_thinking (THINKING env) is honored by the vendored template
+      # (TEMPLATE_FIX=1, upstream 53912b4); the stock template ignores it.
+      # See Tool-calling notes in README.
       REASONING_EFFORT: "${REASONING_EFFORT:-high}"
       TOOL_CALL_PARSER: "${TOOL_CALL_PARSER:-glm47}"
       REASONING_PARSER: "${REASONING_PARSER:-glm45}"
@@ -154,7 +172,7 @@ services:
           done
         fi
 
-        echo "[glm53] NODE_RANK=$${NODE_RANK} GID=$${NCCL_IB_GID_INDEX:-unset} kvmem=$${KV_CACHE_MEMORY:-4445787956} ctx=$${MAX_MODEL_LEN:-262144}"
+        echo "[glm53] NODE_RANK=$${NODE_RANK} GID=$${NCCL_IB_GID_INDEX:-unset} kvmem=$${KV_CACHE_MEMORY:-4445787956} ctx=$${MAX_MODEL_LEN:-262144} dflash2=$${DFLASH2:-0}"
 
         # GB10 UMA page-cache guard: heavy file IO grows the page cache and
         # starves the NVRM allocator (MemFree, not MemAvailable, is what
@@ -195,9 +213,40 @@ services:
           echo "FATAL: MAX_NUM_BATCHED_TOKENS must be >= 2048 (DSA index_topk)"; exit 1
         fi
 
-        EAGER_ARGS=()
-        [ "$${ENFORCE_EAGER:-1}" = "1" ] && EAGER_ARGS+=(--enforce-eager)
-        THINK_ARGS="{\"reasoning_effort\": \"$${REASONING_EFFORT:-high}\"}"
+        EXTRA_ARGS=()
+        [ "$${ENFORCE_EAGER:-1}" = "1" ] && EXTRA_ARGS+=(--enforce-eager)
+        if [ "$${TEMPLATE_FIX:-1}" = "1" ]; then
+          EXTRA_ARGS+=(--chat-template /opt/glm53/chat_template_mm.jinja)
+        fi
+        THINK_ARGS="{\"enable_thinking\": $${THINKING:-false}, \"reasoning_effort\": \"$${REASONING_EFFORT:-high}\"}"
+
+        # Spec-decode selection: MTP (default, license-free) or DFlash2
+        # (DFLASH2=1; 2.15x single-stream upstream, NON-COMMERCIAL drafter).
+        KV_PIN="$${KV_CACHE_MEMORY:-4445787956}"
+        if [ "$${DFLASH2:-0}" = "1" ]; then
+          [ "$${SPEC_TOKENS:-3}" = "7" ] || { echo "FATAL: DFlash2 requires SPEC_TOKENS=7 (drafter block size 8 - 1)"; exit 1; }
+          D2ROOT="/cache/huggingface/hub/models--incoai--GLM-5.3-Flash-DFlash2/snapshots"
+          if [ -n "$${DFLASH2_REVISION:-}" ] && [ -d "$${D2ROOT}/$${DFLASH2_REVISION}" ]; then
+            D2DIR="$${D2ROOT}/$${DFLASH2_REVISION}"
+          else
+            D2DIR="$(ls -d $${D2ROOT}/*/ 2>/dev/null | head -1 || true)"
+          fi
+          D2DIR="$${D2DIR%/}"
+          test -f "$${D2DIR}/config.json" || {
+            echo "FATAL: incoai/GLM-5.3-Flash-DFlash2 drafter not found under $${D2ROOT}." >&2
+            echo "  Download on BOTH nodes: hf download incoai/GLM-5.3-Flash-DFlash2 --revision $${DFLASH2_REVISION:-main}" >&2
+            echo "  NOTE: drafter license is CC-BY-NC-ND-4.0 (non-commercial use only)." >&2
+            exit 1
+          }
+          if [ "$${KV_PIN}" = "4445787956" ]; then
+            KV_PIN="3221225472"   # upstream shipping pin: concurrency headroom with the drafter attached
+            echo "[glm53] DFLASH2=1: KV pin lowered to 3221225472 (set KV_CACHE_MEMORY to override)"
+          fi
+          SPEC_CFG="{\"method\":\"dflash\",\"model\":\"$${D2DIR}\",\"num_speculative_tokens\":7}"
+          echo "[glm53] DFlash2 drafter: $${D2DIR}"
+        else
+          SPEC_CFG="{\"method\":\"mtp\",\"num_speculative_tokens\":$${SPEC_TOKENS:-3}}"
+        fi
         exec vllm serve "$${MODEL_DIR}" \
           --revision "$${MODEL_REVISION:-main}" \
           --served-model-name "$${SERVED_MODEL_NAME:-glm-5.3-flash}" \
@@ -210,9 +259,9 @@ services:
           --block-size "$${BLOCK_SIZE:-2304}" \
           --moe-backend "$${MOE_BACKEND:-marlin}" \
           --kv-cache-dtype "$${KV_CACHE_DTYPE:-fp8_e4m3}" \
-          --kv-cache-memory "$${KV_CACHE_MEMORY:-4445787956}" \
-          --speculative-config "{\"method\":\"mtp\",\"num_speculative_tokens\":$${SPEC_TOKENS:-3}}" \
-          "$${EAGER_ARGS[@]}" \
+          --kv-cache-memory "$${KV_PIN}" \
+          --speculative-config "$${SPEC_CFG}" \
+          "$${EXTRA_ARGS[@]}" \
           --tool-call-parser "$${TOOL_CALL_PARSER:-glm47}" --enable-auto-tool-choice \
           --reasoning-parser "$${REASONING_PARSER:-glm45}" \
           --default-chat-template-kwargs "$${THINK_ARGS}" \

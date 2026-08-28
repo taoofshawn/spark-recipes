@@ -19,20 +19,21 @@ model on GB10 — with eight SM121 kernel patches baked into a local image
 | knob | value |
 |---|---|
 | Engine | vLLM day-0 image `vllm/vllm-openai:glm53-flash-arm64-cu130` (digest-pinned) |
-| Image | locally built `glm53-nvfp4-sm121:local` (8 patch layers, see `patches/`) |
+| Image | locally built `glm53-nvfp4-sm121:local` (10 patch layers, see `patches/`) |
 | Checkpoint | `LibertAIDAI/GLM-5.3-Flash-NVFP4` (194.6 GB; revision pinned) |
 | KV cache | `fp8_e4m3` (patched NoPE-MLA path) |
 | KV pool | 507K tokens @ 4.14 GiB/rank (default, 3/3 reliable) · 672K @ 5.5 GiB (local-weights record) |
-| Spec decode | MTP 3 (in-checkpoint BF16 draft head; 3 = measured TP2 winner) |
+| Spec decode | MTP 3 default · **DFlash2 opt-in** (`DFLASH2=1`, 2.15x upstream — see below; non-commercial drafter license) |
 | `gpu_memory_utilization` | 0.85 (0.78/0.80 starve the bf16 KV at 131K+) |
 | `max_num_seqs` | 6 · `block-size` 2304 (kpool page invariant) · `--moe-backend marlin` |
 | Context | 262,144 (TP2 ceiling — the model-native 1M needs TP4 / 4 nodes) |
-| Thinking | **on, `high`** server-side (all-recipes parity — see Tool-calling notes) |
+| Thinking | **on, `high`** server-side (all-recipes parity — and now a real toggle via `THINKING`, see Tool-calling notes) |
 | Serve | port `4000`, served model `glm-5.3-flash` |
 
-Measured upstream references on 2× DGX Spark: **21.8–28.3 tok/s** single-stream
-decode (vLLM NVFP4, MTP3/4, fp8 KV), ~1150 tok/s prefill, TTFT ~0.2–0.7 s.
-This recipe's own numbers still need to be measured here (not launched yet).
+Measured on THIS cluster: **23–28 tok/s** single-stream, ~51–62 tok/s
+aggregate at C6 (first boot, cold JIT — see audit trail). Upstream DFlash2
+references: 46.9 tok/s single-stream at 74.1% acceptance (2.15x MTP), 56.2
+tok/s aggregate @ C5, zero failures.
 
 ---
 
@@ -102,15 +103,17 @@ python3 tools/load_test_glm.py
   (empty `content` + `tool_calls: null`). `--reasoning-parser glm45` splits
   the template's thinking block into the `reasoning` field (note: this
   stack exposes it as `reasoning`, not `reasoning_content`).
-- **Thinking is structurally always-on for this template.** The
-  `chat_template.jinja` at the pinned revision has **no `enable_thinking`
-  gate**: the generation prompt always opens a ` ++)
-  block and an effort header is always emitted
-  (`reasoning_effort` undefined → **max**). An earlier draft of this recipe
-  passed `{"enable_thinking": false}` — a no-op — and requests without any
-  effort param were observed to **degenerate** (800 tokens, empty
-  `reasoning` and empty `content`). The recipe therefore always pins an
-  effort server-side.
+- **Thinking is now a real toggle (was structurally always-on).** The
+  checkpoint's shipped `chat_template.jinja` has **no `enable_thinking`
+  gate**: the generation prompt always opens a think block and an effort
+  header is always emitted (`reasoning_effort` undefined → **max**). Patch
+  layer 10 vendors the upstream-fixed template (commit `53912b4`) and wires
+  it via `--chat-template`, so `THINKING=true|false` (default true — the
+  pre-fix behavior) and per-request
+  `"chat_template_kwargs": {"enable_thinking": false}` now work. Requests
+  without any effort param were observed to **degenerate** (800 tokens,
+  empty `reasoning` and empty `content`), so the recipe always pins an
+  effort server-side regardless.
 - Default: **`REASONING_EFFORT=high`** (all-recipes parity: thinking on,
   high, temp 1.0, top_p 0.95). Clients override per request with the
   OpenAI-style `"reasoning_effort": "low" | "high"` top-level field —
@@ -122,6 +125,36 @@ python3 tools/load_test_glm.py
 - `max_tokens` includes reasoning tokens when thinking is on (a short
   answer with `high` effort cost ~330 completion tokens vs 41 without).
   Keep it generous for agentic use.
+
+## DFlash2 fast drafting (opt-in, `DFLASH2=1`)
+
+The upstream repo added **DFlash2** — inco.ai's block-diffusion drafter
+(vLLM PR #52816 port) — and it is **proven at TP2 on our exact lane** (fp8 KV,
+marlin, block-size 2304): **46.9 tok/s single-stream at 74.1% acceptance
+(2.15x MTP-4)**, 56.2 tok/s aggregate @ C5 with zero failures, and the
+drafter costs zero KV pool (it slot-shares the MLA tensors). MTP stays the
+default because the drafter checkpoint is licensed
+**CC-BY-NC-ND-4.0 — non-commercial use only** (the base model is MIT).
+
+```bash
+# Both nodes:
+hf download incoai/GLM-5.3-Flash-DFlash2 --revision 7d74cdd881ed7e32c31175984a67823127b66cfe   # 2.34 GB
+
+# Then in .env (or per-node env): DFLASH2=1
+# SPEC_TOKENS must be 7 (drafter block 8 - 1) — the compose refuses anything else.
+# KV pin auto-drops to 3221225472 (3 GiB) unless you set KV_CACHE_MEMORY.
+```
+
+Boot signatures to confirm: `Using Eagle3 auxiliary layers from config:
+(6, 15, 25, 34, 43)`, `Warming up spec-decode rejection sampler kernels
+(vocab=154880, num_spec=7, ...)`, and `/metrics` acceptance in the 0.6-0.8
+range (acceptance ~0.15 = broken aux capture — do not serve). First inference
+JIT-compiles drafter kernels (~10 tok/s) — measure warm.
+
+Cautions (upstream issue #7, still open): a second 2x GB10 pair reports only
+28-31 tok/s at 0.35 acceptance with an overlay built FROM v9/InstantTensor —
+our stack is FROM the stable v8-equivalent, but benchmark before trusting
+46.9 as guaranteed. Do not combine with `--load-format instanttensor`.
 
 ## Known issues & gotchas (day-0/day-1; from upstream + forum)
 
@@ -146,12 +179,15 @@ docker-compose.yml      # build + launch (GID auto-detect, model resolve, vllm s
 .env                    # shared config (cluster IPs, NICs, HF/JIT cache paths)
 .env.node0 / .env.node1 # per-node overrides (NODE_RANK, ROCE_IP)
 patches/
-  Dockerfile            # FROM vllm/vllm-openai:glm53-flash-arm64-cu130 (digest-pinned) + 8 patch layers
+  Dockerfile            # FROM vllm/vllm-openai:glm53-flash-arm64-cu130 (digest-pinned) + 10 patch layers
   patch_v7.py           # indexer top-k init + pool clamp                          [tonyd2wild]
   patch_v8_fp8.py       # fp8 KV cache for the NoPE-MLA path on SM12x             [tonyd2wild]
   sparse_attn_indexer_kpool.py  # persistent_topk SM121 gate (24K-context crash)  [tonyd2wild]
+  chat_template_mm.jinja# fixed template honoring enable_thinking (53912b4)       [tonyd2wild]
+  overlay-dflash2/      # DFlash2 drafter port (vLLM PR #52816 + GLM glue), inert unless DFLASH2=1 [tonyd2wild]
 tools/
   cache_flusher.sh      # host-side GB10 page-cache guard during load             [tonyd2wild]
+  fleet_watchdog.sh     # /health-probing watchdog; orchestrated 2-node relaunch  [tonyd2wild, adapted]
   load_test_glm.py      # 6-way concurrent tool-carrying load test (degenerate-loop check)
 README.md               # this file (run/build)
 research.md             # research notes + future-work handoff for agents
@@ -161,6 +197,22 @@ research.md             # research notes + future-work handoff for agents
 
 # Audit trail
 
+- **2026-08-28 — upstream sync: DFlash2 (opt-in) + enable_thinking template
+  fix.** Adopted from tonyd2wild's repo update (overlay-dflash2, commits
+  64c92e9/3238536/53912b4/a5c4b19): (1) patch layers 9-10 — the DFlash2
+  drafter port (inert unless `DFLASH2=1`; registry + Eagle3 aux-capture +
+  GLM5-Next drafter KV group that slot-shares MLA tensors) and the fixed
+  chat template wired via `--chat-template` (`TEMPLATE_FIX=1`), which makes
+  `THINKING` a real toggle (default true = pre-fix behavior, all-recipes
+  parity); (2) `tools/fleet_watchdog.sh` adapted for this 2-node compose
+  layout (probes `/health`, NOT `/v1/models` — the latter returns 200 with a
+  dead engine; orchestrates worker-first relaunch); (3) verified our
+  `sparse_attn_indexer_kpool.py` gate matches upstream `a5c4b19`
+  (multi_processor_count >= 78 -> persistent_topk, else top_k_per_row_decode)
+  — no change needed. DFlash2 numbers (46.9 tok/s C1, 74.1% acc, 2.15x) are
+  upstream measurements; not yet measured here. Drafter license
+  CC-BY-NC-ND-4.0 keeps it opt-in (MTP3 default unchanged). Issue #7
+  (reproduction gap with a v9-based overlay) noted in the DFlash2 section.
 - **2026-08-28 — first successful launch on this cluster (2× GB10, TP2).**
   Boot markers verified on head + worker: `MARLIN` NvFp4 MoE backend engaged
   (no FP4-corruption silent loop), `fp8_e4m3` KV cache, `Initial free memory

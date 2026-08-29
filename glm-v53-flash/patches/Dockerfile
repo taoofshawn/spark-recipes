@@ -205,7 +205,7 @@ RUN python3 -m py_compile \
       /usr/local/lib/python3.12/dist-packages/vllm/model_executor/layers/sparse_attn_indexer_kpool.py \
       /usr/local/lib/python3.12/dist-packages/vllm/model_executor/models/qwen3_dflash2.py \
       /usr/local/lib/python3.12/dist-packages/vllm/v1/worker/gpu/spec_decode/dflash2/speculator.py \
-      /usr/local/lib/python3.12/dist-packages/vllm/model_executor/models/glm5next/nvidia/model.py \
+      /usr/local/lib/python3.12/dist-packages/vllm/models/glm5next/nvidia/model.py \
       /usr/local/lib/python3.12/dist-packages/vllm/model_executor/models/qwen3_dflash.py \
       /usr/local/lib/python3.12/dist-packages/vllm/model_executor/models/registry.py \
       /usr/local/lib/python3.12/dist-packages/vllm/v1/worker/gpu/spec_decode/__init__.py \

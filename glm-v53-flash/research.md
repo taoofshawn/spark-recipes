@@ -446,6 +446,21 @@ Discourse JSON API: `https://forums.developer.nvidia.com/<path>.json`.
   vLLM/NVFP4): one-shot installer, 33–72 tok/s c1, 900k+ context, vision.
   Different quant/engine stack, but useful for DFlash2 tuning ideas,
   long-context tricks, and cross-checking acceptance/throughput numbers.
+- **Libertai/glm53-flash-vllm-gb10** — the LibertAI Labs repo *behind* the
+  `LibertAIDAI/GLM-5.3-Flash-NVFP4` checkpoint we serve (the model card's
+  "vLLM wrong output on sm_121" note is this work; see §3). Root causes
+  documented there: (1) no MLA path for NoPE on sm_120/121 — fixed with a
+  hand-written sparse-MLA CUDA kernel shipped as `vllm.general_plugins` entry
+  points (no vLLM files patched; `VLLM_GLM53_CUDA_SPARSE_MLA=1`); (2)
+  uninitialised `w13_input_scale` in `ModelOptNvFp4FusedMoE` zeroing every
+  expert output — fixed by `kernel/glm53_sparse_mla/moe_fix.py`
+  (`VLLM_GLM53_MOE_INPUT_SCALE=1.0`); filed upstream as vllm#54189. Their
+  measured 2×GB10 lane: 24.2 tok/s c1 (MTP-3 + eager + fp8 KV), 88,790 KV
+  tokens @ 64K ctx, `--max-num-seqs 2` — broadly consistent with our 23-28.
+  Their transferable lesson: CUDA graphs buy ~1% on GB10 (bandwidth-bound) but
+  ~500% on 4× RTX PRO 6000 (latency-bound) — never carry a config lever across
+  boxes with different bottlenecks. Watch for kernel/backend releases, updates
+  to the upstream issue, and any KV-context gains that beat our pin.
 - **MiaAI-Lab/GLM-5.3-Flash-EXL3-2x-DGX-Sparks** — sibling EXL3 2× Spark
   recipe; cross-check for the EXL3 lane and any shared drafter/tooling.
 - **tonyd2wild/GLM-5.3-Flash-NVFP4-DFlash2-2x-DGX-Spark** — tonyd2wild's

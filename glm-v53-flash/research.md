@@ -191,6 +191,29 @@ image; keep `glm45`. (2) drafter re-pin + acceptance re-test when convenient;
 as deliberate deviation from upstream's no-pin guidance; (5) long-prompt
 (>32k) test before trusting long-context serving. None block current service.
 
+### STANDING GOAL: raise context to 500K — but NOT at the cost of vision (user directive, 2026-08-29)
+The user wants this recipe eventually at ~500K context while **keeping
+multimodal (vision) enabled** — `--language-model-only` is a dealbreaker, which
+rules out the straightforward 512K profile today (forum 381541: 512K + fp8 KV +
+9 GiB pin + MTP-4, but load-bearing on `--language-model-only` because the mm
+processor costs ~15.7 GiB). Until that memory can be found elsewhere, we stay
+at 262K + DFlash2 (current validated config).
+
+Rough path when enabling knobs land (config-only, ~half a day, one bounce):
+`MAX_MODEL_LEN=524288`, `KV_CACHE_MEMORY` ≈ 9 GiB/rank (fp8 ≈ 122K tok/GiB),
+`MAX_NUM_BATCHED_TOKENS` 8192 → 4096, GMU 0.85 unchanged — with vision kept ON
+the pin must shrink to fit under GMU 0.85, so the open question is whether a
+smaller pool (e.g. 6-7 GiB ≈ 750-850K tok fp8) still serves 500K at low
+concurrency, or whether the ~15.7 GiB mm cost can be recovered another way
+(quantized mm tower, kernel savings, future upstream improvements).
+
+**Watch for:** (1) any upstream fix shrinking the multimodal processor's
+~15.7 GiB resident cost (or an offload/quantized-mm option); (2) DFlash2
+validated at >262K on the NVFP4 lane (381541 ran MTP-4 only; the >32k-prefill
+silent-death caution from 381703 is unresolved); (3) tonyd2wild / peer recipes
+shipping 512K with vision intact; (4) our own >32k prefill test results. When
+any of these land, re-run the numbers and reconsider.
+
 
 ## 1. Why NVFP4 (and not the official BF16/FP8 releases)
 

@@ -61,11 +61,28 @@ GET https://forums.developer.nvidia.com/search.json?q=<recipe-model>%20after:<la
 GET https://forums.developer.nvidia.com/search.json?q=dspark%20category:721%20order:latest
 ```
 
-Search terms per recipe (from AGENTS.md): `deepseek v4 flash`, `dspark`, `b12x`,
-`nvfp4`, `sparkrun`, `mimo v2.5`, `dflash`, plus the recipe's model name. Pull each
-returned thread's newest posts and page the tracked parent threads. Look for: new
-image tags, new patches, new tuning knobs with measured numbers, regression reports
-that could hit this cluster's config.
+Search terms per recipe (from AGENTS.md + the recipe's own README/research.md):
+`deepseek v4 flash`, `dspark`, `b12x`, `nvfp4`, `sparkrun`, `mimo v2.5`,
+`dflash`, plus the recipe's model name.
+
+**Mandatory: a GENERAL search every run — do not limit the pass to the tracked
+threads.** Known thread IDs (AGENTS.md table, recipe README) are for *catching up
+on replies*; new fixes and regressions routinely land in threads whose titles
+never mention the model. Every review MUST also:
+
+1. Sweep the newest topics in the DGX Spark boards (categories `721` main +
+   `723` projects) since the last review date — open every thread not previously
+   reviewed and skim for recipe relevance:
+   `GET .../721.json?order=created` / `GET .../723.json?order=created`.
+2. Run multiple full-text searches with varied terms (model name, method names,
+   backend names, error signatures) and an `after:<last-review-date>` filter.
+3. Check forum-wide latest posts (`GET /posts.json`) for replies to any tracked
+   thread.
+
+Pull each promising thread's newest posts (paginate `/t/<id>.json` until the
+posts are older than the last check; each post has `post_number`/`created_at`).
+Look for: new image tags, new patches, new tuning knobs with measured numbers,
+regression reports that could hit this cluster's config.
 
 ### 3. Upstream GitHub pass
 

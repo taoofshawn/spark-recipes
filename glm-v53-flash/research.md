@@ -214,6 +214,31 @@ silent-death caution from 381703 is unresolved); (3) tonyd2wild / peer recipes
 shipping 512K with vision intact; (4) our own >32k prefill test results. When
 any of these land, re-run the numbers and reconsider.
 
+**2026-08-29 15:45Z sync — TP4 KV-pool breakthrough (same day, watch for TP2 port).**
+tonyd2wild's 4-node repo (`GLM-5.3-Flash-NVFP4-1M-KV-4x-DGX-Spark`, commit
+`d26be7df` 15:12Z) raised its default KV pin 16 → 24 GiB/rank = 3,895,606 fp8
+tokens (+54.8%), gate-passed (2 deep decodes @ ~41K ctx, 3× concurrent 32,879-tok
+prefills, vision, /health 200 throughout; head-rank residual 15 GiB). The key
+discovery: the long-standing "phantom KV backing" above 16 GiB/rank was **the
+page cache** — a *threshold-triggered* flusher can sit below its threshold and
+still starve the NVRM allocator; an **unconditional flusher, running for the
+entire boot on every node, started before the launcher** took the same 24 GiB
+pin from boot-death to gate-pass. Our cluster runs the ritual flusher +
+`cache_flusher.sh` but NOT an unconditional whole-boot flusher — this is the
+missing piece for any KV-pin raise (our standing 5.5 GiB upgrade idea, and any
+future 500K push).
+
+Same repo, `37385c56` (08-27): fp8 vs NVFP4 KV head-to-head at equal 32 GiB/rank
+TP4 — NVFP4 KV 6.65M tok vs fp8 5.03M (1.32×) but decode ~37 vs ~55 tok/s
+(fp8 ~1.5× faster) and prefill 1449 vs 3530 tok/s. Confirms our earlier read:
+NVFP4 KV trades speed for density; fp8 stays our lane.
+
+TP2 repo unchanged (no-pin guidance stands for TP2; the TP2 head-rank worker
+4–5 GiB KV-headroom asymmetry remains unexplained upstream). Relevance to our
+500K-with-vision goal: the unconditional flusher removes one blocker (bigger
+safe pin without phantom backing), but the ~15.7 GiB mm-processor cost still
+binds at TP2 — vision remains the gating constraint, as documented above.
+
 
 ## 1. Why NVFP4 (and not the official BF16/FP8 releases)
 

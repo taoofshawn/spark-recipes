@@ -305,6 +305,16 @@ Discourse JSON API: `https://forums.developer.nvidia.com/<path>.json`.
 - **eugr/spark-vllm-docker / styles01/sparkrun-recipes / brainchillz:** no
   GLM-5.3 sparkrun YAML exists — a future sparkrun port would be net-new
   (kingjones30 proves the eugr-framework + mods path; convert this compose).
+- **Entrpi/glm-5.3-flash-exl3-2x-spark** — EXL3 4bpw + DFlash2 lane (not
+  vLLM/NVFP4): one-shot installer, 33–72 tok/s c1, 900k+ context, vision.
+  Different quant/engine stack, but useful for DFlash2 tuning ideas,
+  long-context tricks, and cross-checking acceptance/throughput numbers.
+- **MiaAI-Lab/GLM-5.3-Flash-EXL3-2x-DGX-Sparks** — sibling EXL3 2× Spark
+  recipe; cross-check for the EXL3 lane and any shared drafter/tooling.
+- **tonyd2wild/GLM-5.3-Flash-NVFP4-DFlash2-2x-DGX-Spark** — tonyd2wild's
+  NVFP4 + DFlash2 follow-up to the base NVFP4 repo (the DFlash2-on-NVFP4
+  lineage closest to our `DFLASH2=1` lane). Watch for new patches, DFlash2
+  fixes, KV-pin changes, and issue-report patterns that hit our config.
 
 ### 4.3 Images & checkpoints
 - **Docker Hub `vllm/vllm-openai`** — `glm53-flash-*` tags. All currently date

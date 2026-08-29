@@ -101,7 +101,96 @@ RedHatAI publishes evals (GPQA-D 90.57, AIME25 86.67) while LibertAIDAI
 publishes round-trip cosine 0.99665 + every GB10 pitfall. Full report:
 `/tmp/redhatai-report.md` (2026-08-28 snapshot).
 
----
+
+## 0a. 2026-08-29 upstream review — pins moved, KV-pin philosophy, EXL3 lane (review pass)
+
+Full review pass against all sources: tonyd2wild DFlash2 repo (new), two EXL3-lane
+repos (new to watch list), NVIDIA forum general sweep, Docker Hub, HF revisions.
+**No invariant broken; no emergency.** Findings ranked:
+
+### Checkpoint pin `aa28e1f5` has 3 newer upstream commits (RE-PIN CANDIDATE)
+`LibertAIDAI/GLM-5.3-Flash-NVFP4` HEAD is `357b45cc` (2026-08-28T16:52Z):
+1. `b2abefa1` — documents the **ModelOpt NVFP4 MoE activation-scale trap**
+   (vllm#54189): weight-only checkpoint + uninitialized `input_scale` ⇒ alpha = 0
+   ⇒ degenerate one-token output with NO error. **Our `--moe-backend marlin` does
+   not read the activation scale — we are not in the failure path** (card says so
+   explicitly). Our measured 74% acceptance corroborates a healthy lane.
+2. `24c04b86` — **`--reasoning-parser glm45` is SGLang-only; vLLM needs
+   `deepseek_r1`** (vLLM's glm45 alias expects prompt-side `-describedby`
+   mismatch and silently discards replies). Our compose ships
+   `REASONING_PARSER=glm45`, but our measured load tests show correct
+   content/reasoning split — our 10-patch image diverges from stock vLLM. VERIFY
+   on next bounce (one curl with `reasoning_content` in the response) before
+   changing; if broken, switch to `deepseek_r1`.
+3. `357b45cc` — **weight change**: adds per-expert `input_scale=1.0` (the
+   vllm#54189 fix, for flashinfer_cutlass users). Marlin users unaffected.
+   Re-pin candidate for the flashinfer_cutlass option only; marlin lane can
+   stay on `aa28e1f5` until a re-bounce.
+
+### Drafter pin `7d74cdd` has a newer "Checkpoint update" (RE-PIN CANDIDATE)
+`incoai/GLM-5.3-Flash-DFlash2` HEAD `dc77ff1c` (2026-08-28T21:37Z, "Checkpoint
+update") — file-level diff not exposed by the HF API; same single-safetensors
+shape (1.17B BF16). Treat as weight-or-card unknown. **Re-pin candidate
+requiring acceptance re-test** ( Drafter sha in tonyd2wild issue #7 was
+`8931dc52...` — different prefix, possibly the dc77ff1c artifact; unresolved).
+
+### KV-pin philosophy: upstream now says DO NOT PIN (WATCH, experiment candidate)
+tonyd2wild withdrew the 7 GiB ceiling AND now recommends never pinning
+`--kv-cache-memory` at all: pinned pools never subtract measured activation peak
+(`gpu_worker.py:475-495`), so the first long prompt can OOM the engine. Profiler-
+sized pool at our 262K ctx = **581,040 tokens** with DFlash2 (vs our 3 GiB pin).
+Our 3 GiB pin is deliberately conservative (leaves activation headroom) and
+issue #7 shows pin value does not affect acceptance. **Document as deliberate
+deviation; candidate experiment: drop the pin, re-measure pool size + 28K-prompt
+stability.** Corroborating: forum 381755 (743B TP4) still recommends pinning for
+deterministic boots — practice is split, not settled.
+
+### Forum general sweep (new threads since 08-27)
+- **381703** (SGLang-path DFlash2): same model+drafter on SGLang; 29.4 C1 bf16 KV;
+  fp8 KV now works via sglang PR #36904; mamba-cache cap fix → 83.5 aggregate @ c12.
+  **Caution for us: silent worker-node death on >~32k-token prefills (no
+  traceback, rank just dies)** — treat >32k prompts as unverified on our lane
+  until tested. Watch.
+- **381541** (closest peer: NVFP4 TP2 compose, same day-0 image + patch chain):
+  512K ctx + FP8 KV + MTP-4, 9 GiB pin, 440K needle-exact. Confirms worker-first,
+  `--language-model-only` is load-bearing at 512K (mm processor adds ~15.7 GiB),
+  sparse-MLA indexer guard needed at 512K, batched-tokens 8192→4096 at those
+  shapes. Watch (applies if we ever raise context).
+- **381755** (GLM-5.3 743B TP4): drop_caches-eats-UMA corroboration, degraded
+  clocks after crash (−25% TP4), DFlash2 next. Watch.
+- 381534 (TP3), 381543 (TP4 FP8), 381350 (23 tok/s NVFP4 measurement matches ours):
+  corroborations, no action.
+
+### EXL3-lane repos (new watch-list entries; quant tricks NOT transferable)
+- **Entrpi/glm-5.3-flash-exl3-2x-spark**: 33-35 prose / 72 structured c1;
+  per-workload acceptance tables; memlog.sh 1 Hz memory-floor sampler (adopt:
+  cheap, guards our KV floor); MTP-4 fallback rollback lane (watch); relaunch
+  ordering fix confirms worker-first.
+- **MiaAI-Lab/GLM-5.3-Flash-EXL3-2x-DGX-Sparks**: 62.9 structured / 26.9 prose;
+  **correctness canaries for DFlash2 lanes**: grammar/FSM stalls under concurrent
+  structured output (#19), tool-call blank-args under concurrent DFlash2+prefix
+  caching (#10, solo not reproducible), TRITON_ATTN acceptance collapse (keep
+  FLASH_ATTN for draft attention — our config already does), spec-window
+  reasoning-gate race. **Wide-propose/narrow-verify (7 propose / 3 verify) =
+  +21.6% prose** (PR #12; needs vLLM upstream PRs #52559/#53542). Watch.
+- KLD panel (brandonmusic HF discussion): NVFP4 0.0605 vs EXL3-4bpw 0.0246 vs
+  FP8 0.0206 — only quant-quality datapoint suggesting an NVFP4 gap. Watch.
+
+### Image/HF status
+- Docker Hub `vllm/vllm-openai`: **no new glm53-flash tags** since 2026-08-26;
+  base digest `905c0293` unchanged. Nightly churn only. No action.
+- tonyd2wild image is now also on GHCR (`ghcr.io/tonyd2wild/vllm-glm53-flash:sm121-v11-dflash2`,
+  `4def0ef6...`) — reference only; our local build matches its base.
+
+**Actions from this pass:** (1) ~~verify reasoning-parser behavior on next
+bounce~~ **VERIFIED 2026-08-29 on the live server**: `glm45` on our patched
+image splits correctly under DFlash2 (`reasoning` populated, clean `content`,
+41 ct) — the card's stock-vLLM failure mode does not apply to our 10-patch
+image; keep `glm45`. (2) drafter re-pin + acceptance re-test when convenient;
+(3) checkpoint re-pin only if we ever leave marlin; (4) document 3-GiB KV pin
+as deliberate deviation from upstream's no-pin guidance; (5) long-prompt
+(>32k) test before trusting long-context serving. None block current service.
+
 
 ## 1. Why NVFP4 (and not the official BF16/FP8 releases)
 

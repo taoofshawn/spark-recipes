@@ -77,7 +77,7 @@ services:
       PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
       # ---- model / serve ----
       MODEL_ID: LibertAIDAI/GLM-5.3-Flash-NVFP4
-      MODEL_REVISION: aa28e1f54130286c95fee10d0705c74ce8743734
+      MODEL_REVISION: 357b45cc73a07a541cede88861f7736c9487ebf7
       SERVED_MODEL_NAME: glm-5.3-flash
       PORT: "${PORT:-4000}"
       TP_SIZE: "2"
@@ -129,7 +129,7 @@ services:
       # and die on the first long prompt. Profiler-sized: 581,040 tokens
       # (DFlash2) / 965,166 (no drafter) @ 262K.
       DFLASH2: "${DFLASH2:-0}"
-      DFLASH2_REVISION: "${DFLASH2_REVISION:-7d74cdd881ed7e32c31175984a67823127b66cfe}"
+      DFLASH2_REVISION: "${DFLASH2_REVISION:-dc77ff1c99eeb2df044ee3d4f0094eb033fee410}"
       # Use the vendored chat template that honors enable_thinking (upstream
       # commit 53912b4). 0 = fall back to the checkpoint's stock template,
       # which IGNORES the flag (thinking always on).

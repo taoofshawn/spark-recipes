@@ -100,7 +100,35 @@ datacenter-only); format mismatch means an untested load path on sm_121.
 RedHatAI publishes evals (GPQA-D 90.57, AIME25 86.67) while LibertAIDAI
 publishes round-trip cosine 0.99665 + every GB10 pitfall. Full report:
 `/tmp/redhatai-report.md` (2026-08-28 snapshot).
+**⚠️ SUPERSEDED 2026-08-30 — see section 0b: ModelOpt builds emit corrupted
+token IDs (vllm#54150); RedHatAI is now the pinned checkpoint.**
 
+
+## 0b. 2026-08-30 checkpoint switch — RedHatAI compressed-tensors (adopted, research-only)
+
+Upstream tonyd2wild switched the recipe's default checkpoint from
+`LibertAIDAI/GLM-5.3-Flash-NVFP4` (ModelOpt weight-only W4A16) to
+`RedHatAI/GLM-5.3-Flash-NVFP4` (compressed-tensors W4A4) in commits
+`7497e96b` + `5a4df199` (2026-08-29/30). Reason: **ModelOpt NVFP4 builds of
+GLM-5.3-Flash emit intermittent corrupted token IDs** —
+[vllm#54150](https://github.com/vllm-project/vllm/issues/54150) (first seen
+SM120), confirmed on **2× GB10 / SM121 TP2 DFlash2 — our exact lane — by
+ajclark in upstream issue #10**. The failure is quiet (HTTP 200, normal
+throughput, English mostly fine) but a corrupted token inside a tool-call
+block desyncs the parser and can spiral into repetition lock. The
+compressed-tensors conversion of the same model is clean from the same image.
+
+**Adopted 2026-08-30:** pin `RedHatAI/GLM-5.3-Flash-NVFP4` rev `36c184c6`.
+Drop-in: same flags (`--moe-backend marlin`, fp8 KV, DFlash2 k=7); marlin
+dequantizes to bf16 and never consumes the activation scale, so the W4A16→W4A4
+difference likely costs little on our backend. Trade-offs: expect a few points
+lower on hard reasoning; RedHatAI ships `chat_template.jinja` but NOT
+`chat_template_mm.jinja` (our `TEMPLATE_FIX` layer covers it); ~2× faster load
+(11 shards vs 120); 184 GiB. This **supersedes the 08-28 "keep LibertAIDAI"
+verdict above**, which was written before the corruption evidence existed.
+**Not yet measured here** — next bounce must verify: boot + `/v1/models`, the
+standing `glm45` vs `deepseek_r1` reasoning-parser item, and a tool-call
+stress test to confirm the corruption class is gone.
 
 ## 0a. 2026-08-29 upstream review — pins moved, KV-pin philosophy, EXL3 lane (review pass)
 

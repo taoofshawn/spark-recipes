@@ -20,7 +20,7 @@ model on GB10 — with eight SM121 kernel patches baked into a local image
 |---|---|
 | Engine | vLLM day-0 image `vllm/vllm-openai:glm53-flash-arm64-cu130` (digest-pinned) |
 | Image | locally built `glm53-nvfp4-sm121:local` (10 patch layers, see `patches/`) |
-| Checkpoint | `LibertAIDAI/GLM-5.3-Flash-NVFP4` (194.6 GB; revision pinned) |
+| Checkpoint | `RedHatAI/GLM-5.3-Flash-NVFP4` (184 GiB compressed-tensors W4A4; revision pinned — switched from LibertAIDAI 2026-08-30, see audit trail) |
 | KV cache | `fp8_e4m3` (patched NoPE-MLA path) |
 | KV pool | 507K tokens @ 4.14 GiB/rank (default, 3/3 reliable) · 672K @ 5.5 GiB (local-weights record) |
 | Spec decode | MTP 3 default · **DFlash2 opt-in** (`DFLASH2=1`, 2.15x upstream — see below; non-commercial drafter license) |
@@ -44,8 +44,8 @@ tok/s aggregate @ C5, zero failures.
 cd ~/code/spark-recipes/glm-v53-flash/
 docker compose --env-file .env --env-file .env.node0 config -q   # sanity on each node
 
-# Download the checkpoint (195 GB) on BOTH nodes — serving is offline:
-hf download LibertAIDAI/GLM-5.3-Flash-NVFP4 --revision aa28e1f54130286c95fee10d0705c74ce8743734
+# Download the checkpoint (184 GiB) on BOTH nodes — serving is offline:
+hf download RedHatAI/GLM-5.3-Flash-NVFP4 --revision 36c184c6cda000a481711306df5adde42f63321a
 ```
 
 The first `docker compose up` builds the patched image on each node. The build
@@ -230,6 +230,25 @@ research.md             # research notes + future-work handoff for agents
 
 # Audit trail
 
+- **2026-08-30 — checkpoint switched: `RedHatAI/GLM-5.3-Flash-NVFP4` (W4A4
+  compressed-tensors) replaces `LibertAIDAI/GLM-5.3-Flash-NVFP4` (ModelOpt
+  weight-only).** Upstream made the same switch (2026-08-29/30, commits
+  `7497e96b`/`5a4df199`) after ajclark reported in upstream issue #10 that
+  ModelOpt NVFP4 builds emit **intermittent corrupted token IDs** — silent
+  until a corrupted token lands inside a tool-call block and desyncs the
+  parser — confirmed on 2× GB10 / SM121 TP2 DFlash2, i.e. our exact lane;
+  RedHatAI of the same model is clean (vllm#54150, originally SM120). This
+  supersedes the 2026-08-28 "keep LibertAIDAI" quant verdict, which predates
+  the corruption evidence. Swap is drop-in: same flags (`--moe-backend marlin`,
+  fp8 KV, DFlash2 k=7), rev pinned `36c184c6`. Trade-off: activations also
+  quantized to FP4 (W4A4) — expect a few points lower on hard reasoning — and
+  RedHatAI ships `chat_template.jinja` but NOT `chat_template_mm.jinja`; our
+  `TEMPLATE_FIX` layer already supplies the vision template via
+  `--chat-template`. Bonus: ~2× faster load (11 shards vs 120). **NOT yet
+  measured here** — on the next bounce: verify boot + `/v1/models`, confirm
+  `reasoning_content` split (the standing `glm45` vs `deepseek_r1` VERIFY
+  item), and rerun a tool-call stress test (`tools/load_test_glm.py`) to
+  confirm the corruption class is gone.
 - **2026-08-28 — upstream KV-ceiling correction adopted (drop 7 GiB pin).**
   Upstream withdrew its published 7 GiB / 727,583-token DFlash2 ceiling
   (commit 53853387): pinned `--kv-cache-memory` pools skip the measured

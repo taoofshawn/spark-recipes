@@ -19,7 +19,8 @@ services:
     entrypoint: []
     volumes:
       # Model weights — served OFFLINE from the HF cache on both nodes
-      # (~195 GB LibertAIDAI/GLM-5.3-Flash-NVFP4 snapshot). Local weights on
+      # (~184 GiB RedHatAI/GLM-5.3-Flash-NVFP4 compressed-tensors snapshot).
+      # Local weights on
       # BOTH ranks is required for the 672K-token KV pool (see .env notes).
       - ${HF_CACHE:-/home/sdrew/.cache/huggingface}:/cache/huggingface
       # NODE-LOCAL JIT/compile caches — MUST stay on local disk, never a
@@ -76,8 +77,14 @@ services:
       # (tonyd2wild GLM + this repo's DSv4 tonyd2wild recipe both use it).
       PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
       # ---- model / serve ----
-      MODEL_ID: LibertAIDAI/GLM-5.3-Flash-NVFP4
-      MODEL_REVISION: 357b45cc73a07a541cede88861f7736c9487ebf7
+      # Checkpoint switched 2026-08-30: the ModelOpt weight-only builds
+      # (LibertAIDAI, incl. abliterated) emit intermittent corrupted token
+      # IDs — silent until a corrupted token lands in a tool-call block and
+      # desyncs the parser (vllm#54150, confirmed on 2x GB10 / SM121 TP2 by
+      # upstream issue #10). RedHatAI compressed-tensors of the same model is
+      # clean; same flags (marlin, fp8 KV, DFlash2 k=7), drop-in swap.
+      MODEL_ID: RedHatAI/GLM-5.3-Flash-NVFP4
+      MODEL_REVISION: 36c184c6cda000a481711306df5adde42f63321a
       SERVED_MODEL_NAME: glm-5.3-flash
       PORT: "${PORT:-4000}"
       TP_SIZE: "2"
@@ -196,7 +203,7 @@ services:
         fi
 
         # Resolve the model snapshot from the HF cache (offline serving).
-        SNAP_ROOT="/cache/huggingface/hub/models--LibertAIDAI--GLM-5.3-Flash-NVFP4/snapshots"
+        SNAP_ROOT="/cache/huggingface/hub/models--RedHatAI--GLM-5.3-Flash-NVFP4/snapshots"
         if [ -n "$${MODEL_REVISION:-}" ] && [ -d "$${SNAP_ROOT}/$${MODEL_REVISION}" ]; then
           MODEL_DIR="$${SNAP_ROOT}/$${MODEL_REVISION}"
         else
@@ -206,8 +213,8 @@ services:
         fi
         MODEL_DIR="$${MODEL_DIR%/}"
         test -f "$${MODEL_DIR}/config.json" || {
-          echo "FATAL: LibertAIDAI/GLM-5.3-Flash-NVFP4 snapshot not found under $${SNAP_ROOT}." >&2
-          echo "  Download it on BOTH nodes: hf download LibertAIDAI/GLM-5.3-Flash-NVFP4 --revision $${MODEL_REVISION:-main}" >&2
+          echo "FATAL: RedHatAI/GLM-5.3-Flash-NVFP4 snapshot not found under $${SNAP_ROOT}." >&2
+          echo "  Download it on BOTH nodes: hf download RedHatAI/GLM-5.3-Flash-NVFP4 --revision $${MODEL_REVISION:-main}" >&2
           exit 1
         }
         echo "[glm53] model dir: $${MODEL_DIR}"

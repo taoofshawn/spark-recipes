@@ -20,8 +20,8 @@ services:
     volumes:
       # Model weights — served OFFLINE from the HF cache on both nodes
       # (~184 GiB RedHatAI/GLM-5.3-Flash-NVFP4 compressed-tensors snapshot).
-      # Local weights on
-      # BOTH ranks is required for the 672K-token KV pool (see .env notes).
+      # Local weights on BOTH ranks is required for the 672K-token KV pool
+      # (see .env notes).
       - ${HF_CACHE:-/home/sdrew/.cache/huggingface}:/cache/huggingface
       # NODE-LOCAL JIT/compile caches — MUST stay on local disk, never a
       # shared/NFS mount (same rule as the DeepSeek recipes' /vllm-cache).

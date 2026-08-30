@@ -14,7 +14,7 @@ plain SlidingWindowSpec layers, so the whole model drops to the generic
 uniform-page path -- which provably cannot serve GLM-5.3-Flash: page
 unification rescales the kpool tail's block away from its pool size and boot
 dies at warmup's `assert tail_kv_cache.shape[2] == pool_size` (see
-~/lane1_fail6.log / ~/lane1_fail7.log on Reddie).
+debug logs).
 
 DESIGN
 ------

@@ -16,6 +16,7 @@ cluster, built from [tonyd2wild's DSpark stack](https://github.com/tonyd2wild/De
 | `max_cudagraph_capture_size` | `seqs×(k+1)` = 36 |
 | `gpu_memory_utilization` | 0.78 (0.80 "boots-then-dies" on this stack) |
 | sampling | `--generation-config vllm`, no override |
+| tokenizer | `deepseek_v4` mode with `fastokens` shim (`VLLM_USE_FASTOKENS=1`) |
 | thinking default | `true` (server `reasoning_effort=high`; clients can override per request) |
 | context length | 1M (1048576) |
 | serve | port `4000`, served model `deepseek-v4-flash` |
@@ -31,6 +32,51 @@ cluster, built from [tonyd2wild's DSpark stack](https://github.com/tonyd2wild/De
 
 _Dev branch for improving accuracy, speed, and tool-calling. Nothing here changes
 the native backend wiring; it adds two overlays + one flag._
+
+## 2026-08-23 — fastokens shim (VLLM_USE_FASTOKENS=1)
+
+Adopted the crusoecloud `fastokens` Rust BPE backend (10x+ faster tokenization,
+TTFT win on long prompts) behind the existing-but-unconsumed
+`VLLM_USE_FASTOKENS` env var that the vendored `envs.py` already defines.
+
+- **Why a runtime hook:** this image is a vLLM 0.21.x fork, and 0.21 only ships
+  `--tokenizer-mode fastokens` — which would REPLACE the `deepseek_v4` mode and
+  drop the reasoning-effort / tool-arg overlays this recipe depends on. vLLM's
+  env-var path (`VLLM_USE_FASTOKENS=1` → `fastokens.patch_transformers()`,
+  keeping `deepseek_v4` intact) only exists on vLLM main. So the recipe applies
+  the same process-global, idempotent patch at interpreter start via a
+  bind-mounted `sitecustomize.py` (`./sitecustomize.py` → `/opt/env/.../site-packages/`).
+  The existing `detokenizer.py` overlay already looks up
+  `tokenizers.decoders.DecodeStream` on the module, so the shim's DecodeStream
+  rebind is honored without changes.
+- **Package install:** `fastokens>=0.2.0` is pip-installed at boot when the env
+  var is on (kept out of the vendored upstream Dockerfile; hard-fails if the
+  install fails so the shim is never silently skipped). Opt out:
+  `VLLM_USE_FASTOKENS=0`. Package verified to have `manylinux_2_28_aarch64`
+  wheels (works on GB10).
+- **Validation:** `fastokens.patch_transformers()` smoke-tested against
+  transformers 4.57.6 (the version range in this image). Runtime verification
+  on the cluster: boot log shows `[fastokens] ...` and no
+  `Error in sitecustomize`; tokenize/TTFT delta at large context not yet
+  measured — benchmark before/after with the repo's usual curl/jq harness.
+
+## 2026-08-23 (later) — fastokens hook refinement + inert env-var cleanup
+
+Follow-ups from the first cluster boot with `VLLM_USE_FASTOKENS=1`:
+
+- **`sitecustomize.py` now warns instead of raising.** The strict ImportError
+  printed `Error in sitecustomize` once per first boot — the compose boot
+  script's "is fastokens installed?" probe runs before the package exists.
+  `sitecustomize` runs in every python process, so it is the wrong layer for a
+  fatal guard; the authoritative guard stays in the compose boot script (it
+  installs `fastokens` and hard-fails the boot if the install fails). A
+  missing/too-old package now logs a greppable `[fastokens] WARNING` and the
+  process continues without the shim.
+- **Dropped `VLLM_TRITON_MLA_SPARSE` and `VLLM_SKIP_INIT_MEMORY_CHECK` from the
+  compose env.** Both logged `Unknown vLLM environment variable` at boot and
+  have no references anywhere in this image's vLLM code — they were inert
+  leftovers from an older/newer upstream config. (They remain in the vendored
+  `upstream/` files, which are untouched.)
 
 ## 2026-08-21 — default thinking on + reasoning_effort=high
 
@@ -301,6 +347,7 @@ never benchmark straight after boot or after a quiet period.
 | `MAX_MODEL_LEN` | 1048576 | 1M is the true YaRN ceiling |
 | `THINKING` | true | server `thinking` default; clients can override per request |
 | `REASONING_EFFORT` | high | server `reasoning_effort` default (low/high/max; high is the agentic sweet spot) |
+| `VLLM_USE_FASTOKENS` | 1 | fastokens shim (10x+ faster tokenize, TTFT win at large context); installed at boot if missing |
 | `PORT` | 4000 | serve port |
 
 `MAX_NUM_BATCHED_TOKENS=8192` and `max-cudagraph-capture-size=seqs×(k+1)` are

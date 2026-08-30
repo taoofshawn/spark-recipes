@@ -51,7 +51,14 @@ services:
       # (truthy in JS), so agent clients route text into the tool-call branch and
       # drop the answer. DeepSeekV4ToolParser subclasses this V3.2 parser, so this
       # overlay fixes both.
-      - ./deepseekv32_tool_parser.py:/opt/env/lib/python3.12/site-packages/vllm/tool_parsers/deepseekv32_tool_parser.py:ro
+      # Patch A (upstream campaign-2026-08-20): drafter-private cudagraph capture
+      # sizes — fixes a genuine fork bug where a batch-1 DSpark draft ran padded
+      # to 20 draft tokens/step instead of 5 (shared target capture sizes rounded
+      # to multiples of 1+k). +3.0% single-stream decode, quality probes
+      # byte-identical. Env-gated: VLLM_DSPARK_DRAFT_CAPTURE_SIZES=1 enables;
+      # default off = byte-identical to stock. Costs ~2.5 GB at profiling — pair
+      # with GPU_MEM 0.78 (see campaign STACK).
+      - ./patches/A-drafter-sizes/v1/spec_decode/dspark_proposer.py:/opt/env/lib/python3.12/site-packages/vllm/v1/spec_decode/dspark_proposer.py:ro
     deploy:
       resources:
         reservations:
@@ -117,7 +124,11 @@ services:
       VLLM_DSPARK_CONFIDENCE_SCHEDULER: off
       VLLM_DSPARK_LOCAL_ARGMAX: "1"
       VLLM_DSPARK_REPLICATE_MARKOV_W1: "1"
-      VLLM_DSPARK_FUSED_MARKOV_ARGMAX: "0"
+      # Fused-Markov argmax enabled + Patch A (campaign-2026-08-20 STACK winner):
+      # +5-9% c4 aggregate (one Triton kernel per draft pos vs three), neutral
+      # single-stream, quality 6/6 byte-identical. Costs ~1.5 GB at profiling.
+      VLLM_DSPARK_FUSED_MARKOV_ARGMAX: "1"
+      VLLM_DSPARK_DRAFT_CAPTURE_SIZES: "1"
       VLLM_DSPARK_GPU_REJECTED_CONTEXT_MASK: "1"
       VLLM_DSPARK_REFERENCE_KV_QUANT_DEQUANT: "0"
       VLLM_DSPARK_HARDWARE_SCHEDULER_EARLY_STOP: "1"
@@ -136,14 +147,15 @@ services:
       MODEL_REVISION: 9e165c30e2704aec5d9d593cce3eebd58bbef1cb
       SERVED_MODEL_NAME: deepseek-v4-flash
       PORT: "${PORT:-4000}"
-      GPU_MEM: 0.83
+      # Campaign-2026-08-20 STACK winner (Patch A + fused-Markov) validated at
+      # gmu 0.78 / seq 6 — README-validated lane; 0.80+ is the flagged
+      # boots-then-dies edge; Patch A costs ~2.5 GB headroom. ~1.38M-token KV
+      # pool. Re-tune upward (0.80 / seq 12) only after a gated bring-up.
+      GPU_MEM: 0.78
       MTP_NUM_TOKENS: 5
       TP_SIZE: 2
       MAX_MODEL_LEN: 1048576
-      # Upstream-validated C12 concurrency lane (GPU 0.85 / 12 slots): raises KV
-      # capacity well above 1M and improves aggregate throughput. Verify on this
-      # cluster — the prior verified lane was 0.78 / 6.
-      MAX_NUM_SEQS: 12
+      MAX_NUM_SEQS: 6
       MAX_NUM_BATCHED_TOKENS: 8192
       KV_CACHE_DTYPE: nvfp4_ds_mla
       # fastokens shim: swap the HF fast-tokenizer Rust BPE backend for the

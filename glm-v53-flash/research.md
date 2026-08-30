@@ -130,6 +130,34 @@ verdict above**, which was written before the corruption evidence existed.
 standing `glm45` vs `deepseek_r1` reasoning-parser item, and a tool-call
 stress test to confirm the corruption class is gone.
 
+**2026-08-30 recipe-update verification pass (second agent review).** Every
+checkable claim in the switch verified against sources: upstream commits
+`7497e96b`/`5a4df199` exist and match; vllm#54150 title/contents match
+(ModelOpt NVFP4 emits invalid-UTF-8 byte tokens on SM120, compressed-tensors
+clean); upstream issue #10 verified — filed by ajclark, with the 2× GB10
+TP2 DFlash2 A/B (identical image/flags/KV pool; LibertAIDAI 3–6 U+FFFD per
+run vs RedHatAI 0/0/0) contributed by **todoriri** in the comments (the
+attribution in the audit trail above was ajclark's report + todoriri's
+measurement). RedHatAI rev `36c184c6` live on HF (lastModified 2026-08-28,
+compressed-tensors tag, 10 model shards + `model_mtp.safetensors`);
+`chat_template_mm.jinja` indeed absent from the repo (only
+`chat_template.jinja`) and our `patches/chat_template_mm.jinja` →
+`/opt/glm53/chat_template_mm.jinja` COPY + `--chat-template` wiring covers
+the vision template (upstream README warns vision 500s without it).
+`--moe-backend marlin` dequantizes to bf16 so W4A4 vs W4A16 activations
+should not bite on our backend — matches upstream's "drop-in" claim.
+Compose/docs leftovers: none (all LibertAIDAI refs that remain are
+historical context). Attribution note recorded; no code changes needed.
+
+Also this pass: upstream #11/#12 (tmooch, closed/superseded-open PR)
+reports TP2 DFlash2 tuning — KV pin 3→6 GiB (678,661-token pool, kills 6
+preemptions), k=7→5, `--max-num-batched-tokens` 8192 (C6 aggregate 47.7→
+60.6→64.9 tok/s, −26% wall) with a robust 84-request harness. **Watch, not
+adopted**: unmerged upstream PR; k=5 contradicts our validated k=7 config;
+KV pin contradicts our TP2 no-pin guidance; batched-tokens 8192 contradicts
+our agent-serving 2048 profile. Revisit if tonyd2wild merges it. Forum
+general sweep: no new GLM-relevant topics since 2026-08-29 15:45Z review.
+
 ## 0a. 2026-08-29 upstream review — pins moved, KV-pin philosophy, EXL3 lane (review pass)
 
 Full review pass against all sources: tonyd2wild DFlash2 repo (new), two EXL3-lane

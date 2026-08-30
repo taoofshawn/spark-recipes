@@ -160,7 +160,14 @@ services:
       # See Tool-calling notes in README.
       REASONING_EFFORT: "${REASONING_EFFORT:-high}"
       TOOL_CALL_PARSER: "${TOOL_CALL_PARSER:-glm47}"
-      REASONING_PARSER: "${REASONING_PARSER:-glm45}"
+      # Sampling defaults — explicit and recipe-owned, matching the other
+      # recipes (aiden/tonyd2wild: temp 1.0 / top_p 0.95). The RedHatAI
+      # checkpoint's generation_config.json ships ONLY temperature (no
+      # top_p), so without --generation-config/--override-generation-config
+      # top_p silently falls back to vLLM's 1.0 (the LibertAIDAI checkpoint
+      # shipped 0.95).
+      TEMPERATURE: "${TEMPERATURE:-1.0}"
+      TOP_P: "${TOP_P:-0.95}"
 
       NODE_RANK: "${NODE_RANK}"
       HEADLESS: "${HEADLESS}"
@@ -231,7 +238,13 @@ services:
         if [ "$${TEMPLATE_FIX:-1}" = "1" ]; then
           EXTRA_ARGS+=(--chat-template /opt/glm53/chat_template_mm.jinja)
         fi
-        THINK_ARGS="{\"enable_thinking\": $${THINKING:-false}, \"reasoning_effort\": \"$${REASONING_EFFORT:-high}\"}"
+        # Sampling: explicit recipe-owned defaults (temp 1.0 / top_p 0.95 —
+        # same values as the other recipes). --generation-config vllm makes
+        # vLLM ignore the checkpoint's generation_config.json for SAMPLING
+        # only; special tokens (multi-EOS) still load from it. The RedHatAI
+        # checkpoint ships only temperature, so top_p would otherwise drift
+        # to vLLM's 1.0.
+        GEN_CFG="{\"temperature\": $${TEMPERATURE:-1.0}, \"top_p\": $${TOP_P:-0.95}}"
 
         # Spec-decode selection: MTP (default, license-free) or DFlash2
         # (DFLASH2=1; 2.15x single-stream upstream, NON-COMMERCIAL drafter).
@@ -283,7 +296,8 @@ services:
           "$${EXTRA_ARGS[@]}" \
           --tool-call-parser "$${TOOL_CALL_PARSER:-glm47}" --enable-auto-tool-choice \
           --reasoning-parser "$${REASONING_PARSER:-glm45}" \
-          --default-chat-template-kwargs "$${THINK_ARGS}" \
+          --generation-config vllm \
+          --override-generation-config "$${GEN_CFG}" \
           --distributed-executor-backend mp \
           --nnodes 2 --node-rank "$${NODE_RANK}" \
           --master-addr "$${MASTER_ADDR}" --master-port "$${MASTER_PORT:-25000}" \

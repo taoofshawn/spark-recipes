@@ -28,10 +28,41 @@ cluster, built from [tonyd2wild's DSpark stack](https://github.com/tonyd2wild/De
 
 ---
 
-# 2026-08 improvements (this branch - audit trail)
+## 2026-08-30 — Patch A + fused-Markov (campaign-2026-08-20 STACK winner)
 
-_Dev branch for improving accuracy, speed, and tool-calling. Nothing here changes
-the native backend wiring; it adds two overlays + one flag._
+Adopted the upstream DSpark tuning campaign's final config:
+`VLLM_DSPARK_DRAFT_CAPTURE_SIZES=1` (Patch A) + `VLLM_DSPARK_FUSED_MARKOV_ARGMAX=1`
+at `gpu_memory_utilization 0.78` / `max_num_seqs 6`.
+
+- **Patch A** is a genuine fork bug fix, not a knob: the DSpark proposer shared
+  the target model's cudagraph capture sizes, which under spec-decode round to
+  multiples of `1+k` (k=5 → 6/12/18), so a batch-1 draft dispatched on the
+  6-bucket, clipped to the 4 draft rows, and the draft MoE processed **20 draft
+  tokens/step for a single stream instead of 5**. Patch A installs a
+  drafter-private capture-size view `{1,2,4}` (env-gated, default off = byte
+  identical to stock). **+3.0% single-stream decode** (chat +6.4%, code +6.5%),
+  every stable quality probe byte-identical (6/6 MATCH, garble 30/30).
+- **Fused-Markov argmax** (`VLLM_DSPARK_FUSED_MARKOV_ARGMAX=1`): one Triton
+  kernel per draft position instead of three. Neutral single-stream, **+5-9% c4
+  aggregate**. Quality intact.
+- **KV/memory accounting** (campaign): baseline 0.76 = 1.32M tokens; STACK
+  (Patch A + fused-Markov) at 0.78 = **1.38M tokens**; 0.80 alone = 1.79M but is
+  the flagged physical edge (driver OOM retries at profiling; this recipe's README
+  historically said 0.80 "boots-then-dies"). Patch A costs ~2.5 GB + fused-Markov
+  ~1.5 GB at profiling, which the 0.76→0.78 bump absorbs. **Keep 0.78.**
+- This also reconciles the compose back to the README-documented lane:
+  previous compose carried the unverified C12 profile (GPU_MEM 0.83 /
+  `max_num_seqs 12`, marked "verify on this cluster"). Reverting to 0.78/6 for a
+  validated bring-up. Re-enable C12 only after a gated run on this cluster.
+- **Apply doc** (upstream): bind-mount `patches/A-drafter-sizes/v1/spec_decode/
+  dspark_proposer.py` → `/opt/env/lib/python3.12/site-packages/vllm/v1/spec_decode/
+  dspark_proposer.py:ro` on BOTH nodes; set both env toggles identically across
+  ranks (mismatch → NCCL hang). Vendored copy is byte-identical to upstream
+  (1152 lines).
+- Not adopted from the campaign: Patch B (real draft probs for T>0) — the
+  full-vocab gathers cost what the acceptance gain earns (throughput flat);
+  E4 defer-target-capture (no gain); dual-HCA (interconnect provably not the
+  bottleneck); k=4/k=3 (strictly lose to k=5).
 
 ## 2026-08-23 — fastokens shim (VLLM_USE_FASTOKENS=1)
 

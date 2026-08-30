@@ -554,6 +554,36 @@ GLM-5.2-style DFlash1 licensing. Forum projects 50-70 tok/s once settled.
    our cluster has local weights on both ranks, so try `KV_CACHE_MEMORY=5905580032`
    after a stable boot, with the cache-flush ritual. Never above ~6 GiB/rank
    on TP2 (phantom backing / first-touch death).
+2a. **500K-context experiment (DESIGNED 2026-08-30, revisit later — do not
+   run casually).** Standing goal: ~500K ctx WITHOUT losing vision. The
+   RedHatAI checkpoint is 1M-native (max_position_embeddings=1048576, same
+   as LibertAIDAI — the switch changed nothing here); 262,144 is a
+   deployment choice (`MAX_MODEL_LEN`), and the current 295,230-token KV
+   pool (3 GiB DFlash2 pin) already exceeds it, so `max-model-len` is the
+   binding constraint today. Math: our stack measures **98,410
+   tokens/GiB** (3 GiB → 295,230, DFlash2 + fp8 KV — DFlash2's own KV
+   makes this ~20% worse than the MTP-lane arithmetic in the 5.5 GiB
+   comment in item 2). 500K target ⇒ ≈5.08 GiB/rank; margin pin
+   5,905,580,032 (5.5 GiB) ⇒ ~541K pool — BUT the pin path likely leaves
+   negative activation margin on worker ranks (workers have 4–5 GiB less
+   headroom than head, unexplained; pinned pools skip the profiler's
+   activation subtraction and die on the first long prompt).
+   **Preferred variant: do NOT pin** — unset `KV_CACHE_MEMORY`, set
+   `MAX_MODEL_LEN=524288`: profiler sizing already measured 581,040
+   tokens at 262K max-len with DFlash2+fp8 (recipe comment), which
+   self-adjusts to the activation peak and matches upstream TP2's "let
+   the profiler size the pool" guidance. Raising `GPU_MEM` above 0.85 is
+   the WRONG lever (the pin is carved out of the budget, not added to
+   it; above 0.85 starves NVRM/page-cache headroom — phantom backing).
+   Gate list before trusting: boot with a ≥300K prompt; concurrent
+   32K-token prefills; C6 load test; watch `/metrics` preemption
+   counters. **Physics caveat: a 500K pool supports ~1 concurrent
+   full-length sequence (581K ÷ 500K) — this buys long-context depth,
+   not long-context concurrency; the C6 agent profile stays short/
+   mid-context.** Vision is unaffected (KV dtype is independent of the
+   MM path). The TP4-lane route (24 GiB/rank pins + unconditional
+   whole-boot flusher, gate-passed upstream 2026-08-29) does NOT
+   transfer to 2 nodes.
 3. **MTP depth A/B.** Default MTP3 (chishiki37's measured winner). A/B vs MTP4
    on this cluster and record; consider MTP5 only after reading forum 353069.
 4. **The zero-pad rope shim (`VLLM_MLA_NOPE_PAD_ROPE=1`, kingjones30/drowzeys).**

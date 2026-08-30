@@ -152,6 +152,14 @@ handling. They ship with the recipe, so nothing extra to install.
   "Recipe updates" for the long-session-degradation reasoning; 0.87–0.90 remains
   an optional one-line headroom lever). Don't lower it for "stability" — the
   0.78 advice is NVFP4/tonyd2wild-specific.
+- **Updates (2026-08-30):** research pass only — see
+  `deepseek-v4-flash-aiden/README.md` § "Recipe updates (2026-08-30)" for the
+  full write-up. In short: tonyd2wild's 2026-08-20 DSpark campaign (Patch A +
+  fused-Markov @ 0.78) is **not adopted here** — it was validated on the
+  tonyd2wild fork tree/image, and `dspark_proposer.py` is tree-specific; this
+  sparkrun recipe runs the same aiden 3.75 image as the compose recipe, so the
+  identical "stay on 3.75 / don't grab 3.76.1 without a field report" guidance
+  applies and is kept in sync. HF model rev `9e165c30` unchanged (= HEAD).
 - **Port:** `4000` (default). Override with `sparkrun run ... --port 8080`.
 - **Reasoning effort** defaults to `high` (community A/B sweet spot);
   `thinking` defaults to `true`; `max` is per-request only (no win + safety

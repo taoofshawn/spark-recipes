@@ -239,12 +239,39 @@ changes — defaults stay: temp 1.0 / top_p 0.95 / GMU 0.83 / agent profile 6 & 
 guards `is_prefill_chunk` (Patch 3 cold-start garble) — present; detokenizer
 `VLLM_SUPPRESS_STOPS_IN_REASONING` — present. The PR #17 streaming
 `tool_calls: []` leak does **not** reproduce on 0.11.2 (verified live: 0/30
-deltas) — no port needed.
-
+ deltas) — no port needed.
+ 
 > **Stay on `production-3.75`.** `production-3.8` upstream has a DSpark
 > uniform-length regression (EngineDeadError under heterogeneous agent batches);
 > the author himself says "there's not suppose to be a 3.8" (#662). This recipe
 > pins the 3.75 digest.
+ 
+ ## Recipe updates (2026-08-30) — research pass; no config change
+
+Review pass against tonyd2wild's 2026-08-20 DSpark campaign
+(`benchmarks/campaign-2026-08-20`, on the tonyd2wild tree/image) + aiden image
+tags + HF model rev.
+
+- **Patches A + fused-Markov NOT adopted here (deliberately).** The campaign
+  STACK winner (`VLLM_DSPARK_DRAFT_CAPTURE_SIZES=1` + `VLLM_DSPARK_FUSED_MARKOV_
+  ARGMAX=1` @ gmu 0.78) was measure-validated on the **tonyd2wild fork tree**
+  (`/opt/env/...`, `nvfp4_ds_mla`, B12X-MoE). This recipe is the **aiden fork**
+  (`/opt/venv/...`, `FLASHINFER_MLA_SPARSE_DSV4` attention, 0.11.2).
+  `dspark_proposer.py` is tree/image-specific — do NOT copy the tonyd2wild Patch
+  A bind-mount here. The campaign's finding that Patch A recovers +3% by fixing
+  a 20-vs-5 draft-token bug is a general DSpark insight, but the fix must be
+  re-validated per tree.
+- **Aiden image `production-3.76.1` (2026-08-20) appeared on Docker Hub** — the
+  first tag newer than our pinned 3.75 (3.75 → 3.76.x). Not adopted: per
+  "Stay on 3.75" above, any newer aiden tag inherits the 3.8-series risk unless
+  proven otherwise, and no campaign/forum validation of 3.76.1 exists yet.
+  Watch for a 3.76.1 field report before considering a bump.
+- **HF model rev unchanged** (pin `9e165c30` = HEAD `7872f01b`, byte-identical
+  tree — 74 files, no size diffs). No re-pin.
+- **Forum 381835** (2026-08-30): a *newer eugr nightly* (`nightly-20260823`,
+  vLLM 0.1.dev20133) introduced raw `</invoke></tool_calls>` leakage in content;
+  rollback to the 3-Aug image fixed it. Confirms the image-bump regression class
+  AGENTS.md warns about — further reason to stay on the pinned 3.75 digest.
 
 ## Reference
 The [discussion thread](https://forums.developer.nvidia.com/t/deepseek-v4-flash-aiden-recipe-from-reddit-1m-token-session-operational-cuda-12-1-tailored-for-dgx-spark-gb10/372268) for this configuration

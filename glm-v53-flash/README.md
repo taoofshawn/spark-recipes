@@ -115,14 +115,15 @@ python3 tools/load_test_glm.py
   without any effort param were observed to **degenerate** (800 tokens,
   empty `reasoning` and empty `content`), so the recipe always pins an
   effort server-side regardless.
-- Default: **`REASONING_EFFORT=high`** (all-recipes parity: thinking on,
-  high, temp 1.0, top_p 0.95). Clients override per request with the
-  OpenAI-style `"reasoning_effort": "low" | "high"` top-level field —
-  verified: vLLM merges it into the chat-template kwargs and the glm45
-  parser routes the thinking into `reasoning`.
-- Sampling defaults (temp 1.0, top_p 0.95) come from the checkpoint's own
-  `generation_config.json`; the boot log confirms vLLM adopts them. No
-  `--generation-config`/`--override-generation-config` flags are needed.
+- Sampling defaults (temp 1.0, top_p 0.95) are now **explicit recipe
+  flags**: `--generation-config vllm` + `--override-generation-config
+  '{"temperature":1.0,"top_p":0.95}'` (env `TEMPERATURE`/`TOP_P`). The
+  RedHatAI checkpoint's `generation_config.json` ships ONLY temperature, so
+  without these top_p drifted to vLLM's 1.0 (the old LibertAIDAI checkpoint
+  shipped 0.95). `--generation-config vllm` affects sampling only — the
+  multi-EOS stop set still loads from the model config. Values match the
+  DeepSeek recipes. Note the sampling kwargs are also accepted per-request
+  via the OpenAI `temperature`/`top_p` fields, which override these.
 - `max_tokens` includes reasoning tokens when thinking is on (a short
   answer with `high` effort cost ~330 completion tokens vs 41 without).
   Keep it generous for agentic use.
@@ -305,4 +306,14 @@ research.md             # research notes + future-work handoff for agents
   `generation_config.json` (confirmed in the boot log). omp client
   registration updated (`reasoning: true`, effort levels low/high/max,
   default high). Applied on the NEXT container restart (not yet bounced at
-  the time of writing).
+   the time of writing).
+- **2026-08-30 — sampling made explicit (RedHatAI switch follow-up).** The
+  RedHatAI checkpoint's `generation_config.json` ships ONLY `temperature:
+  1.0` (no `top_p`), so top_p silently drifted from the old LibertAIDAI
+  checkpoint's 0.95 to vLLM's 1.0. Made all four inference defaults explicit
+  recipe env: `THINKING=true`, `REASONING_EFFORT=high`, `TEMPERATURE=1.0`,
+  `TOP_P=0.95`, wired via `--generation-config vllm` +
+  `--override-generation-config '{"temperature":1.0,"top_p":0.95}'`
+  (sampling only — multi-EOS stop set still loads from the model config,
+  verified in vLLM source: `try_get_generation_config` reads the file in
+  both `auto` and `vllm` modes). Matches the other recipes' values.

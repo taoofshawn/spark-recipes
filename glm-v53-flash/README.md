@@ -205,6 +205,7 @@ our stack is FROM the stable v8-equivalent, but benchmark before trusting
 | `No available shared memory broadcast block found in 60 seconds` | benign — FlashInfer autotuning (CPU ~150%), not a hang |
 | boot death right after weight load | MTP draft head (+~5 GB) at GMU 0.85 trips UMA OOM without the KV pin — keep `KV_CACHE_MEMORY` set |
 | `--load-format instanttensor` | do NOT enable in TP2 — the fast loader is unstable multi-node (rank dies silently ~60-90 s after load); safetensors is the shipped path |
+| `--load-format runai_streamer` + `RUNAI_STREAMER_MEMORY_LIMIT=2147483648 RUNAI_STREAMER_CONCURRENCY=8` | validated fast-loader middle option (upstream issue #9 field report: 178 GB in ~3 min on both ranks, no instanttensor-style rank deaths). Caps are load-bearing — uncapped, the streamer OOM-kills a rank at ~18%. Default stays safetensors (verified here) |
 
 ## Files
 

@@ -98,8 +98,7 @@ on this KDA + sparse-MLA arch. Zero 2x GB10 deployments use RedHatAI (all 8
 community recipes pin LibertAIDAI; RedHatAI's own recipe is TP4
 datacenter-only); format mismatch means an untested load path on sm_121.
 RedHatAI publishes evals (GPQA-D 90.57, AIME25 86.67) while LibertAIDAI
-publishes round-trip cosine 0.99665 + every GB10 pitfall. Full report:
-`/tmp/redhatai-report.md` (2026-08-28 snapshot).
+publishes round-trip cosine 0.99665 + every GB10 pitfall.
 **⚠️ SUPERSEDED 2026-08-30 — see section 0b: ModelOpt builds emit corrupted
 token IDs (vllm#54150); RedHatAI is now the pinned checkpoint.**
 
@@ -158,6 +157,82 @@ KV pin contradicts our TP2 no-pin guidance; batched-tokens 8192 contradicts
 our agent-serving 2048 profile. Revisit if tonyd2wild merges it. Forum
 general sweep: no new GLM-relevant topics since 2026-08-29 15:45Z review.
 
+## 0c. 2026-08-30 recipe-update pass — overlay sync verified, runai_streamer loader (review pass)
+
+Full pass: NVIDIA forum sweep (cat 721/723 new topics + glm search since
+2026-08-30 00:00Z), tonyd2wild TP2+TP4 repos (commits/issues), HF pins,
+Docker tags. Last review: 2026-08-30 (0b section). **No pin changes; one
+doc addition; two cosmetic fixes.**
+
+### Pins re-verified (no change)
+- `RedHatAI/GLM-5.3-Flash-NVFP4` rev `36c184c6` (lastModified 2026-08-28) —
+  unchanged.
+- `incoai/GLM-5.3-Flash-DFlash2` rev `dc77ff1c` (lastModified 2026-08-28) —
+  unchanged.
+- Base image `vllm/vllm-openai:glm53-flash-arm64-cu130@sha256:905c0293…` —
+  unchanged, still the only day-0 tag family.
+
+### Upstream published the DFlash2 overlay + public GHCR images (sync check: PASS)
+Upstream commits `02fd6c49`→`b91a8747` (2026-08-30) published the overlay
+build (docker/dflash2-overlay/) and public images
+`ghcr.io/tonyd2wild/vllm-glm53-flash:sm121-v8` (base) / `:sm121-v11-dflash2`
+(overlay). Diffed every overlay file in their published copy against ours:
+`patch_glm_aux_capture.py`, `patch_kv_page_lcm2.py`,
+`patch_registry_and_select.py`, `qwen3_dflash2.py`, and dflash2/ are
+**byte-identical**; `patch_v8_fp8.py` and `patch_glm5_drafter_group.py`
+differ **only in comment text** (they genericized the fail-log paths in the
+docstring). Synced our docstring copy to theirs. Conclusion: our 10-layer
+stock-day-0 build remains functionally identical to their published
+dflash2 image. **Not switching images** — our Dockerfile pins a digest on
+the stock day-0 image and is verified on this cluster; a switch to GHCR
+would be an unvalidated build-path change with zero measured benefit.
+
+### Adopted (doc): `runai_streamer` as the validated fast-loader middle option
+Upstream issue #9 (webdevtodayjason, closed 2026-08-30) field-reports on v8
+2x Spark TP2: `--load-format runai_streamer` +
+`RUNAI_STREAMER_MEMORY_LIMIT=2147483648` +
+`RUNAI_STREAMER_CONCURRENCY=8` loads 178 GB in ~3 minutes on both ranks
+with none of the instanttensor multi-node rank deaths (4/4 upstream boots
+died ~60-90 s post-load). Caps are load-bearing: uncapped, the streamer
+OOM-kills a rank at ~18%. Same loader is independently validated on the
+GLM stack (0rand repo) and Qwen FP8 stacks (DColt/tanbuikim7, 381440 #24).
+Recorded in README as the documented option alongside safetensors
+(default) and instanttensor (forbidden). Not switched by default — our
+safetensors load path is verified end-to-end.
+
+### Watch-list additions (not adopted)
+1. **0rand/glm-5.3-flash-nvfp4-2x-dgx-sparks** (2026-08-30, "lab quant"
+   `local-inference-lab/GLM-5.3-Flash-NVFP4` rev `378ca545`, ModelOpt,
+   MTP k=3, 512K ctx, claimed 92/100 tool-eval, ~2x hardmode vs "MiaAI").
+   IGNORE for our lane: ModelOpt builds emit corrupted token IDs
+   (vllm#54150, upstream issue #10 A/B) — 0rand's recipe works around it
+   with `modelopt.patch` (MTP quantization-namespace fix) but the token
+   corruption was confirmed on the ModelOpt checkpoint itself; our
+   RedHatAI compressed-tensors lane is the clean conversion. Keep as a
+   pointer if we ever want their sparse_attn_indexer 512K-ctx smem guard
+   data (CC-12.0 guards: 48 SMs @ ≤262K, 62 CTAs @ 512K vs 99 KB smem).
+2. **Upstream #2 "TP3?"** (open): GLM's 288 experts divide by 3. Purely
+   hypothetical for us (2 fixed nodes); noted for completeness.
+3. **Upstream #4 SM120 x86 port field report** (open): confirms our patch
+   stack boots on RTX PRO 6000 x86 — no GB10 impact.
+4. **Forum t381350 posts 101-117** (EXL3 4bpw lane, entrpi repo, 1.3M ctx
+   claimed; head-rank shard-load OOM at ~88% fixed per helge by
+   instanttensor on their lane; KV ladder reports FP8+DFlash2 = 6x200K
+   idle contexts per florianbrede). Different quant lane (EXL3); no
+   transferable invariant for our NVFP4+DFlash2 stack. 0rand's 2026-08-30
+   measurements on the MiaAI stack (35-40 tok/s single, acceptance
+   65-68%, hardmode 91/100) cross-check our own numbers.
+
+### Forum general sweep (mandatory)
+New topics 2026-08-30 in cats 721/723: none GLM-relevant beyond tracked
+threads (381834 1→2-scaling is Qwen-27B-focused; 381380 is a release-rumor
+thread; 381832 is a single-Spark deployment question). GLM search
+2026-08-30: only the tracked threads above.
+
+### Cosmetic fixes (this commit)
+- compose volumes comment: dangling "# Local weights on" fragment merged.
+- research.md: dead `/tmp/redhatai-report.md` pointer removed (file was a
+  session-local snapshot).
 ## 0a. 2026-08-29 upstream review — pins moved, KV-pin philosophy, EXL3 lane (review pass)
 
 Full review pass against all sources: tonyd2wild DFlash2 repo (new), two EXL3-lane

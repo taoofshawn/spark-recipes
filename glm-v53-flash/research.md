@@ -370,6 +370,17 @@ TP2 repo unchanged (no-pin guidance stands for TP2; the TP2 head-rank worker
 safe pin without phantom backing), but the ~15.7 GiB mm-processor cost still
 binds at TP2 — vision remains the gating constraint, as documented above.
 
+**2026-08-31 — 1M-on-2× is now proven; the 262K ceiling is lane-specific.** See
+§2 "KV cache pool comparison". drowzeys (NVFP4 packed KV, 1.22M pool, vision ON)
+and four EXL3 recipes (1.40–2.14M pools) serve 1M on 2× GB10 via the zero-pad
+rope shim + packed KV (`fp8_ds_mla` / `nvfp4_ds_mla`) + hard pin (10–14.4 GiB) +
+`--max-num-batched-tokens 4096` + block-size 7168 + max-num-seqs 1–2. The
+blocker for OUR recipe (RedHatAI W4A4, ~95 GB/rank, vision kept) is therefore
+the packed-KV kernel path — not memory per se — which reframes the 500K target:
+adopting packed KV + the shim is the same change that unlocks 1M, so a
+1M-with-vision cost-out (vs drowzeys' 91.2 GiB/rank headroom) is the next
+concrete question.
+
 
 ## 1. Why NVFP4 (and not the official BF16/FP8 releases)
 
@@ -497,6 +508,60 @@ is 1.8× denser than fp8 (656 B) but ~33% slower decode on the b12x path — fp8
 KV is the daily driver, NVFP4 KV is the capacity flex (that is how anyone gets
 1M ctx on 2 nodes). Requires the zero-pad rope shim + b12x backend, neither of
 which this recipe ships (yet).
+
+### KV cache pool comparison — every 2× DGX Spark GLM-5.3-Flash recipe (2026-08-31)
+
+Swept GitHub for all 2× DGX Spark (TP2) GLM-5.3-Flash recipes (21 repos cloned,
+committed configs + boot logs read) and cross-checked against tonyd2wild's
+`GLM-5.3-DGX-Spark-Cookbook` index. Pool figures are each repo's reported /
+committed numbers; "profiler-sized" = left to the engine's memory profiler (no
+pin). Same 11 sparse-MLA layers across every recipe, so token counts are
+directly comparable.
+
+| repo | engine / weights | KV quant | KV pool (tokens) | context | sizing |
+|---|---|---|---|---|---|
+| `tonyd2wild/GLM-5.3-Flash-NVFP4-DFlash2-2x-DGX-Spark` (upstream) | vLLM / NVFP4 | `fp8_e4m3` | 507,041 (MTP, 4.14 GiB) · 672,606 (5.5 GiB record) · 581,040 (DFlash2, profiler) | 262,144 | pin; bf16+MTP = 275,941 and dies on first request |
+| `kingjones30/GLM-5.3-Flash-2x-DGX-Spark` | vLLM / NVFP4 (stock img + zero-pad) | `fp8_ds_mla` | 738,000 | 262,144 | GMU 0.85, MTP-5, `--language-model-only` |
+| `sfxnz/GLM-5.3-Flash-NVFP4-vLLM-2x-DGX-Spark` | vLLM / NVFP4 | `fp8_e4m3` | ~507,000 (4.14 GiB) | 262,144 | pin, MTP-4 |
+| `chishiki37/glm-5.3-flash-nvfp4-dgx-spark` (2x arm) | vLLM / NVFP4 | `fp8_e4m3` | 527,879 winner (4.14 GiB + MTP3) · 507,041 (MTP4) · ~1,020,772 (unpinned) · 588,225 (bf16) | 262,144 | pin; MTP3 = our default's source |
+| `drowzeys/keys-vLLm…-NVFP4KV-1M-Abliterated` | vLLM / NVFP4 | **`nvfp4_ds_mla`** (368 B/tok/layer, fp8 rope) | **1,222,225** (1.17× a full 1M) | 1,048,576 | pin ~5.9 GiB, GMU 0.85, block 7168, MTP k=2, vision ON |
+| `amasu/glm53-flash-cluster` | vLLM / NVFP4 | `fp8` (packed) | 1,261,444 (9 GiB pin @512K) · 610,000 @262K fp8 · 311,000 @262K bf16 | 512,000 | 512K needs `--language-model-only` |
+| `0rand/glm-5.3-flash-nvfp4-2x-dgx-sparks` | vLLM / NVFP4 (lab quant) | `fp8` | profiler-sized (MEU 0.86; no pin) | up to 512,000 | removed upstream's 10 GiB pin |
+| `FujitsuPolycom/glm53-flash-tp2-spark` | vLLM / NVFP4 | `fp8` (packed) | ~1,160,000 (10 GiB pin, 2.22×) | 524,288 | pin 10 GiB, MTP3 |
+| `mochievi-moe/glm53-ablit-nvfp4-2spark` | vLLM / NVFP4 ablit | `fp8` | not stated in tokens (5 GiB/GPU) | 512K / 1M | MTP 0, prefix cache off, 1M x1 @ BTOK 256 |
+| `Libertai/glm53-flash-vllm-gb10` | vLLM / NVFP4 (own kernel) | `fp8` | 88,790 | 65,536 | GMU 0.80, MTP3, personal lane |
+| `barrydeen/glm53-flash-dgx-spark` | vLLM / NVFP4 | `fp8_e4m3` | profiler-sized (no pin) | 262,144 | GMU 0.85, DFlash2 k=7 |
+| `MiaAI-Lab/GLM-5.3-Flash-NVFP4-Dual-DGX-Spark` | vLLM / NVFP4 (Ray TP2) | `fp8_e4m3` | profiler-sized (KV pin unset) | 262,144 | GMU 0.84, multimodal |
+| `Deep-AI-Evo/GLM-5.3-Flash-DSpark-2x-DGX-Spark` | vLLM / NVFP4 | `fp8_e4m3` | 524,000 | 400,000 (default) | MTP-4 / DFlash2 |
+| `Tutanka01/glm5.3-flash-2x-dgx-spark-nvfp4` (SGLang) | SGLang / NVFP4 | `fp8_e4m3` (Mamba BF16) | 240,008 @262K · ~210,000 (DFlash2) | 131K / 262K | `--mem-fraction-static` 0.88–0.90 |
+| `beastllama/GLM-5.3-Flash-DFlash2-SGLang-2x-DGX-Spark` | SGLang / NVFP4 + DFlash2 | `fp8_e4m3` (draft bf16) | 244,032 | 262,144 | mem-fraction 0.92 (needs sglang PR #36904) |
+| `0xSero/glm-5.3-flash-sglang-sm121` (TP2 profile) | SGLang / NVFP4 | `fp8_e4m3` (DSA) | 992,128 /rank | 131,072 | mem-fraction 0.90, NEXTN MTP5 |
+| `Entrpi/glm-5.3-flash-exl3-2x-spark` | EXL3 4bpw + vLLM / DFlash2 | `fp8_ds_mla` (528 B/tok); `nvfp4_ds_mla` opt-in (304 B/tok) | 1,324,163 @524K · 1,530,144 @1M fp8 · 1,702,584 @524K · **2,144,814 @1M** NVFP4-KV | 524K / 1M | 12.4 GiB pin; NVFP4 KV via `VLLM_NVFP4_MLA_DYNAMIC_SCALE=1` |
+| `MiaAI-Lab/GLM-5.3-Flash-EXL3-2x-DGX-Sparks` | EXL3 + vLLM / DFlash2 | `fp8_ds_mla` (draft auto/bf16) | 1,754,237 (1.75×, 18.67 GiB) | 1,000,000 | GMU 0.87, prefix caching |
+| `Reederey87/glm53-flash-exl3-2x-dgx-spark` | EXL3 + vLLM / DFlash2 | `fp8_ds_mla` (SM120 sparse) | 1,396,551 | 1,000,000 | pin 14.36 GiB (15414698763) |
+| `UnsignedChad/glm53-flash-ablit-exl3-2x-dgx-spark` | EXL3 ablit + vLLM | `fp8_ds_mla` | 1,396,551 (byte-identical pin) | 1,000,000 | pin 14.36 GiB |
+
+**Key facts:**
+- Quants in the wild: `fp8_e4m3` (raw FA2 NoPE-MLA path = tonyd2wild lineage = our
+  lane), `fp8_ds_mla` (packed DeepSeek MLA layout via the zero-pad rope shim),
+  `nvfp4_ds_mla` (4-bit packed, drowzeys-only), `bf16` (baseline). KV quant is
+  independent of the weight quant (W4A16 vs W4A4) — same set applies to RedHatAI.
+- Per-token density (11 MLA layers): bf16 ≈ 1152 B · fp8 packed ≈ 528–656 B ·
+  nvfp4 packed ≈ 304–368 B · **our fp8_e4m3 FA2 lane ≈ 797 B** (measured 4.14 GiB
+  → 507K). Packed KV is ~1.5× (fp8) to ~2.4× (nvfp4) denser than our lane.
+- **1M ctx on 2× is now proven** — drowzeys (NVFP4 packed KV, 1.22M-token pool,
+  vision ON) and four EXL3-weights recipes (1.40M–2.14M pools) all serve 1M on 2×
+  GB10. Every one uses the packed-KV path (zero-pad rope shim + b12x/SM120 sparse
+  backend), a hard KV pin (10–14.4 GiB), `--max-num-batched-tokens 4096`,
+  block-size 7168, and max-num-seqs 1–2. The tonyd2wild "262K is the TP2 ceiling"
+  claim holds only for the plain `fp8_e4m3` FA2 lane this recipe ships.
+- Vision still binds at high context: the 512K vLLM recipes need
+  `--language-model-only`; drowzeys is the only vision-on 1M-on-2x run — and it
+  has ~91.2 GiB/rank weights, leaving more headroom than our ~95 GB/rank RedHatAI.
+- **Same pin ≠ same tokens across boxes** — tonyd2wild's 4.14 GiB pin measured
+  507,041 / 527,879 (us) / 603,144 (their deploy report); the TP2 worker rank
+  consistently profiles ~4–5 GiB less KV headroom than the head (min-across-ranks
+  binds the pool).
 
 ---
 

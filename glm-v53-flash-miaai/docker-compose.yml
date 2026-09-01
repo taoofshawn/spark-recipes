@@ -111,7 +111,7 @@ services:
     command:
       - bash
       - -lc
-      - >
+      - |
         set -euo pipefail
 
         # Auto-detect the RoCE-v2 IPv4 GID index unless one is set in .env.

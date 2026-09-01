@@ -56,11 +56,12 @@ This repo is deployed on a specific pair of nodes. Do not invent other hardware 
 
 ```
 README.md                       # short index; stable recipes in main, in-progress on branches
-deepseek-v4-flash-aiden/                    # docker-compose recipe (the "reference" compose)
-deepseek-v4-flash-aiden-sparkrun/           # sparkrun port of aiden (no rebuild, docker-pull)
 deepseek-v4-flash-tonyd2wild/               # docker-compose recipe (NVFP4 DS-MLA KV stack)
   └── upstream/                             # VENDORED upstream repo — do NOT edit (see below)
-mimo-v25-dflash-tonyd2wild/                 # docker-compose recipe (MiMo-V2.5 + DFlash)
+.archived/                                  # archived recipes (kept for reference, not maintained)
+  ├── deepseek-v4-flash-aiden/              #   docker-compose recipe (the "reference" compose)
+  ├── deepseek-v4-flash-aiden-sparkrun/     #   sparkrun port of aiden (no rebuild, docker-pull)
+  └── mimo-v25-dflash-tonyd2wild/           #   docker-compose recipe (MiMo-V2.5 + DFlash)
 ```
 
 ### The two DeepSeek recipes: pick the right one
@@ -71,8 +72,8 @@ between them** — each belongs to a specific image/build; mixing them fails at 
 
 | recipe | mechanism | image / backend | status notes |
 |---|---|---|---|
-| `deepseek-v4-flash-aiden` | docker-compose | prebuilt `aidendle94/sparkrun-vllm-ds4-gb10` (digest-pinned, "3.75"), `FLASHINFER_MLA_SPARSE_DSV4` attention | the battle-tested baseline; most documented |
-| `deepseek-v4-flash-aiden-sparkrun` | sparkrun recipe (`.yaml`) | same aiden image, `builder: docker-pull` (critical — without it sparkrun does a source build instead) | sparkrun-native management, no rebuild |
+| `deepseek-v4-flash-aiden` | docker-compose | prebuilt `aidendle94/sparkrun-vllm-ds4-gb10` (digest-pinned, "3.75"), `FLASHINFER_MLA_SPARSE_DSV4` attention | the battle-tested baseline; most documented — **archived → `.archived/`** |
+| `deepseek-v4-flash-aiden-sparkrun` | sparkrun recipe (`.yaml`) | same aiden image, `builder: docker-pull` (critical — without it sparkrun does a source build instead) | sparkrun-native management, no rebuild — **archived → `.archived/`** |
 | `deepseek-v4-flash-tonyd2wild` | docker-compose | locally built `vllm-dspark-runtime:dspark-nvfp4-stage-c` (4-stage overlay), `nvfp4_ds_mla` KV | most patched; full from-scratch build guide in its README |
 
 `aiden-sparkrun` is the same as `aiden` but managed through sparkrun (cluster abstraction). If a
@@ -181,6 +182,9 @@ This directory is a **full, unmodified copy** of tonyd2wild's upstream repo, pin
 - `main` = stable recipes only. **In-progress recipe work goes on branches** (per README). The
   remote currently also has `aiden-aug15-updates` (unmerged tuning refresh: k=5 + greedy draft,
   GMU 0.83).
+- **Branch protection on `main`:** direct pushes to `main` are blocked on the remote — all
+  changes must land via PR from a topic branch. Reorg/archival moves and other housekeeping
+  therefore belong on their own branch (e.g. `reorg-*`), not committed directly on `main`.
 - Commit messages are descriptive one-liners; PRs merge topic branches into `main` (see git
   log history: `Deepseek v4 flash tonyd2wild (#3)`, `... aiden sparkrun (#9)`, etc.).
 - Recipe directories document their own changelog inline (the tonyd2wild README has a

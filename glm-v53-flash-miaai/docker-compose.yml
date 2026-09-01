@@ -1,0 +1,182 @@
+# GLM-5.3-Flash EXL3 4bpw — 2x DGX Spark, port 4000.
+# Adoption of MiaAI-Lab/GLM-5.3-Flash-EXL3-2x-DGX-Sparks into this repo's
+# docker-compose conventions. Prebuilt GHCR image (overlay baked at build),
+# runtime patches applied at boot. Provenance + constraint matrix: README.md.
+services:
+  glm53:
+    image: ${IMAGE:-ghcr.io/miaai-lab/glm-5.3-flash-2x-dgx-sparks:exl3}
+    container_name: glm53-exl3-miaai
+    pull_policy: if_not_present
+    entrypoint: []
+    network_mode: host
+    ipc: host
+    shm_size: "64gb"
+    restart: unless-stopped
+    stop_grace_period: 10s
+    ulimits:
+      memlock: -1
+      stack: 67108864
+    gpus: all
+    devices:
+      - /dev/infiniband:/dev/infiniband
+    healthcheck:
+      test: ["CMD-SHELL", "if [ -n \"$$HEADLESS\" ]; then exit 0; fi; curl -fsS http://127.0.0.1:${PORT:-4000}/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 600s
+    volumes:
+      # Weights + drafter (HF cache; image bakes HF_HOME=/root/.cache/huggingface)
+      - ${HF_CACHE:-/home/sdrew/.cache/huggingface}:/root/.cache/huggingface
+      # Node-local JIT caches (container: /vllm-cache)
+      - ${JIT_CACHE_DIR:-/home/sdrew/.cache/vllm-glm53-miaai}:/vllm-cache
+      # Vision chat template (GLM native multimodal; required for image 200s)
+      - ./files/chat_template.jinja:/opt/glm53-files/chat_template.jinja:ro
+      # SpinCondition patch (the one runtime patch upstream host-mounts)
+      - ./patch_spinwait.py:/opt/glm53/patch_spinwait.py:ro
+    environment:
+      # ---- GPU ----
+      CUDA_VISIBLE_DEVICES: "0"
+      CUDA_DEVICE_ORDER: PCI_BUS_ID
+      # ---- RoCE networking (site-specific — match YOUR NICs) ----
+      NCCL_NET: IB
+      NCCL_IB_DISABLE: "0"
+      NCCL_NET_PLUGIN: none
+      NCCL_NVLS_ENABLE: "0"
+      NCCL_CUMEM_ENABLE: "0"
+      NCCL_IB_MERGE_NICS: "0"
+      NCCL_CROSS_NIC: "1"
+      NCCL_IGNORE_CPU_AFFINITY: "1"
+      NCCL_IB_ROCE_VERSION_NUM: "2"
+      NCCL_IB_HCA: "${IB_PORTS}"
+      NCCL_SOCKET_IFNAME: "${ETH_IF},${ETH_IF2}"
+      GLOO_SOCKET_IFNAME: "${ETH_IF}"
+      TP_SOCKET_IFNAME: "${ETH_IF}"
+      NCCL_IB_GID_INDEX: "${NCCL_IB_GID_INDEX:-}"
+      NCCL_DEBUG: WARN
+      VLLM_HOST_IP: "${ROCE_IP}"
+      # ---- runtime (glm53-flash image bakes HF_HOME under /root) ----
+      HF_HOME: /root/.cache/huggingface
+      HF_HUB_OFFLINE: "${HF_HUB_OFFLINE:-1}"
+      TRANSFORMERS_OFFLINE: "${TRANSFORMERS_OFFLINE:-1}"
+      VLLM_CACHE_ROOT: /vllm-cache
+      TRITON_CACHE_DIR: /vllm-cache/triton
+      TILELANG_CACHE_DIR: /vllm-cache/tilelang
+      VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS: "${VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS:-1800}"
+      VLLM_ENGINE_READY_TIMEOUT_S: "${VLLM_ENGINE_READY_TIMEOUT_S:-3600}"
+      TORCH_CUDA_ARCH_LIST: "12.1a"
+      FLASHINFER_CUDA_ARCH_LIST: "12.1a"
+      FLASHINFER_DISABLE_VERSION_CHECK: "1"
+      PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
+      VLLM_NO_USAGE_STATS: "1"
+      DO_NOT_TRACK: "1"
+      VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS: "${CG_ESTIMATE:-1}"
+      # Runtime patch knobs (read by the in-image /opt/glm53 patches)
+      GLM53_SUPPRESS_STOPS_IN_REASONING: "${GLM53_SUPPRESS_STOPS_IN_REASONING:-1}"
+      GLM53_MIXED_PREFILL_CHUNK: "${GLM53_MIXED_PREFILL_CHUNK:-skip}"
+      GLM53_INDEXER_WORKSPACE: "${GLM53_INDEXER_WORKSPACE:-stock}"
+      GLM53_SPINWAIT_MS: "${GLM53_SPINWAIT_MS:-stock}"
+      # ---- model / serve ----
+      MODEL: "${MODEL:-Mia-AiLab/GLM-5.3-Flash-EXL3-TR3-4bpw}"
+      MODEL_REVISION: "${MODEL_REVISION:-25a44fdbf16862a46b7cc9921142c6c81350af2f}"
+      DFLASH_MODEL: "${DFLASH_MODEL:-incoai/GLM-5.3-Flash-DFlash2}"
+      SERVED_MODEL_NAME: "${SERVED_MODEL_NAME:-GLM-5.3-Flash-EXL3}"
+      PORT: "${PORT:-4000}"
+      TP: 2
+      NNODES: 2
+      MASTER_PORT: "${MASTER_PORT:-29521}"
+      QUANTIZATION: "${QUANTIZATION:-exl3}"
+      ENFORCE_EAGER: "${ENFORCE_EAGER:-0}"
+      EXL3_FUSED_MOE: "${EXL3_FUSED_MOE:-1}"
+      EXL3_FAT_KERNEL: "${EXL3_FAT_KERNEL:-1}"
+      SPEC_METHOD: "${SPEC_METHOD:-dflash}"
+      DFLASH_TOKENS: "${DFLASH_TOKENS:-7}"
+      DFLASH_DRAFT_TP: "${DFLASH_DRAFT_TP:-2}"
+      MTP_TOKENS: "${MTP_TOKENS:-2}"
+      MAX_MODEL_LEN: "${MAX_MODEL_LEN:-1000000}"
+      MAX_NUM_SEQS: "${MAX_NUM_SEQS:-4}"
+      MAX_NUM_BATCHED_TOKENS: "${MAX_NUM_BATCHED_TOKENS:-7168}"
+      GPU_MEM_UTIL: "${GPU_MEM_UTIL:-0.87}"
+      KV_CACHE_DTYPE: "${KV_CACHE_DTYPE:-fp8}"
+      LANGUAGE_MODEL_ONLY: "${LANGUAGE_MODEL_ONLY:-0}"
+      SKIP_MM_PROFILING: "${SKIP_MM_PROFILING:-1}"
+      LIMIT_MM: "${LIMIT_MM:-{\"image\":4,\"video\":1}}"
+      EXTRA_ARGS: "${EXTRA_ARGS:-}"
+      # ---- multi-node ----
+      NODE_RANK: "${NODE_RANK}"
+      HEADLESS: "${HEADLESS}"
+      MASTER_ADDR: "${MASTER_ADDR}"
+
+    command:
+      - bash
+      - -lc
+      - >
+        set -euo pipefail
+
+        # Auto-detect the RoCE-v2 IPv4 GID index unless one is set in .env.
+        if [ -z "$${NCCL_IB_GID_INDEX:-}" ]; then
+          for HCA in $(echo "$${NCCL_IB_HCA}" | tr ',' ' '); do
+            for i in $(seq 0 15); do
+              t=$(cat /sys/class/infiniband/$$HCA/ports/1/gid_attrs/types/$$i 2>/dev/null || true)
+              g=$(cat /sys/class/infiniband/$$HCA/ports/1/gids/$$i 2>/dev/null || true)
+              case "$$t" in *"RoCE v2"*) case "$$g" in *0000:0000:0000:0000:0000:ffff:*) export NCCL_IB_GID_INDEX=$$i; break 2;; esac;; esac
+            done
+          done
+        fi
+        echo "[glm53-exl3-miaai] NODE_RANK=$${NODE_RANK} GID=$${NCCL_IB_GID_INDEX}"
+
+        # Resolve the EXL3 weights + DFlash2 drafter to their HF snapshot dirs
+        # (offline; must be cached on both nodes — see README deploy step 0).
+        resolve_snapshot() {
+          local hub="$1" rev="$2"
+          local dir="/root/.cache/huggingface/hub/models--$$(echo "$$hub" | tr '/' '--')"
+          if [ -n "$$rev" ] && [ -d "$$dir/snapshots/$$rev" ]; then echo "$$dir/snapshots/$$rev"; return 0; fi
+          local snap; for snap in "$$dir"/snapshots/*/; do
+            if [ -f "$$snap/config.json" ]; then echo "$$snap"; return 0; fi
+          done
+          echo ""
+        }
+        MODEL_DIR="$$(resolve_snapshot "$${MODEL}" "$${MODEL_REVISION}")"
+        [ -n "$$MODEL_DIR" ] || { echo "FATAL: EXL3 weights not found in HF cache for $$MODEL (rev $${MODEL_REVISION:-tip}). Download on both nodes first (see README)." >&2; exit 1; }
+        DFLASH_MODEL_DIR="$$(resolve_snapshot "$${DFLASH_MODEL}" "")"
+        [ -n "$$DFLASH_MODEL_DIR" ] || { echo "FATAL: DFlash2 drafter not found in HF cache for $$DFLASH_MODEL. Download on both nodes first (see README)." >&2; exit 1; }
+
+        # Runtime patches (baked in the image at /opt/glm53; spinwait is the
+        # host-mounted one). All guarded — skip silently if absent.
+        for _p in patch_glm_video_placeholders patch_suppress_stops_in_reasoning patch_scheduler_decode_floor patch_glm5_drafter_group patch_hybrid_prefix_hit patch_xgrammar_termination patch_kpool_tail_slotmap patch_spinwait patch_indexer_workspace patch_ablit; do
+          if [ -f "/opt/glm53/$${_p}.py" ]; then python3 "/opt/glm53/$${_p}.py" || exit 1; fi
+        done
+
+        ARGS=(
+          --served-model-name "$${SERVED_MODEL_NAME:-GLM-5.3-Flash-EXL3}"
+          --host 0.0.0.0 --port "$${PORT:-4000}"
+          --tensor-parallel-size "$${TP:-2}" --nnodes "$${NNODES:-2}"
+          --node-rank "$${NODE_RANK}" --master-addr "$${MASTER_ADDR}" --master-port "$${MASTER_PORT:-29521}"
+          --distributed-executor-backend mp
+          --tool-call-parser glm47 --enable-auto-tool-choice
+          --reasoning-parser glm45
+          --enable-prefix-caching --no-enable-flashinfer-autotune
+        )
+        [ "$${ENFORCE_EAGER:-0}" = "1" ] && ARGS+=(--enforce-eager)
+        [ -n "$${QUANTIZATION:-}" ] && [ "$${QUANTIZATION}" != "none" ] && ARGS+=(--quantization "$${QUANTIZATION}")
+        ARGS+=(--max-model-len "$${MAX_MODEL_LEN:-1000000}")
+        ARGS+=(--gpu-memory-utilization "$${GPU_MEM_UTIL:-0.87}")
+        ARGS+=(--max-num-seqs "$${MAX_NUM_SEQS:-4}")
+        ARGS+=(--max-num-batched-tokens "$${MAX_NUM_BATCHED_TOKENS:-7168}")
+        ARGS+=(--kv-cache-dtype "$${KV_CACHE_DTYPE:-fp8}")
+        if [ "$${SPEC_METHOD:-dflash}" = "dflash" ]; then
+          ARGS+=(--speculative-config "{\"method\":\"dflash\",\"model\":\"$$DFLASH_MODEL_DIR\",\"num_speculative_tokens\":$${DFLASH_TOKENS:-7},\"kv_cache_dtype\":\"auto\",\"draft_sample_method\":\"probabilistic\",\"rejection_sample_method\":\"standard\",\"draft_tensor_parallel_size\":$${DFLASH_DRAFT_TP:-2}}")
+        elif [ "$${SPEC_METHOD:-dflash}" = "mtp" ]; then
+          ARGS+=(--speculative-config "{\"method\":\"mtp\",\"num_speculative_tokens\":$${MTP_TOKENS:-2}}")
+        fi
+        ARGS+=(--chat-template /opt/glm53-files/chat_template.jinja)
+        if [ "$${LANGUAGE_MODEL_ONLY:-0}" = "1" ]; then
+          ARGS+=(--language-model-only)
+        else
+          [ -n "$${LIMIT_MM:-}" ] && ARGS+=(--limit-mm-per-prompt "$${LIMIT_MM}")
+          [ "$${SKIP_MM_PROFILING:-1}" = "1" ] && ARGS+=(--skip-mm-profiling)
+        fi
+        if [ -n "$${EXTRA_ARGS:-}" ]; then read -r -a _extra <<< "$${EXTRA_ARGS}"; ARGS+=("$${_extra[@]}"); fi
+
+        echo "[glm53-exl3-miaai] launching: vllm serve $$MODEL_DIR (rank $${NODE_RANK})"
+        exec vllm serve "$$MODEL_DIR" "$${ARGS[@]}" $${HEADLESS:+--headless}

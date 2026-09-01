@@ -1,0 +1,113 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+import copy
+from typing import Any
+
+from transformers import TokenizersBackend
+
+from vllm.entrypoints.chat_utils import ChatCompletionMessageParam
+
+from .deepseek_v4_encoding import encode_messages
+from .hf import HfTokenizer, get_cached_tokenizer
+from .protocol import TokenizerLike
+
+
+def get_deepseek_v4_tokenizer(tokenizer: HfTokenizer) -> HfTokenizer:
+    """
+    Wraps a tokenizer to use the custom DeepSeek V4 chat template encoding.
+
+    Base: the vision-enabled wrapper from vLLM PR #54566 (adds ``max_token_id``
+    so the image sentinel ids ``vocab_size + 0..4`` pass the input-id validator,
+    and wraps after caching so the DSV4 overrides shadow the CachedTokenizer
+    properties). Reasoning-effort aliases: the aiden recipe's corrected mapping
+    (none|off -> chat, low|high -> that effort, max|xhigh -> max, unknown ->
+    high) — the stock pre-0731 wrapper collapses low->high.
+    """
+    dsv4_tokenizer = copy.copy(tokenizer)
+
+    added_vocab = tokenizer.get_added_vocab()
+
+    class _DeepseekV4Tokenizer(tokenizer.__class__):  # type: ignore
+        def apply_chat_template(
+            self,
+            messages: list["ChatCompletionMessageParam"],
+            tools: list[dict[str, Any]] | None = None,
+            **kwargs,
+        ) -> str | list[int]:
+            thinking = kwargs.get("thinking")
+            enable_thinking = kwargs.get("enable_thinking")
+            thinking_enabled = bool(thinking) or bool(enable_thinking)
+            if "thinking" not in kwargs and "enable_thinking" not in kwargs:
+                thinking_enabled = True
+            thinking_mode = "thinking" if thinking_enabled else "chat"
+
+            conversation = kwargs.get("conversation", messages)
+            messages = conversation.copy()
+            if tools is not None and len(tools) > 0:
+                messages.insert(0, {"role": "system"})
+                messages[0]["tools"] = tools  # type: ignore[typeddict-unknown-key]
+
+            reasoning_effort = kwargs.get("reasoning_effort")
+            # Official 0731 semantics: none|off -> chat (thinking off),
+            # low|high -> that effort, max|xhigh -> "max", unknown -> "high".
+            if not isinstance(reasoning_effort, str):
+                reasoning_effort = "high" if thinking_enabled else None
+            elif reasoning_effort in ("none", "off"):
+                thinking_mode = "chat"
+                reasoning_effort = None
+            elif reasoning_effort in ("max", "xhigh"):
+                reasoning_effort = "max"
+            elif reasoning_effort in ("low", "high"):
+                reasoning_effort = reasoning_effort
+            else:
+                reasoning_effort = "high"
+
+            encode_config = dict(
+                thinking_mode=thinking_mode,
+                drop_thinking=kwargs.get("drop_thinking", True),
+                reasoning_effort=reasoning_effort,
+            )
+
+            prompt_str = encode_messages(messages, **encode_config)  # type: ignore
+
+            if kwargs.get("tokenize", True):
+                tokenizer_kwargs = {
+                    k: kwargs[k] for k in ("truncation", "max_length") if k in kwargs
+                }
+                return self.encode(
+                    prompt_str,
+                    add_special_tokens=False,
+                    **tokenizer_kwargs,
+                )
+
+            return prompt_str
+
+        def num_special_tokens_to_add(self) -> int:
+            return len(self.encode(""))
+
+        @property
+        def max_token_id(self) -> int:
+            # The vision variant (DeepSeek-V4-Flash-Vision-Exp) expands image
+            # placeholders into out-of-vocab sentinel ids (vocab_size + 0..4).
+            base = getattr(super(), "max_token_id", 0)
+            return max(base, self.vocab_size + 4)
+
+        def get_added_vocab(self) -> dict[str, int]:
+            return added_vocab.copy()
+
+        def __reduce__(self):
+            return get_deepseek_v4_tokenizer, (tokenizer,)
+
+    _DeepseekV4Tokenizer.__name__ = f"DSV4{tokenizer.__class__.__name__}"
+
+    dsv4_tokenizer.__class__ = _DeepseekV4Tokenizer
+    return dsv4_tokenizer
+
+
+class DeepseekV4Tokenizer(TokenizerLike):
+    @classmethod
+    def from_pretrained(cls, *args, **kwargs) -> HfTokenizer:
+        tokenizer = TokenizersBackend.from_pretrained(*args, **kwargs)
+        # Wrap after caching so the DSV4 overrides (apply_chat_template,
+        # max_token_id) shadow the CachedTokenizer properties.
+        return get_deepseek_v4_tokenizer(get_cached_tokenizer(tokenizer))

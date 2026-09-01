@@ -38,7 +38,12 @@ This repo is deployed on a specific pair of nodes. Do not invent other hardware 
   `ssh spark-0f0b.shawndo.intra` (node 0 / head) and `ssh spark-6d14.shawndo.intra` (node 1 /
   worker). SSH hops run from the local workstation (`eve`), which resolves the `.shawndo.intra`
   DNS zone; the IPs are for in-cluster `MASTER_ADDR`/`ROCE_IP` config, not for reaching the
-  boxes.
+  boxes from here.
+- **Node-to-node bulk transfers (image tars, model copies) MUST target the wired IPs.**
+  Spark-to-spark `rsync`/`ssh` should use `192.168.0.170`/`192.168.0.171` — those are the
+  direct ~100 Gb/s wired links. The `.shawndo.intra` hostnames resolve over wifi (~58 MB/s
+  observed), which is far too slow for 27 GB image transfers; wifi is only needed for
+  external/management access. From a node, `ssh 192.168.0.171` works; from `eve` it does not.
 - Inter-node networking: **RoCE/InfiniBand** for the NCCL data plane
   (`IB_PORTS=rocep1s0f0,roceP2p1s0f0`) and **Ethernet** for control plane
   (`ETH_IF=enp1s0f0np0`, `ETH_IF2=enP2p1s0f0np0`). These are the actual NIC names on this

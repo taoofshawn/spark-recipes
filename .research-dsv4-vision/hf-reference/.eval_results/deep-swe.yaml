@@ -1,0 +1,7 @@
+- dataset:
+    id: datacurve/deep-swe
+    task_id: deep_swe
+  value: 59.3
+  source:
+    url: https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash-Vision-Exp
+    name: Model Card

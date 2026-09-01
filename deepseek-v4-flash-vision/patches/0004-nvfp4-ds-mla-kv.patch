@@ -1,0 +1,120 @@
+diff --git a/vllm/config/cache.py b/vllm/config/cache.py
+index dc4e6fa..3a85300 100644
+--- a/vllm/config/cache.py
++++ b/vllm/config/cache.py
+@@ -45,6 +45,7 @@ CacheDType = Literal[
+     "fp8_e5m2",
+     "fp8_inc",
+     "fp8_ds_mla",
++    "nvfp4_ds_mla",
+     "turboquant_k8v4",
+     "turboquant_4bit_nc",
+     "turboquant_k3v4_nc",
+diff --git a/vllm/models/deepseek_v4/attention.py b/vllm/models/deepseek_v4/attention.py
+index 0755557..2a48d56 100644
+--- a/vllm/models/deepseek_v4/attention.py
++++ b/vllm/models/deepseek_v4/attention.py
+@@ -101,6 +101,12 @@ def _resolve_dsv4_kv_cache_dtype(
+     token's KV row in its element dtype: bf16 or per-tensor FP8 E4M3.
+     """
+     if use_fp8_ds_mla_layout:
++        # Community nvfp4_ds_mla path (tonyd2wild/Anemll lineage): the KV is
++        # stored in the same packed uint8 DS-MLA layout as fp8_ds_mla, with
++        # NVFP4 quant mode. Keep the fp8_ds_mla envelope (584B) so the sparse
++        # MLA store/decode kernels operate on a proven layout.
++        if kv_cache_dtype == "nvfp4_ds_mla":
++            return kv_cache_dtype, torch.uint8
+         # fp8_ds_mla block format: UE8M0 block-scaled fp8 packed as uint8.
+         assert kv_cache_dtype.startswith("fp8"), (
+             f"DeepseekV4 fp8_ds_mla layout only supports fp8 kv-cache, "
+@@ -745,19 +751,21 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
+         # alignment; plain bf16 / per-tensor fp8 rows use natural element-size
+         # pages.
+         uses_fp8_ds_mla_layout = self.kv_cache_dtype == "fp8_ds_mla"
++        uses_nvfp4_ds_mla_layout = self.kv_cache_dtype == "nvfp4_ds_mla"
++        packed_layout = uses_fp8_ds_mla_layout or uses_nvfp4_ds_mla_layout
+         return MLAAttentionSpec(
+             block_size=vllm_config.cache_config.block_size,
+             num_kv_heads=1,
+             head_size=self.head_dim,
+-            dtype=torch.uint8 if uses_fp8_ds_mla_layout else self.kv_cache_torch_dtype,
++            dtype=torch.uint8 if packed_layout else self.kv_cache_torch_dtype,
+             tokens_per_state=self.compress_ratio,
+             cache_dtype_str=self.kv_cache_dtype,
+-            alignment=576 if uses_fp8_ds_mla_layout else 512,
++            alignment=576 if packed_layout else 512,
+             model_version="deepseek_v4",
+             kv_quant_mode=get_kv_quant_mode(self.kv_cache_dtype),
+             # DeepseekV4: 448B NoPE + 128B RoPE + 8B fp8 scale = 584B per token;
+             # head_size stays semantic (512).
+-            state_content_bytes=584 if uses_fp8_ds_mla_layout else None,
++            state_content_bytes=584 if packed_layout else None,
+         )
+ 
+ 
+@@ -789,7 +797,9 @@ class DeepseekV4IndexerCache(torch.nn.Module, AttentionLayerBase):
+     def get_kv_cache_spec(self, vllm_config: VllmConfig) -> KVCacheSpec:
+         # head_dim already carries the fp8 scale padding
+         # tokens_per_state=1 for V3.2, >1 for DeepseekV4; same cache layout.
+-        uses_fp8_ds_mla_layout = vllm_config.cache_config.cache_dtype == "fp8_ds_mla"
++        uses_fp8_ds_mla_layout = vllm_config.cache_config.cache_dtype in (
++            "fp8_ds_mla", "nvfp4_ds_mla"
++        )
+         return MLAAttentionSpec(
+             block_size=self.cache_config.block_size,
+             num_kv_heads=1,
+diff --git a/vllm/models/deepseek_v4/nvidia/flashinfer_sparse.py b/vllm/models/deepseek_v4/nvidia/flashinfer_sparse.py
+index 7874ca7..b978c4d 100644
+--- a/vllm/models/deepseek_v4/nvidia/flashinfer_sparse.py
++++ b/vllm/models/deepseek_v4/nvidia/flashinfer_sparse.py
+@@ -103,6 +103,7 @@ class DeepseekV4FlashInferMLASparseBackend(DeepseekV4SparseMLABackend):
+         "fp8",
+         "fp8_e4m3",
+         "fp8_ds_mla",
++        "nvfp4_ds_mla",
+     ]
+ 
+     @staticmethod
+@@ -152,7 +153,7 @@ class DeepseekV4FlashInferMLASparseBackend(DeepseekV4SparseMLABackend):
+                 return "kv_cache_dtype not supported"
+             return None
+         if device_capability.major == 12:
+-            if kv_cache_dtype not in ("fp8", "fp8_e4m3", "fp8_ds_mla"):
++            if kv_cache_dtype not in ("fp8", "fp8_e4m3", "fp8_ds_mla", "nvfp4_ds_mla"):
+                 return "kv_cache_dtype not supported"
+             from vllm.utils.flashinfer import has_flashinfer_sparse_mla_sm120
+ 
+@@ -161,6 +162,8 @@ class DeepseekV4FlashInferMLASparseBackend(DeepseekV4SparseMLABackend):
+                     "FLASHINFER_MLA_SPARSE_DSV4 SM120 requires FlashInfer's "
+                     "sparse MLA decode API"
+                 )
++            if kv_cache_dtype == "nvfp4_ds_mla":
++                return None
+             return None
+         return "FLASHINFER_MLA_SPARSE_DSV4 requires SM10x or SM12x"
+ 
+diff --git a/vllm/utils/torch_utils.py b/vllm/utils/torch_utils.py
+index faee430..2d428e4 100644
+--- a/vllm/utils/torch_utils.py
++++ b/vllm/utils/torch_utils.py
+@@ -45,6 +45,7 @@ STR_DTYPE_TO_TORCH_DTYPE = {
+     "fp8_per_token_head": torch.uint8,
+     "fp8_inc": torch.float8_e4m3fn,
+     "fp8_ds_mla": torch.uint8,
++    "nvfp4_ds_mla": torch.uint8,
+     "turboquant_k8v4": torch.uint8,
+     "turboquant_4bit_nc": torch.uint8,
+     "turboquant_k3v4_nc": torch.uint8,
+diff --git a/vllm/v1/attention/backends/mla/sparse_swa.py b/vllm/v1/attention/backends/mla/sparse_swa.py
+index fe8be80..f8565a4 100644
+--- a/vllm/v1/attention/backends/mla/sparse_swa.py
++++ b/vllm/v1/attention/backends/mla/sparse_swa.py
+@@ -96,7 +96,7 @@ class DeepseekV4SWACache(torch.nn.Module, AttentionLayerBase):
+     def get_kv_cache_spec(self, vllm_config: VllmConfig) -> KVCacheSpec:
+         # fp8_ds_mla's UE8M0 paged layout needs 576B alignment; contiguous
+         # bf16/fp8 cache uses the natural element-size page.
+-        uses_fp8_ds_mla_layout = self.cache_config.cache_dtype == "fp8_ds_mla"
++        uses_fp8_ds_mla_layout = self.cache_config.cache_dtype in ("fp8_ds_mla", "nvfp4_ds_mla")
+         return SlidingWindowMLASpec(
+             block_size=self.block_size,
+             num_kv_heads=1,

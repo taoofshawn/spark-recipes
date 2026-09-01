@@ -1,0 +1,305 @@
+From 0e656021429bf2d5d5218ae4002dbce598e18cab Mon Sep 17 00:00:00 2001
+From: Zihua Wu <13583761+lucifer1004@users.noreply.github.com>
+Date: Sun, 23 Aug 2026 23:18:19 -0700
+Subject: [PATCH 1/3] fix(dsv4): keep C128A decode topk indices contiguous on
+ SM120
+
+build_c128a_topk_metadata returned a width-narrowed slice of the
+persistent c128a_global_decode_buffer, so the view kept the buffer's row
+stride and was not contiguous. The FlashInfer SM120 sparse-MLA kernel
+rejects it as extra_indices (eidx must be contiguous), killing the
+server during CUDA-graph capture whenever a decode-side call exceeds 64
+tokens (e.g. DSpark verification batches with num_decodes * (1 + K)
+rows) on a C128A layer.
+
+Return the full-width row slice of the buffer instead: it is contiguous
+and stays in the persistent buffer, so CUDA-graph capture sees a stable
+address. Decode-side consumers bound reads by the per-token topk lens,
+so stale columns past the active width are never read. The prefill view
+keeps the active-width slice because its Triton consumers count
+non-negative entries across the row and are stride-aware.
+
+Signed-off-by: Zihua Wu <13583761+lucifer1004@users.noreply.github.com>
+---
+ .../kernels/attention/test_flashmla_sparse.py | 14 +++++++++--
+ vllm/models/deepseek_v4/sparse_mla.py         | 24 +++++++++++++++++--
+ 2 files changed, 34 insertions(+), 4 deletions(-)
+
+diff --git a/tests/kernels/attention/test_flashmla_sparse.py b/tests/kernels/attention/test_flashmla_sparse.py
+index e180b035c596..8dcfe627b6c6 100644
+--- a/tests/kernels/attention/test_flashmla_sparse.py
++++ b/tests/kernels/attention/test_flashmla_sparse.py
+@@ -4,7 +4,10 @@
+ import torch
+ 
+ 
+-def test_deepseek_v4_c128a_adaptive_width_has_capture_stable_stride():
++@pytest.mark.parametrize("full_width_decode", [False, True])
++def test_deepseek_v4_c128a_adaptive_width_has_capture_stable_stride(
++    full_width_decode: bool,
++):
+     from vllm.models.deepseek_v4.sparse_mla import build_c128a_topk_metadata
+ 
+     device = torch.device("cuda")
+@@ -26,13 +29,20 @@ def test_deepseek_v4_c128a_adaptive_width_has_capture_stable_stride():
+         global_decode_buffer=global_decode_buffer,
+         decode_lens_buffer=torch.empty(2, dtype=torch.int32, device=device),
+         prefill_buffer=prefill_buffer,
++        full_width_decode=full_width_decode,
+     )
+     captured_decode, _, captured_prefill = build_c128a_topk_metadata(
+         max_compressed_tokens=256,
+         **kwargs,
+     )
+-    assert captured_decode.shape == captured_prefill.shape == (2, 256)
++    # SM120 (full_width_decode) keeps the decode view contiguous across the
++    # full buffer width; other backends get the active-width slice. The
++    # prefill view is always narrowed.
++    expected_decode_width = capacity_width if full_width_decode else 256
++    assert captured_decode.shape == (2, expected_decode_width)
++    assert captured_prefill.shape == (2, 256)
+     assert captured_decode.stride(0) == captured_prefill.stride(0) == capacity_width
++    assert captured_decode.is_contiguous() == full_width_decode
+ 
+     captured_rows = torch.empty((4, 4), dtype=torch.int32, device=device)
+     captured_rows[:2].copy_(captured_decode[:, :4])
+diff --git a/vllm/models/deepseek_v4/sparse_mla.py b/vllm/models/deepseek_v4/sparse_mla.py
+index ebff031cea70..24de23c61642 100644
+--- a/vllm/models/deepseek_v4/sparse_mla.py
++++ b/vllm/models/deepseek_v4/sparse_mla.py
+@@ -9,6 +9,7 @@
+ 
+ from vllm.config import VllmConfig
+ from vllm.config.cache import CacheDType
++from vllm.platforms import current_platform
+ from vllm.platforms.interface import DeviceCapability
+ from vllm.triton_utils import tl, triton
+ from vllm.utils.math_utils import cdiv
+@@ -148,6 +149,13 @@ def __init__(
+ 
+         # Pre-allocate C128A topk buffers for CUDA graph address stability.
+         if self.compress_ratio == 128:
++            # The FlashInfer SM120 sparse-MLA kernel requires a contiguous
++            # eidx, so its decode view spans the full buffer width; other
++            # backends keep the active-width slice.
++            capability = current_platform.get_device_capability()
++            self._c128a_decode_full_width = (
++                capability is not None and capability.major == 12
++            )
+             c128a_max_compressed = cdiv(
+                 self.model_config.max_model_len, self.compress_ratio
+             )
+@@ -264,6 +272,7 @@ def _build_c128a_metadata(
+             self.c128a_decode_lens_buffer,
+             self.c128a_prefill_buffer,
+             max_compressed_tokens=active_topk_width,
++            full_width_decode=self._c128a_decode_full_width,
+         )
+ 
+         result: dict[str, torch.Tensor | None] = {}
+@@ -303,6 +312,7 @@ def build_c128a_topk_metadata(
+     decode_lens_buffer: torch.Tensor,
+     prefill_buffer: torch.Tensor,
+     max_compressed_tokens: int = 8192,
++    full_width_decode: bool = False,
+ ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+     """Single kernel for all C128A tokens (decode + prefill).
+ 
+@@ -310,7 +320,14 @@ def build_c128a_topk_metadata(
+     Prefill tokens: position → local indices [0, ..., n-1, -1, ...].
+ 
+     Writes into pre-allocated buffers for CUDA graph address stability.
+-    Returns slices of the buffers.
++    Returns views of the buffers.
++
++    With full_width_decode (SM120), the decode view keeps the full buffer
++    width: full-width row slices are contiguous, which the FlashInfer SM120
++    kernel requires of eidx, and decode reads are bounded by the per-token
++    lens. Otherwise the decode view is narrowed to the active width. The
++    prefill view always stays narrowed: its Triton consumers count
++    non-negative entries and must not scan stale tail columns.
+     """
+     num_tokens = positions.shape[0]
+     num_prefill_tokens = num_tokens - num_decode_tokens
+@@ -322,7 +339,10 @@ def build_c128a_topk_metadata(
+     )
+     assert global_decode_buffer.stride(-1) == prefill_buffer.stride(-1) == 1
+ 
+-    global_decode = global_decode_buffer[:num_decode_tokens, :max_compressed_tokens]
++    if full_width_decode:
++        global_decode = global_decode_buffer[:num_decode_tokens]
++    else:
++        global_decode = global_decode_buffer[:num_decode_tokens, :max_compressed_tokens]
+     decode_lens = decode_lens_buffer[:num_decode_tokens]
+     prefill_local = prefill_buffer[:num_prefill_tokens, :max_compressed_tokens]
+     assert global_decode.stride(0) == global_decode_buffer.stride(0)
+
+From bdff48b9da367bcb98aaa1b0744eaade4da6cf45 Mon Sep 17 00:00:00 2001
+From: Zihua Wu <13583761+lucifer1004@users.noreply.github.com>
+Date: Thu, 27 Aug 2026 07:06:02 -0700
+Subject: [PATCH 2/3] refactor(dsv4): inline the SM120 decode-width judgment
+
+Drop the full_width_decode argument: build_c128a_topk_metadata now checks
+the device capability itself, with a TODO for SM120 adaptive-width support.
+The stride/contiguity test monkeypatches the platform capability to cover
+both branches.
+
+Signed-off-by: Zihua Wu <13583761+lucifer1004@users.noreply.github.com>
+---
+ .../kernels/attention/test_flashmla_sparse.py | 29 ++++++++++++-------
+ vllm/models/deepseek_v4/sparse_mla.py         | 24 +++++----------
+ 2 files changed, 26 insertions(+), 27 deletions(-)
+
+diff --git a/tests/kernels/attention/test_flashmla_sparse.py b/tests/kernels/attention/test_flashmla_sparse.py
+index 8dcfe627b6c6..fb93557a32c0 100644
+--- a/tests/kernels/attention/test_flashmla_sparse.py
++++ b/tests/kernels/attention/test_flashmla_sparse.py
+@@ -4,11 +4,19 @@
+ import torch
+ 
+ 
+-@pytest.mark.parametrize("full_width_decode", [False, True])
++@pytest.mark.parametrize("sm120", [False, True])
+ def test_deepseek_v4_c128a_adaptive_width_has_capture_stable_stride(
+-    full_width_decode: bool,
++    monkeypatch: pytest.MonkeyPatch,
++    sm120: bool,
+ ):
+-    from vllm.models.deepseek_v4.sparse_mla import build_c128a_topk_metadata
++    from vllm.models.deepseek_v4 import sparse_mla
++    from vllm.platforms.interface import DeviceCapability
++
++    monkeypatch.setattr(
++        sparse_mla.current_platform,
++        "get_device_capability",
++        lambda: DeviceCapability(12, 0) if sm120 else DeviceCapability(10, 0),
++    )
+ 
+     device = torch.device("cuda")
+     capacity_width = 512
+@@ -29,20 +37,19 @@ def test_deepseek_v4_c128a_adaptive_width_has_capture_stable_stride(
+         global_decode_buffer=global_decode_buffer,
+         decode_lens_buffer=torch.empty(2, dtype=torch.int32, device=device),
+         prefill_buffer=prefill_buffer,
+-        full_width_decode=full_width_decode,
+     )
+-    captured_decode, _, captured_prefill = build_c128a_topk_metadata(
++    captured_decode, _, captured_prefill = sparse_mla.build_c128a_topk_metadata(
+         max_compressed_tokens=256,
+         **kwargs,
+     )
+-    # SM120 (full_width_decode) keeps the decode view contiguous across the
+-    # full buffer width; other backends get the active-width slice. The
+-    # prefill view is always narrowed.
+-    expected_decode_width = capacity_width if full_width_decode else 256
++    # SM120 keeps the decode view contiguous across the full buffer width;
++    # other backends get the active-width slice. The prefill view is always
++    # narrowed.
++    expected_decode_width = capacity_width if sm120 else 256
+     assert captured_decode.shape == (2, expected_decode_width)
+     assert captured_prefill.shape == (2, 256)
+     assert captured_decode.stride(0) == captured_prefill.stride(0) == capacity_width
+-    assert captured_decode.is_contiguous() == full_width_decode
++    assert captured_decode.is_contiguous() == sm120
+ 
+     captured_rows = torch.empty((4, 4), dtype=torch.int32, device=device)
+     captured_rows[:2].copy_(captured_decode[:, :4])
+@@ -55,7 +62,7 @@ def test_deepseek_v4_c128a_adaptive_width_has_capture_stable_stride(
+ 
+     global_decode_buffer.fill_(-99)
+     prefill_buffer.fill_(-99)
+-    build_c128a_topk_metadata(
++    sparse_mla.build_c128a_topk_metadata(
+         max_compressed_tokens=128,
+         **kwargs,
+     )
+diff --git a/vllm/models/deepseek_v4/sparse_mla.py b/vllm/models/deepseek_v4/sparse_mla.py
+index 24de23c61642..8b7449974b41 100644
+--- a/vllm/models/deepseek_v4/sparse_mla.py
++++ b/vllm/models/deepseek_v4/sparse_mla.py
+@@ -149,13 +149,6 @@ def __init__(
+ 
+         # Pre-allocate C128A topk buffers for CUDA graph address stability.
+         if self.compress_ratio == 128:
+-            # The FlashInfer SM120 sparse-MLA kernel requires a contiguous
+-            # eidx, so its decode view spans the full buffer width; other
+-            # backends keep the active-width slice.
+-            capability = current_platform.get_device_capability()
+-            self._c128a_decode_full_width = (
+-                capability is not None and capability.major == 12
+-            )
+             c128a_max_compressed = cdiv(
+                 self.model_config.max_model_len, self.compress_ratio
+             )
+@@ -272,7 +265,6 @@ def _build_c128a_metadata(
+             self.c128a_decode_lens_buffer,
+             self.c128a_prefill_buffer,
+             max_compressed_tokens=active_topk_width,
+-            full_width_decode=self._c128a_decode_full_width,
+         )
+ 
+         result: dict[str, torch.Tensor | None] = {}
+@@ -312,7 +304,6 @@ def build_c128a_topk_metadata(
+     decode_lens_buffer: torch.Tensor,
+     prefill_buffer: torch.Tensor,
+     max_compressed_tokens: int = 8192,
+-    full_width_decode: bool = False,
+ ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+     """Single kernel for all C128A tokens (decode + prefill).
+ 
+@@ -322,12 +313,10 @@ def build_c128a_topk_metadata(
+     Writes into pre-allocated buffers for CUDA graph address stability.
+     Returns views of the buffers.
+ 
+-    With full_width_decode (SM120), the decode view keeps the full buffer
+-    width: full-width row slices are contiguous, which the FlashInfer SM120
+-    kernel requires of eidx, and decode reads are bounded by the per-token
+-    lens. Otherwise the decode view is narrowed to the active width. The
+-    prefill view always stays narrowed: its Triton consumers count
+-    non-negative entries and must not scan stale tail columns.
++    The decode view keeps the full buffer width on SM120: full-width row
++    slices are contiguous, which the FlashInfer SM120 kernel requires of
++    eidx, and decode reads are bounded by the per-token lens. The prefill
++    view always stays narrowed to the active width.
+     """
+     num_tokens = positions.shape[0]
+     num_prefill_tokens = num_tokens - num_decode_tokens
+@@ -339,7 +328,10 @@ def build_c128a_topk_metadata(
+     )
+     assert global_decode_buffer.stride(-1) == prefill_buffer.stride(-1) == 1
+ 
+-    if full_width_decode:
++    # TODO: support adaptive-width decode on SM120 (needs the FlashInfer
++    # SM120 kernel to accept a real row stride for eidx).
++    capability = current_platform.get_device_capability()
++    if capability is not None and capability.major == 12:
+         global_decode = global_decode_buffer[:num_decode_tokens]
+     else:
+         global_decode = global_decode_buffer[:num_decode_tokens, :max_compressed_tokens]
+
+From 9d06edf9f12767d705e7ced855a67d0df430f18b Mon Sep 17 00:00:00 2001
+From: Wentao Ye <44945378+yewentao256@users.noreply.github.com>
+Date: Thu, 27 Aug 2026 11:03:58 -0400
+Subject: [PATCH 3/3] Update vllm/models/deepseek_v4/sparse_mla.py
+
+Signed-off-by: Wentao Ye <44945378+yewentao256@users.noreply.github.com>
+---
+ vllm/models/deepseek_v4/sparse_mla.py | 5 -----
+ 1 file changed, 5 deletions(-)
+
+diff --git a/vllm/models/deepseek_v4/sparse_mla.py b/vllm/models/deepseek_v4/sparse_mla.py
+index 8b7449974b41..7f371c392247 100644
+--- a/vllm/models/deepseek_v4/sparse_mla.py
++++ b/vllm/models/deepseek_v4/sparse_mla.py
+@@ -312,11 +312,6 @@ def build_c128a_topk_metadata(
+ 
+     Writes into pre-allocated buffers for CUDA graph address stability.
+     Returns views of the buffers.
+-
+-    The decode view keeps the full buffer width on SM120: full-width row
+-    slices are contiguous, which the FlashInfer SM120 kernel requires of
+-    eidx, and decode reads are bounded by the per-token lens. The prefill
+-    view always stays narrowed to the active width.
+     """
+     num_tokens = positions.shape[0]
+     num_prefill_tokens = num_tokens - num_decode_tokens

@@ -1,0 +1,7 @@
+- dataset:
+    id: harborframework/terminal-bench-2.1
+    task_id: terminalbench_2_1
+  value: 83.9
+  source:
+    url: https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash-Vision-Exp
+    name: Model Card

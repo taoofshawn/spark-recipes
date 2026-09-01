@@ -1,0 +1,19 @@
+--- a/vllm/v1/kv_cache_interface.py
++++ b/vllm/v1/kv_cache_interface.py
+@@ -178,7 +178,15 @@
+ 
+     def get_num_kernel_states(self, kernel_block_size: int) -> int:
+         if self.tokens_per_state > 0:
+-            return kernel_block_size // self.tokens_per_state
++            # PATCH(dsv4-block64): with kernel_block_size=64 (required by
++            # flashinfer's SparseMlaSm120DecodeDsv4, which hard-codes 64-token
++            # pages as a kernel template parameter) and tokens_per_state=128
++            # (DSV4 compressed-SWA layers), floor division yields 0 states per
++            # page -> page_size_bytes=0 -> ZeroDivisionError in
++            # get_kv_cache_config_from_groups. Clamp to at least one state per
++            # page; states spanning pages are addressed per-token via block
++            # tables, so this only affects that group's allocation sizing.
++            return max(1, kernel_block_size // self.tokens_per_state)
+         return 1
+ 
+     def max_memory_usage_bytes(self, vllm_config: VllmConfig) -> int:

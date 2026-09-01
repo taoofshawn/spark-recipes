@@ -1,0 +1,12 @@
+diff --git a/vllm/config/vllm.py b/vllm/config/vllm.py
+index aadaccc..c9e6f24 100644
+--- a/vllm/config/vllm.py
++++ b/vllm/config/vllm.py
+@@ -2823,6 +2823,7 @@ class VllmConfig:
+             return self
+         if (
+             self.cache_config.cache_dtype.startswith("nvfp4")
++            and not self.cache_config.cache_dtype.endswith("_ds_mla")
+             and self.model_config.use_mla
+         ):
+             raise ValueError(

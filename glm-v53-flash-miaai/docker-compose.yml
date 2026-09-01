@@ -80,6 +80,7 @@ services:
       MODEL: "${MODEL:-Mia-AiLab/GLM-5.3-Flash-EXL3-TR3-4bpw}"
       MODEL_REVISION: "${MODEL_REVISION:-25a44fdbf16862a46b7cc9921142c6c81350af2f}"
       DFLASH_MODEL: "${DFLASH_MODEL:-incoai/GLM-5.3-Flash-DFlash2}"
+      DFLASH_REVISION: "${DFLASH_REVISION:-bf582e4eacc1810f76656d1811693ff6c6737d2a}"
       SERVED_MODEL_NAME: "${SERVED_MODEL_NAME:-GLM-5.3-Flash-EXL3}"
       PORT: "${PORT:-4000}"
       TP: 2
@@ -138,7 +139,7 @@ services:
         }
         MODEL_DIR="$$(resolve_snapshot "$${MODEL}" "$${MODEL_REVISION}")"
         [ -n "$$MODEL_DIR" ] || { echo "FATAL: EXL3 weights not found in HF cache for $$MODEL (rev $${MODEL_REVISION:-tip}). Download on both nodes first (see README)." >&2; exit 1; }
-        DFLASH_MODEL_DIR="$$(resolve_snapshot "$${DFLASH_MODEL}" "")"
+        DFLASH_MODEL_DIR="$$(resolve_snapshot "$${DFLASH_MODEL}" "$${DFLASH_REVISION:-}")"
         [ -n "$$DFLASH_MODEL_DIR" ] || { echo "FATAL: DFlash2 drafter not found in HF cache for $$DFLASH_MODEL. Download on both nodes first (see README)." >&2; exit 1; }
 
         # Runtime patches (baked in the image at /opt/glm53; spinwait is the

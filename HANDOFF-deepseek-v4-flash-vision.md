@@ -69,7 +69,7 @@ the point of weight loading.
 ## Repo / file state — LOCAL (dev host: /home/sdrew/code/github.com/taoofshawn/spark-recipes)
 
 - Branch: `deepseek-v4-flash-vision` (checkout).
-- Untracked new dirs: `deepseek-v4-flash-vision/` (the recipe) and `.research-dsv4-vision/` (HF downloads: reference `inference/` + `encoding/` reference implementation + tests).
+- Recipe + research live under `deepseek-v4-flash-vision/`; the vendored HF reference (inference/ + encoding/ implementation + tests) is at `deepseek-v4-flash-vision/research/hf-reference/`.
 - Recipe contents (all UNCOMMITTED):
   - `docker-compose.yml` (entrypoint /boot.sh, MTP 5, overlay mounts /workspace, `MODEL_TON` rev `e46e16bf…` = what's cached on both nodes; weights identical to pinned 86f746b3…)
   - `.env`, `.env.node0`, `.env.node1` (cluster IPs/NICs correct)

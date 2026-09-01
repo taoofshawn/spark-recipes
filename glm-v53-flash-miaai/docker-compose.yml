@@ -130,7 +130,7 @@ services:
         # (offline; must be cached on both nodes — see README deploy step 0).
         resolve_snapshot() {
           local hub="$1" rev="$2"
-          local dir="/root/.cache/huggingface/hub/models--$$(echo "$$hub" | tr '/' '--')"
+          local dir="/root/.cache/huggingface/hub/models--$$(echo "$$hub" | sed 's|/|--|g')"
           if [ -n "$$rev" ] && [ -d "$$dir/snapshots/$$rev" ]; then echo "$$dir/snapshots/$$rev"; return 0; fi
           local snap; for snap in "$$dir"/snapshots/*/; do
             if [ -f "$$snap/config.json" ]; then echo "$$snap"; return 0; fi

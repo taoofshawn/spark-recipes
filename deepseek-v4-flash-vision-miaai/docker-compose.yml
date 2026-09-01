@@ -155,7 +155,7 @@ services:
     command:
       - bash
       - -lc
-      - >
+      - |
         set -euo pipefail
         export PATH="/usr/local/cuda/bin:/usr/local/bin:$${PATH:-}";
         export CUDA_HOME="$${CUDA_HOME:-/usr/local/cuda}";

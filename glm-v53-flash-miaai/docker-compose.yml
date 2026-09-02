@@ -34,6 +34,10 @@ services:
       - ./files/chat_template.jinja:/opt/glm53-files/chat_template.jinja:ro
       # SpinCondition patch (the one runtime patch upstream host-mounts)
       - ./patch_spinwait.py:/opt/glm53/patch_spinwait.py:ro
+      # KV memory-check hotfix: route GLM slot-share layouts to the glm5-aware
+      # accounting (GHCR image's check double-counts the drafter's padded
+      # pages -> 34.15 GiB false positive at 1M; see hotfix docstring)
+      - ./hotfix_kv_check_glm5.py:/opt/glm53/hotfix_kv_check_glm5.py:ro
     environment:
       # ---- GPU ----
       CUDA_VISIBLE_DEVICES: "0"
@@ -144,7 +148,7 @@ services:
 
         # Runtime patches (baked in the image at /opt/glm53; spinwait is the
         # host-mounted one). All guarded — skip silently if absent.
-        for _p in patch_glm_video_placeholders patch_suppress_stops_in_reasoning patch_scheduler_decode_floor patch_glm5_drafter_group patch_hybrid_prefix_hit patch_xgrammar_termination patch_kpool_tail_slotmap patch_spinwait patch_indexer_workspace patch_ablit; do
+        for _p in patch_glm_video_placeholders patch_suppress_stops_in_reasoning patch_scheduler_decode_floor patch_glm5_drafter_group patch_hybrid_prefix_hit patch_xgrammar_termination patch_kpool_tail_slotmap patch_spinwait patch_indexer_workspace patch_ablit hotfix_kv_check_glm5; do
           if [ -f "/opt/glm53/$${_p}.py" ]; then python3 "/opt/glm53/$${_p}.py" || exit 1; fi
         done
 

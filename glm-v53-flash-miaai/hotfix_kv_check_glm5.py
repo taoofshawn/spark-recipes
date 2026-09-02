@@ -2,35 +2,50 @@
 """Make the GHCR image's GLM-5.3 KV accounting self-consistent.
 
 The GHCR image ghcr.io/miaai-lab/glm-5.3-flash-2x-dgx-sparks:exl3 (digest
-9bb1557a...) carries the DFLASH2-DRAFTER-GROUP slot-share patch, but its
-KV-capacity accounting is out of sync with it: at max_model_len 1000000 the
-boot dies with
+9bb1557a...) carries partially-out-of-sync revisions of the DFLASH2
+DRAFTER-GROUP patch set. Three consequences, all hit on 2026-09-01/02:
 
-    ValueError: To serve at least one request with the model's max seq len
-    (1000000), (34.15 GiB KV cache is needed, ...)  [16.16 GiB available]
+1. (boot check) `_max_memory_usage_bytes_from_groups` has no glm5 branch and
+   the layout detector rejects the builder's padded drafter geometry ->
+   `ValueError: ... 34.15 GiB KV cache is needed ... 16.16 GiB available`
+   at max_model_len 1000000.
+2. (runtime) the baked builder's else branch is an older "STANDALONE"
+   revision: the draft group keeps block_size=16 with the drafter's
+   16384-token window -> 1025 draft blocks per request -> a full 1M request
+   needs ~1306 block ids vs a ~621-block pool -> the scheduler refuses every
+   large request (num_requests_waiting{reason="capacity"} stuck forever,
+   GPU idle, small requests OK at ~18 tok/s).
+3. (cosmetic) two defunct helper processes on each node.
 
-while the actual slot-share allocation only needs the honest cost. 34.15 GiB
-= ceil(1M/64) * 2351104 — the drafter group's PADDED page charged per block.
-Upstream MiaAI-Lab does not hit this because their locally built image keeps
-builder, detector and accounting in sync; the GHCR image lags it (their
-issue #97, "Local rebuild gets overwritten by GHCR").
+Upstream MiaAI-Lab does not hit this because their validated boots run
+LOCALLY BUILT images where builder, detector and accounting are in sync;
+the GHCR image lags (their issue #97, "Local rebuild gets overwritten by
+GHCR"). With their own start.sh + this same image you would hit the same
+failures; it is not a compose-conversion artifact.
 
-Fixes applied to vllm/v1/core/kv_cache_utils.py (all idempotent, fail-closed,
-atomic):
+Fixes applied to vllm/v1/core/kv_cache_utils.py (idempotent via marker,
+fail-closed: every anchor preflighted, atomic replace, compile check):
 
-  A) _glm5_next_tensor_layout: accept drafter specs whose page_size_padded
-     equals mla_page (the builder's padded slot-share geometry); still reject
-     any other padding.
+  A) _glm5_next_tensor_layout: accept drafter specs whose
+     page_size_padded == mla_page (the current overlay's padded slot-share
+     geometry); still reject any other padding.
   B) _max_memory_usage_bytes_from_groups: prepend an early glm5 branch that
-     computes needed memory the way the allocator does — one block id costs
-     len(mla)*mla_page + len(idx)*idx_page (+ standalone drafter pages), and
-     one max_model_len request occupies sum over groups of
-     ceil(group_max_bytes / group_page) block ids (same cdiv definition as
-     get_max_concurrency_for_kv_cache_config). The all-uniform "DeepseekV4"
-     branch is additionally guarded so it can never capture a glm5 layout.
-  D) diagnostic: the detector is renamed *_orig and wrapped; on a None
-     verdict the wrapper dumps the group structure so a failing boot names
-     the rejecting condition.
+     computes needed memory allocator-consistently: per_block =
+     len(mla)*mla_page + len(idx)*idx_page (+ standalone draft page),
+     blocks/req = window-bounded cdiv over MLA + draft + tail groups,
+     mamba groups EXCLUDED (length-independent SSM state, slot-shared with
+     MLA block ids). Guard the all-uniform "DeepseekV4" branch against glm5
+     layouts.
+  E) _get_kv_cache_groups_glm5_next: replace the stale STANDALONE else
+     branch with the current overlay's PADDED SLOT-SHARE rescale
+     (block_size=64, page_size_padded=mla_page), bounding draft demand to
+     ceil(window/64) blocks.
+  D) diagnostic: detector renamed *_orig and wrapped; on a None verdict the
+     wrapper dumps the group structure.
+
+Verification (2026-09-02): blocks/req 409 -> expected ~537 with fix E
+(280 attn + 256 draft-window + 1 tail); pool ~621 blocks; engine healthy,
+serving glm-5.3-flash at 1M context with vision.
 """
 import os
 import sys
@@ -47,7 +62,7 @@ MARK = "[glm53-miaai-kvcheck]"
 
 GUARD = "def _max_memory_usage_bytes_from_groups("
 
-# Fix A: accept the builder's padded slot-share drafter geometry
+# ---- Fix A: accept the builder's padded slot-share drafter geometry ----
 ANCHOR_A = """        if any(s.page_size_padded is not None for s in draft_inner.values()):
             return None"""
 
@@ -57,7 +72,7 @@ PATCHED_A = """        if any(  # [glm53-miaai-kvcheck]
         ):
             return None"""
 
-# Fix B: early glm5-aware accounting in _max_memory_usage_bytes_from_groups
+# ---- Fix B: early glm5-aware accounting in the memory check ----
 ANCHOR_B = """    elif all(
         isinstance(group.kv_cache_spec, UniformTypeKVCacheSpecs)
         for group in kv_cache_groups
@@ -69,9 +84,12 @@ PATCHED_B = """    if (glm5n_early := _glm5_next_tensor_layout(kv_cache_groups))
         # [glm53-miaai-kvcheck] Honest slot-share accounting, mirroring the
         # allocator (get_kv_cache_config_from_groups / _pool_bytes_per_block):
         # one block id costs len(mla)*mla_page + len(idx)*idx_page plus any
-        # standalone drafter pages; one max_model_len request occupies
+        # standalone draft pages; one max_model_len request occupies
         # sum over groups of ceil(group_max_bytes / group_page) block ids
-        # (same cdiv definition as get_max_concurrency_for_kv_cache_config).
+        # (same cdiv definition as get_max_concurrency_for_kv_cache_config),
+        # with SWA groups re-bounded by their inner sliding window (the
+        # UniformType wrapper drops it) and mamba groups excluded
+        # (length-independent, slot-shared with the MLA block ids).
         (
             attn_group,
             mamba_groups,
@@ -99,12 +117,8 @@ PATCHED_B = """    if (glm5n_early := _glm5_next_tensor_layout(kv_cache_groups))
             draft_shared = draft_page == mla_page
         if draft_names and not draft_shared:
             per_block += len(draft_names) * draft_page
+
         def _cdiv(group):
-            # Window-bounded demand: UniformTypeKVCacheSpecs loses the inner
-            # SlidingWindowSpec window (its max_memory_usage_pages scales with
-            # max_model_len), so re-derive pages from the inner specs' window.
-            # A windowed group only ever holds ceil(window / block) live
-            # blocks; unwindowed groups keep the max_model_len scaling.
             _s = group.kv_cache_spec
             _mb = _s.max_memory_usage_bytes(vllm_config)
             _pg = _s.page_size_bytes
@@ -135,8 +149,6 @@ PATCHED_B = """    if (glm5n_early := _glm5_next_tensor_layout(kv_cache_groups))
                 isinstance(s, KpoolTailSpec) for s in _inner.values()
             )
             if group is not attn_group and not _is_tail and group is not draft_group:
-                # mamba groups: length-independent SSM state, slot-shared
-                # with the MLA block ids (allocator shared_by) — excluded.
                 _parts.append(f"mamba(~{_cdiv(group)[0]} excl)")
                 continue
             _c, _blk, _pg, _t = _cdiv(group)
@@ -146,9 +158,7 @@ PATCHED_B = """    if (glm5n_early := _glm5_next_tensor_layout(kv_cache_groups))
             f"[kvcheck] early glm5 accounting: "
             f"blocks/req={blocks_per_request} per_block={per_block} "
             f"needed={blocks_per_request * per_block / 2**30:.2f} GiB "
-            f"| mla_names={len(mla_names)} mla_page={mla_page} "
-            f"idx_names={len(idx_names)} idx_page={idx_page} | "
-            + "; ".join(_parts),
+            f"| " + "; ".join(_parts),
             flush=True,
         )
         return blocks_per_request * per_block
@@ -159,49 +169,43 @@ PATCHED_B = """    if (glm5n_early := _glm5_next_tensor_layout(kv_cache_groups))
         # Special case (only DeepseekV4 for now): all groups are
         # UniformTypeKVCacheSpecs."""
 
-
-# Fix E: rescale the draft group like the CURRENT overlay's builder.
-# The baked builder's else branch is an older revision ("STANDALONE",
-# specs kept at block 16): with the drafter's window (16384) that makes
-# a 1M request need 1025 draft blocks -> 1306 total > pool => the
-# scheduler refuses ALL large requests (waiting{capacity} forever,
-# GPU idle). The current overlay's padded slot-share (block 64,
-# page_size_padded=mla_page) bounds draft demand to ceil(16384/64)=256.
+# ---- Fix E: rescale the draft group like the CURRENT overlay's builder ----
 ANCHOR_E = """        else:
-        # STANDALONE: the drafter's geometry cannot exactly fill the MLA
-        # page; keep its spec as-is and give its layers compact tensors
-        # of their own (emitted in get_kv_cache_config_from_groups and
-        # charged in the per-block cost).
-        new_draft_specs = dict(draft_specs)"""
+            # STANDALONE: the drafter's geometry cannot exactly fill the MLA
+            # page; keep its spec as-is and give its layers compact tensors
+            # of their own (emitted in get_kv_cache_config_from_groups and
+            # charged in the per-block cost).
+            new_draft_specs = dict(draft_specs)"""
 
 PATCHED_E = """        else:
-        # [glm53-miaai-drafterfix] PADDED SLOT-SHARE (current overlay):
-        # the drafter's bytes/token cannot exact-fill the MLA page.
-        # Manager 64 matches the SWA kernel, so padding the page to
-        # mla_page is a safe strided view (the boot-8 OOB was kernel 64
-        # inside a 2304-token manager). Layer i co-owns MLA tensor i.
-        # Without the rescale the standalone drafter keeps block 16 and
-        # its window-bounded demand (1025 blocks at window 16384)
-        # makes a 1M request unschedulable on a ~621-block pool.
-        compact_block = 64
-        logger.info(
-            "DFlash2 drafter KV: padded slot-share block=%d "
-            "mla_page=%d (was block=%s); exact-fit page mismatch "
-            "draft_bytes/token=%d",
-            compact_block,
-            mla_page,
-            any_draft.block_size,
-            draft_bytes_per_token,
-        )
-        new_draft_specs = {
-            name: replace(
-                s,
-                block_size=compact_block,
-                page_size_padded=mla_page,
+            # [glm53-miaai-kvcheck] PADDED SLOT-SHARE (current overlay):
+            # the drafter's bytes/token cannot exact-fill the MLA page.
+            # Manager 64 matches the SWA kernel, so padding the page to
+            # mla_page is a safe strided view (the boot-8 OOB was kernel 64
+            # inside a 2304-token manager). Layer i co-owns MLA tensor i.
+            # Without the rescale the standalone drafter keeps block 16 and
+            # its window-bounded demand (1025 blocks at window 16384)
+            # makes a 1M request unschedulable on a ~621-block pool.
+            compact_block = 64
+            logger.info(
+                "DFlash2 drafter KV: padded slot-share block=%d "
+                "mla_page=%d (was block=%s); exact-fit page mismatch "
+                "draft_bytes/token=%d",
+                compact_block,
+                mla_page,
+                any_draft.block_size,
+                draft_bytes_per_token,
             )
-            for name, s in draft_specs.items()
-        }"""
+            new_draft_specs = {
+                name: replace(
+                    s,
+                    block_size=compact_block,
+                    page_size_padded=mla_page,
+                )
+                for name, s in draft_specs.items()
+            }"""
 
+# ---- Fix D: rename the detector and add a diagnostic wrapper ----
 ANCHOR_D = "def _glm5_next_tensor_layout(\n"
 
 WRAPPER_D = '''

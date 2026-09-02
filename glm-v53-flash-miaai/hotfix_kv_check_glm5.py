@@ -1,35 +1,22 @@
 #!/usr/bin/env python3
 """Make the GHCR image's GLM-5.3 KV accounting self-consistent.
 
-Two baked components of ghcr.io/miaai-lab/glm-5.3-flash-2x-dgx-sparks:exl3
-(digest 9bb1557a...) disagree, and the disagreement surfaces as a false
-positive KV-capacity failure at max_model_len 1000000:
+The GHCR image ghcr.io/miaai-lab/glm-5.3-flash-2x-dgx-sparks:exl3 (digest
+9bb1557a...) carries the DFLASH2-DRAFTER-GROUP slot-share patch, but its
+KV-capacity accounting is out of sync with it: at max_model_len 1000000 the
+boot dies with
 
-1. The DFLASH2-DRAFTER-GROUP group builder (_get_kv_cache_groups_glm5_next)
-   emits the drafter's 5 SWA layers as PADDED slot-share
-   (block_size=64, page_size_padded=mla_page) — its own comment:
-   "Manager 64 matches the SWA kernel, so padding the page to mla_page is a
-   safe strided view".
-2. _glm5_next_tensor_layout() REJECTS any drafter spec with
-   page_size_padded is not None ("NEVER page_size_padded") — a stale
-   precondition from the pre-padded era (upstream boot-8 OOB note).
+    ValueError: To serve at least one request with the model's max seq len
+    (1000000), (34.15 GiB KV cache is needed, ...)  [16.16 GiB available]
 
-With the layout detector returning None, every glm5-aware consumer falls
-back to generic paths, and the memory check
-(_max_memory_usage_bytes_from_groups — which has NO glm5 branch at all in
-this image) charges the drafter group's padded page for every block of a
-full 1M request:
+while the actual slot-share allocation only needs the honest cost. 34.15 GiB
+= ceil(1M/64) * 2351104 — the drafter group's PADDED page charged per block.
+Upstream MiaAI-Lab does not hit this because their locally built image keeps
+builder, detector and accounting in sync; the GHCR image lags it (their
+issue #97, "Local rebuild gets overwritten by GHCR").
 
-    ceil(1_000_000 / 64) * 2_351_104 B = 34.15 GiB  (vs 16.16 GiB available)
-
--> "ValueError: To serve at least one request with the model's max seq len
-(1000000), (34.15 GiB KV cache is needed, ...)" — while the actual allocation
-only needs the honest slot-share cost. Upstream MiaAI-Lab does not hit this
-because their locally built image keeps builder, detector and accounting in
-sync; the GHCR image lags it (their issue #97, "Local rebuild gets
-overwritten by GHCR").
-
-Fixes, all in vllm/v1/core/kv_cache_utils.py:
+Fixes applied to vllm/v1/core/kv_cache_utils.py (all idempotent, fail-closed,
+atomic):
 
   A) _glm5_next_tensor_layout: accept drafter specs whose page_size_padded
      equals mla_page (the builder's padded slot-share geometry); still reject
@@ -38,13 +25,12 @@ Fixes, all in vllm/v1/core/kv_cache_utils.py:
      computes needed memory the way the allocator does — one block id costs
      len(mla)*mla_page + len(idx)*idx_page (+ standalone drafter pages), and
      one max_model_len request occupies sum over groups of
-     ceil(group_max_bytes / group_page) block ids (the same cdiv definition
-     as get_max_concurrency_for_kv_cache_config). The all-uniform
-     "DeepseekV4" branch is additionally guarded so it can never capture a
-     glm5 layout.
-
-Fail-closed: preflights all anchors before writing, atomic replace,
-idempotent via marker.
+     ceil(group_max_bytes / group_page) block ids (same cdiv definition as
+     get_max_concurrency_for_kv_cache_config). The all-uniform "DeepseekV4"
+     branch is additionally guarded so it can never capture a glm5 layout.
+  D) diagnostic: the detector is renamed *_orig and wrapped; on a None
+     verdict the wrapper dumps the group structure so a failing boot names
+     the rejecting condition.
 """
 import os
 import sys
@@ -137,6 +123,12 @@ PATCHED_B = """    if (glm5n_early := _glm5_next_tensor_layout(kv_cache_groups))
             _mb = group.kv_cache_spec.max_memory_usage_bytes(vllm_config)
             _pg = group.kv_cache_spec.page_size_bytes
             blocks_per_request += (_mb + _pg - 1) // _pg
+        print(
+            f"[kvcheck] early glm5 accounting: "
+            f"blocks/req={blocks_per_request} per_block={per_block} "
+            f"needed={blocks_per_request * per_block / 2**30:.2f} GiB",
+            flush=True,
+        )
         return blocks_per_request * per_block
     elif all(
         isinstance(group.kv_cache_spec, UniformTypeKVCacheSpecs)
@@ -144,6 +136,36 @@ PATCHED_B = """    if (glm5n_early := _glm5_next_tensor_layout(kv_cache_groups))
     ) and _glm5_next_tensor_layout(kv_cache_groups) is None:  # [glm53-miaai-kvcheck]
         # Special case (only DeepseekV4 for now): all groups are
         # UniformTypeKVCacheSpecs."""
+
+# Fix D: rename the detector and add a diagnostic wrapper
+ANCHOR_D = "def _glm5_next_tensor_layout(\n"
+
+WRAPPER_D = '''
+
+def _glm5_next_tensor_layout(kv_cache_groups):  # [glm53-miaai-kvcheck]
+    _r = _glm5_next_tensor_layout_orig(kv_cache_groups)
+    if _r is None:
+        _desc = []
+        for _g in kv_cache_groups:
+            _s = _g.kv_cache_spec
+            _inner = getattr(_s, "kv_cache_specs", None)
+            _types = (
+                sorted({type(x).__name__ for x in _inner.values()})
+                if _inner
+                else [type(_s).__name__]
+            )
+            _desc.append(
+                f"{type(_s).__name__}{_types}"
+                f"block={getattr(_s, 'block_size', None)}"
+                f"page={getattr(_s, 'page_size_bytes', None)}"
+                f"padded={getattr(_s, 'page_size_padded', None)}"
+            )
+        print("[kvcheck] detector -> None; groups:", " | ".join(_desc),
+              flush=True)
+    else:
+        print("[kvcheck] detector -> layout ok", flush=True)
+    return _r
+'''
 
 
 def main() -> int:
@@ -157,7 +179,7 @@ def main() -> int:
     if GUARD not in src:
         print("[kvcheck-hotfix] FAIL guard function not found", flush=True)
         return 1
-    for name, anchor in (("A", ANCHOR_A), ("B", ANCHOR_B)):
+    for name, anchor in (("A", ANCHOR_A), ("B", ANCHOR_B), ("D", ANCHOR_D)):
         if src.count(anchor) != 1:
             print(
                 f"[kvcheck-hotfix] FAIL anchor {name} count "
@@ -165,9 +187,14 @@ def main() -> int:
                 flush=True,
             )
             return 1
-    patched = src.replace(ANCHOR_A, PATCHED_A).replace(ANCHOR_B, PATCHED_B)
-    if patched.count(MARK) != 3:
-        print("[kvcheck-hotfix] FAIL replacement marks != 3", flush=True)
+    patched = src
+    patched = patched.replace(ANCHOR_D, "def _glm5_next_tensor_layout_orig(\n", 1)
+    patched = patched.replace(ANCHOR_A, PATCHED_A)
+    patched = patched.replace(ANCHOR_B, PATCHED_B)
+    patched = patched + WRAPPER_D
+    if patched.count(MARK) != 4:
+        print(f"[kvcheck-hotfix] FAIL marks={patched.count(MARK)} != 4",
+              flush=True)
         return 1
     compile(patched, str(TARGET), "exec")
     fd, tmp = tempfile.mkstemp(dir=str(TARGET.parent), suffix=".py")
@@ -179,7 +206,7 @@ def main() -> int:
         if os.path.exists(tmp):
             os.unlink(tmp)
         raise
-    print(f"[kvcheck-hotfix] patched {TARGET} (fixes A+B)", flush=True)
+    print(f"[kvcheck-hotfix] patched {TARGET} (fixes A+B+D)", flush=True)
     return 0
 
 

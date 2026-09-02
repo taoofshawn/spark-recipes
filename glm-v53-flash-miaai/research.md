@@ -16,11 +16,10 @@ minimal (live info only).
   usage). Temporarily torn down to make room for GLM — bring back with
   `docker compose --env-file .env --env-file .env.node{0,1} up -d` on branch
   `deepseek-v4-flash-vision-miaai`.
-- GLM (this recipe): boot repeatedly killed by a KV-capacity `ValueError`
-  (34.15 GiB needed vs 16.16 available). Root-caused (below) and patched via
-  a vendored boot hotfix (`hotfix_kv_check_glm5.py`); final boot validation
-  was still in progress when this file was written. One earlier boot WITH the
-  check fully no-op'd reached health 200 — allocation itself is sound.
+- GLM (this recipe): DEPLOYED, HEALTHY, SERVING VALIDATED on 2026-09-02
+  (~02:45Z) after a vendored KV-accounting hotfix (Problem 4 below).
+  `/v1/models` -> `GLM-5.3-Flash-EXL3`, max_model_len 1000000; image+text
+  chat completion returns a correct 4-shape description.
 
 ### Environment facts that shaped everything
 
@@ -97,35 +96,33 @@ Symptom: boot dies after weight load at
     (1000000), (34.15 GiB KV cache is needed, which is larger than the
     available KV cache memory (16.16 GiB) ...)
 
-34.15 GiB = ceil(1_000_000 / 64) * 2_351_104 — the drafter group's PADDED
-page charged for every block of a 1M request.
-
 Root cause chain (all inside the GHCR image's
-`vllm/v1/core/kv_cache_utils.py`, none of it reachable from compose flags):
+`vllm/v1/core/kv_cache_utils.py`, none of it reachable from compose flags),
+in the order we disproved candidates:
 
 1. The baked DFLASH2-DRAFTER-GROUP **builder**
-   (`_get_kv_cache_groups_glm5_next`) emits the drafter's 5 SWA layers as
-   PADDED slot-share: block_size=64, page_size_padded=mla_page. Its own
-   comment blesses this ("Manager 64 matches the SWA kernel ... safe strided
-   view").
-2. The baked **layout detector** (`_glm5_next_tensor_layout`) REJECTS any
-   drafter spec with `page_size_padded is not None` — a stale precondition
-   ("NEVER page_size_padded") from the pre-padded era. Builder and detector
-   disagree => detector returns None => every glm5-aware consumer falls back
-   to generic paths.
+   (`_get_kv_cache_groups_glm5_next`) emits the drafter's SWA layers as a
+   group whose specs lose their sliding-window bound once wrapped in
+   `UniformTypeKVCacheSpecs`.
+2. The baked **layout detector** (`_glm5_next_tensor_layout`) rejects any
+   drafter spec with `page_size_padded is not None` — out of sync with the
+   builder's padded geometry (an older/other builder variant). Detector
+   returns None => every glm5-aware consumer falls back to generic paths.
 3. The KV-capacity check (`_max_memory_usage_bytes_from_groups`, called from
    `get_kv_cache_configs` per-worker loop) has NO glm5 branch at all in this
-   image. The all-uniform "DeepseekV4" branch captures GLM's groups and
-   charges length-scaled pages per block for the drafter AND (in honest
-   accounting) the mamba groups.
-4. Mamba extra: MambaSpec groups are padded to the MLA page; their naive
-   `max_memory_usage_bytes` scales with max_model_len (~280 blocks each at
-   1M), but mamba SSM state is length-INDEPENDENT and, in the slot-share
-   layout, mamba layers parasitize the MLA block ids (shared_by in
-   `get_kv_cache_config_from_groups`). True 1M demand is ~313 block ids
-   (280 MLA + ~32 draft-window + 1 tail) ≈ 8.4 GiB ≤ 16.16 available —
-   consistent with upstream's documented 1.75x concurrency at 1M on a 690-
-   block pool.
+   image.
+4. Final root cause (confirmed by a per-group accounting breakdown logged at
+   boot): the mamba groups were NOT the problem (their naive demand is only
+   ~9 blocks each). The inflator was the **DFlash2 draft group**:
+   block=16, page=163,840, contributing **1025 blocks** at 1M. The builder
+   wraps the drafter's SlidingWindowSpec layers in `UniformTypeKVCacheSpecs`,
+   and THAT WRAPPER LOSES THE SLIDING WINDOW — its demand scales with
+   max_model_len instead of the window-bounded live demand
+   ceil(2048/16) = 128 blocks. A windowed SWA group never holds more than
+   ceil(window/block) live blocks; the stock wrapper forgets this. The same
+   window-unaware formula produces the misleading stock capacity line (see
+   upstream issue #94 — "GPU KV cache size" is not an honest capacity figure
+   for this hybrid).
 
 Why upstream doesn't hit this: their validated boots run LOCALLY BUILT
 images (recipe-stamped, issue #102 env) where builder, detector and
@@ -138,22 +135,34 @@ Fix: vendored boot hotfix `hotfix_kv_check_glm5.py` (mounted
 `/opt/glm53/hotfix_kv_check_glm5.py`, run in the compose patch loop before
 `vllm serve`), which edits `kv_cache_utils.py` in place:
 - A: detector accepts drafter specs whose page_size_padded == mla_page
-  (still rejects any other padding);
+  (still rejects any other padding) — future-proofs the detector against
+  the builder's padded geometry;
 - B: an early glm5 branch in `_max_memory_usage_bytes_from_groups` computes
   needed memory allocator-consistently: per_block = len(mla)*mla_page +
-  len(idx)*idx_page (+ standalone draft pages), blocks/req = cdiv sum over
-  MLA + draft + tail groups, mamba groups EXCLUDED (length-independent,
-  slot-shared);
-- D: diagnostic wrapper dumping the group structure when the detector
-  still returns None (leave in; it is one line per boot, or strip when the
-  hotfix is retired).
-Commits 9583658 -> e080b64 -> bc15903 -> 01ec852. The script is fail-closed:
-it preflights every anchor and REFUSES to write (nonzero exit, boot aborts)
-if the image changes under it.
+  len(idx)*idx_page (+ standalone draft page), blocks/req = cdiv over MLA +
+  draft + tail groups, mamba groups EXCLUDED (length-independent SSM state,
+  slot-shared with MLA block ids), and SWA groups RE-BOUNDED by their inner
+  sliding window (the wrapper loses it);
+- D: diagnostic wrapper dumping the group structure when the detector still
+  returns None (leave in; it is one line per boot, or strip when the hotfix
+  is retired).
+Commits 9583658 -> e080b64 -> bc15903 -> 01ec852 -> 2af342c -> 9030902 ->
+e85f83c. The script is fail-closed: it preflights every anchor and REFUSES
+to write (nonzero exit, boot aborts) if the image changes under it.
 
-Empirical backing: a diagnostic boot with the check fully no-op'd reached
-health 200 — the allocator's pool sizing (num_blocks = available //
-per_block, ~648 blocks) covers the real ~313-block demand of a 1M request.
+Measured final boot (2026-09-02 ~02:40Z): blocks/req=409
+(280 attn + 128 draft-window + 1 tail), per_block=27,326,976 B,
+needed=10.41 GiB <= 16.16 available; zero ValueErrors; engine reaches
+`Application startup complete`, health 200.
+
+NOTE on the stock capacity line: our boot logs
+`GPU KV cache size: 421,013 tokens, Maximum concurrency ... 0.42x` —
+do NOT read that as "cannot serve 1M". That line is computed by the same
+window-unaware formula (issue #94 documents exactly this). Honest demand
+for one 1M request is ~409 blocks vs a ~578-block pool => one concurrent
+1M request fits. Upstream's documented 1.75x came from their env's larger
+available memory (18.67 vs 16.16 GiB — likely GLM53_INDEXER_WORKSPACE and
+profiling differences) plus the same optimistic formula.
 
 ### Entrpi's repositories — review for tips and alternative solutions
 
@@ -184,9 +193,9 @@ pass:
 - **`Entrpi/sparkinfer-glmrt`**, **`Entrpi/qwen3.5-122B-A10B-on-spark`**
   (DFlash speculative decode on Spark) — adjacent DFlash work.
 
-Also in the same community ecosystem: `vcruz305/GLM-5.3-Flash-EXL3-K2-DGX-
-Spark-recipe` (credited inside the MiaAI overlay for the kpool-tail
-mechanism, docs/KPOOL_TAIL_BUG.md).
+Also in the same community ecosystem:
+`vcruz305/GLM-5.3-Flash-EXL3-K2-DGX-Spark-recipe` (credited inside the
+MiaAI overlay for the kpool-tail mechanism, docs/KPOOL_TAIL_BUG.md).
 
 ### Things a future session MUST re-visit (GLM)
 
@@ -202,14 +211,16 @@ mechanism, docs/KPOOL_TAIL_BUG.md).
    - #94 (honest KV-capacity boot log, GLM53_KV_CAPACITY_LOG) — if merged
      into the image, their capacity line supersedes our accounting patch.
    - #102 (EXL3_FAT_KERNEL=1 + MNBT=7168: head TP rank dies SILENTLY at
-     multimodal warmup on 2x GB10 — open as of 2026-09-01). Our boots have
-     not yet reached that stage. If a boot dies WITHOUT a traceback right
-     after CUDA-graph capture / multimodal warmup: set `EXL3_FAT_KERNEL=0`
-     and `MAX_NUM_BATCHED_TOKENS=2048` (their documented clean-boot combo)
-     and record it here.
+     multimodal warmup on 2x GB10 — open as of 2026-09-01). Our validated
+     boot DID pass warmup with the defaults (fat=1, MNBT=7168), so this
+     did not reproduce on our kit — but if a FUTURE boot dies WITHOUT a
+     traceback right after CUDA-graph capture / multimodal warmup: set
+     `EXL3_FAT_KERNEL=0` and `MAX_NUM_BATCHED_TOKENS=2048` (their
+     documented clean-boot combo) and record it here.
    - #86 (GLM53_INDEXER_WORKSPACE=rightsize) — opt-in, reclaims ~4.5 GiB of
      indexer prefill workspace for KV (+26-28% capacity). We kept
-     `stock`. If KV pressure shows up, flip to `rightsize` in .env.
+     `stock`. If KV pressure shows up (e.g. want >1 concurrent 1M
+     request), flip to `rightsize` in .env first.
    - #88 (SPEC_METHOD=mtp rollback), #85 (concurrency) — read before
      touching SPEC/MNS knobs.
 3. **Drafter/model revision bumps:** re-run the HF tree-oid diff before
@@ -229,9 +240,3 @@ mechanism, docs/KPOOL_TAIL_BUG.md).
   `./patches/`; the bias_vl routing fix (upstream #175/#179) is baked into
   that vendored file — keep it in sync with upstream main.
 - Entrpi's ds4 forks (see above) are the perf-improvement lane to watch.
-
-### omp configuration (pending task from the operator)
-
-After GLM validation: update the omp model config — add image input support
-for the deepseek endpoint, and update GLM's context length to 1M
-(/v1/models reports max_model_len 1000000).

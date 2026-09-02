@@ -138,14 +138,54 @@ the next boot. Verify on first boot after the node reboot: "Available KV
 cache memory" should be ~17-18.7 GiB and blocks/req headroom larger; if the
 engine OOMs at graph capture, back off to 0.87.
 
-2026-09-02 (post-reboot boot with 0.8848): VERIFIED — "Available KV cache
-memory: 16.21 GiB" (was 14.38 @ 0.87). Check passes (409 blocks / 10.41 GiB),
-health 200, serving as `glm-5.3-flash` (renamed from GLM-5.3-Flash-EXL3,
-commit bc79124, to match the other glm recipe and the omp config id).
-~621 blocks => physical ~2.2M MLA tokens, honest 1M concurrency ~1.5x.
-Not upstream's full 18.67 GiB (their kit runs different workspace/env
-settings); GLM53_INDEXER_WORKSPACE=rightsize (#86) is the next lever if
-more headroom is ever needed.
+2026-09-02 (post-reboot boot with 0.8848, then hotfix v6): VERIFIED —
+`Available KV cache memory: 16.21 GiB`, health 200, serving as
+`glm-5.3-flash` (renamed from GLM-5.3-Flash-EXL3, commit bc79124, to match
+the other glm recipe and the omp config id).
+
+### FINAL root cause (Problem 4, confirmed 2026-09-02 ~04:15Z)
+
+The image's baked builder `_get_kv_cache_groups_glm5_next` is an OLDER
+patch revision: its else branch is "STANDALONE" — `new_draft_specs =
+dict(draft_specs)` — leaving the drafter at block_size=16 with its
+16384-token window. Live demand of that group = 1025 block ids, so a full
+1M request needs ~1306 block ids vs a ~621-block pool => the scheduler
+correctly REFUSES every large-max_tokens request forever
+(`num_requests_waiting{reason="capacity"}` stuck, GPU 0%, small requests
+still run at ~18 tok/s — which is why the server "looked" healthy).
+The current overlay's builder instead emits PADDED SLOT-SHARE
+(block_size=64, page_size_padded=mla_page) -> draft demand 32 blocks ->
+total 313 blocks/req -> fits.
+
+The boot check ValueError (34.15 GiB) was the same arithmetic surfacing at
+boot; the 16,384-token window (not the config's 2048) is what the runtime
+class qwen3_dflash2.py assigns; do not confuse the two when re-deriving.
+
+Fix E in `hotfix_kv_check_glm5.py` replaces the stale STANDALONE branch
+with the current overlay's padded slot-share code (fail-closed anchor on
+the exact baked text). After it, the boot logs upstream's exact expected
+line:
+
+    DFlash2 drafter KV: padded slot-share block=64 mla_page=2351104
+    (was block=16); exact-fit page mismatch draft_bytes/token=2048
+
+and the stock capacity line jumps to `GPU KV cache size: 1,054,006
+tokens, Maximum concurrency ... 1.05x` (from 436,661 / 0.42x).
+
+### Load tests (2026-09-02 ~04:45Z, post-fix E) — PASS
+
+| test | result |
+|---|---|
+| single large request (max_tokens=6000) | completed, finish=length, ~24 tok/s sustained |
+| admission during large request | running=1, waiting=0, capacity=0 (was stuck forever pre-fix) |
+| GPU during decode | 95-96% util, 51-60 W (was 0%, 12.9 W) |
+| 4x concurrent large requests (max_num_seqs=4) | all 4 admitted simultaneously, 0 stuck |
+| aggregate throughput under 4-way load | 59.1 tok/s (~14.8 tok/s/req) |
+| 4x3000-token completions | all finish=length, correct usage counts |
+| post-burst state | running=0, waiting=0, clean idle — no recurrence |
+
+Historic numbers for comparison: upstream documents 33-74 tok/s (their
+kit/env); our single-stream ~24-28 tok/s, 4-way aggregate ~59 tok/s.
 
 ### Boot warning review (2026-09-02 post-reboot boot) — all expected
 
@@ -159,6 +199,7 @@ more headroom is ever needed.
 | `Default vLLM sampling parameters have been overridden by the model's generation_config.json (temperature 1.0, top_p 0.95)` | intended: the checkpoint ships its tuned sampling defaults; omp clients may override per-request |
 | `Triton kernel JIT compilation during inference: _topk_topp_kernel ... latency spike` | one-time compile on first top-k/top-p shape; cached afterwards. Only the very first sampled request pays it |
 | worker-side `TCPStore ... sendBytes failed` / NCCL heartbeat spam during leader weight load | rendezvous wait-window noise, non-fatal (judge boot by the LEADER log) |
+| two defunct `python3` zombies per node (ppid 1) | dead multiprocessing helpers; PID1 (vllm) never reaps them. Cosmetic, no resource held. Note: in an earlier boot the SAME symptom pattern (zombies + idle GPU) meant dead TP workers — distinguish by `ps -eo` inside the container: if `VLLM::EngineCore` and `VLLM::Worker_TP0` are alive, zombies are cosmetic |
 
 Fix: vendored boot hotfix `hotfix_kv_check_glm5.py` (mounted
 `/opt/glm53/hotfix_kv_check_glm5.py`, run in the compose patch loop before
@@ -166,32 +207,20 @@ Fix: vendored boot hotfix `hotfix_kv_check_glm5.py` (mounted
 - A: detector accepts drafter specs whose page_size_padded == mla_page
   (still rejects any other padding) — future-proofs the detector against
   the builder's padded geometry;
-- B: an early glm5 branch in `_max_memory_usage_bytes_from_groups` computes
-  needed memory allocator-consistently: per_block = len(mla)*mla_page +
-  len(idx)*idx_page (+ standalone draft page), blocks/req = cdiv over MLA +
-  draft + tail groups, mamba groups EXCLUDED (length-independent SSM state,
-  slot-shared with MLA block ids), and SWA groups RE-BOUNDED by their inner
-  sliding window (the wrapper loses it);
-- D: diagnostic wrapper dumping the group structure when the detector still
-  returns None (leave in; it is one line per boot, or strip when the hotfix
-  is retired).
-Commits 9583658 -> e080b64 -> bc15903 -> 01ec852 -> 2af342c -> 9030902 ->
-e85f83c. The script is fail-closed: it preflights every anchor and REFUSES
-to write (nonzero exit, boot aborts) if the image changes under it.
-
-Measured final boot (2026-09-02 ~02:40Z): blocks/req=409
-(280 attn + 128 draft-window + 1 tail), per_block=27,326,976 B,
-needed=10.41 GiB <= 16.16 available; zero ValueErrors; engine reaches
-`Application startup complete`, health 200.
-
-NOTE on the stock capacity line: our boot logs
-`GPU KV cache size: 421,013 tokens, Maximum concurrency ... 0.42x` —
-do NOT read that as "cannot serve 1M". That line is computed by the same
-window-unaware formula (issue #94 documents exactly this). Honest demand
-for one 1M request is ~409 blocks vs a ~578-block pool => one concurrent
-1M request fits. Upstream's documented 1.75x came from their env's larger
-available memory (18.67 vs 16.16 GiB — likely GLM53_INDEXER_WORKSPACE and
-profiling differences) plus the same optimistic formula.
+- B: an early glm5 branch in `_max_memory_usage_bytes_from_groups`
+  computes needed memory allocator-consistently: per_block =
+  len(mla)*mla_page + len(idx)*idx_page (+ standalone draft page),
+  blocks/req = window-bounded cdiv over MLA + draft + tail groups,
+  mamba groups EXCLUDED (length-independent SSM state, slot-shared with
+  MLA block ids);
+- E: replaces the stale STANDALONE builder else branch with the current
+  overlay's padded slot-share rescale (THE load-bearing fix);
+- D: diagnostic wrapper dumping the group structure when the detector
+  still returns None (leave in; it is one line per boot, or strip when
+  the hotfix is retired).
+Commits 9583658 -> ... -> 6768d54. The script is fail-closed: it
+preflights every anchor and REFUSES to write (nonzero exit, boot aborts)
+if the image changes under it.
 
 ### Entrpi's repositories — review for tips and alternative solutions
 

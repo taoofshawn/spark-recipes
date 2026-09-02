@@ -115,10 +115,12 @@ PATCHED_B = """    if (glm5n_early := _glm5_next_tensor_layout(kv_cache_groups))
                 _wins = [
                     getattr(x, "sliding_window", None) for x in _inner.values()
                 ]
-                _w = min(w for w in _wins if w)
+                _wins = [w for w in _wins if w]
                 _maxlen = vllm_config.model_config.max_model_len
-                if _w and _w < _maxlen:
-                    _c = min(_c, (_w + _blk - 1) // _blk)
+                if _wins:
+                    _w = min(_wins)
+                    if _w < _maxlen:
+                        _c = min(_c, (_w + _blk - 1) // _blk)
             return _c, _blk, _pg, type(_s).__name__
 
         blocks_per_request = 0

@@ -159,7 +159,49 @@ PATCHED_B = """    if (glm5n_early := _glm5_next_tensor_layout(kv_cache_groups))
         # Special case (only DeepseekV4 for now): all groups are
         # UniformTypeKVCacheSpecs."""
 
-# Fix D: rename the detector and add a diagnostic wrapper
+
+# Fix E: rescale the draft group like the CURRENT overlay's builder.
+# The baked builder's else branch is an older revision ("STANDALONE",
+# specs kept at block 16): with the drafter's window (16384) that makes
+# a 1M request need 1025 draft blocks -> 1306 total > pool => the
+# scheduler refuses ALL large requests (waiting{capacity} forever,
+# GPU idle). The current overlay's padded slot-share (block 64,
+# page_size_padded=mla_page) bounds draft demand to ceil(16384/64)=256.
+ANCHOR_E = """        else:
+        # STANDALONE: the drafter's geometry cannot exactly fill the MLA
+        # page; keep its spec as-is and give its layers compact tensors
+        # of their own (emitted in get_kv_cache_config_from_groups and
+        # charged in the per-block cost).
+        new_draft_specs = dict(draft_specs)"""
+
+PATCHED_E = """        else:
+        # [glm53-miaai-drafterfix] PADDED SLOT-SHARE (current overlay):
+        # the drafter's bytes/token cannot exact-fill the MLA page.
+        # Manager 64 matches the SWA kernel, so padding the page to
+        # mla_page is a safe strided view (the boot-8 OOB was kernel 64
+        # inside a 2304-token manager). Layer i co-owns MLA tensor i.
+        # Without the rescale the standalone drafter keeps block 16 and
+        # its window-bounded demand (1025 blocks at window 16384)
+        # makes a 1M request unschedulable on a ~621-block pool.
+        compact_block = 64
+        logger.info(
+            "DFlash2 drafter KV: padded slot-share block=%d "
+            "mla_page=%d (was block=%s); exact-fit page mismatch "
+            "draft_bytes/token=%d",
+            compact_block,
+            mla_page,
+            any_draft.block_size,
+            draft_bytes_per_token,
+        )
+        new_draft_specs = {
+            name: replace(
+                s,
+                block_size=compact_block,
+                page_size_padded=mla_page,
+            )
+            for name, s in draft_specs.items()
+        }"""
+
 ANCHOR_D = "def _glm5_next_tensor_layout(\n"
 
 WRAPPER_D = '''
@@ -201,7 +243,8 @@ def main() -> int:
     if GUARD not in src:
         print("[kvcheck-hotfix] FAIL guard function not found", flush=True)
         return 1
-    for name, anchor in (("A", ANCHOR_A), ("B", ANCHOR_B), ("D", ANCHOR_D)):
+    for name, anchor in (("A", ANCHOR_A), ("B", ANCHOR_B), ("E", ANCHOR_E),
+                         ("D", ANCHOR_D)):
         if src.count(anchor) != 1:
             print(
                 f"[kvcheck-hotfix] FAIL anchor {name} count "
@@ -213,9 +256,10 @@ def main() -> int:
     patched = patched.replace(ANCHOR_D, "def _glm5_next_tensor_layout_orig(\n", 1)
     patched = patched.replace(ANCHOR_A, PATCHED_A)
     patched = patched.replace(ANCHOR_B, PATCHED_B)
+    patched = patched.replace(ANCHOR_E, PATCHED_E)
     patched = patched + WRAPPER_D
-    if patched.count(MARK) != 4:
-        print(f"[kvcheck-hotfix] FAIL marks={patched.count(MARK)} != 4",
+    if patched.count(MARK) != 5:
+        print(f"[kvcheck-hotfix] FAIL marks={patched.count(MARK)} != 5",
               flush=True)
         return 1
     compile(patched, str(TARGET), "exec")
@@ -228,7 +272,7 @@ def main() -> int:
         if os.path.exists(tmp):
             os.unlink(tmp)
         raise
-    print(f"[kvcheck-hotfix] patched {TARGET} (fixes A+B+D)", flush=True)
+    print(f"[kvcheck-hotfix] patched {TARGET} (fixes A+B+E+D)", flush=True)
     return 0
 
 

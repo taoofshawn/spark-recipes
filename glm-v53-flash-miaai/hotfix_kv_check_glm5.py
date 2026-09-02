@@ -100,11 +100,26 @@ PATCHED_B = """    if (glm5n_early := _glm5_next_tensor_layout(kv_cache_groups))
         if draft_names and not draft_shared:
             per_block += len(draft_names) * draft_page
         def _cdiv(group):
+            # Window-bounded demand: UniformTypeKVCacheSpecs loses the inner
+            # SlidingWindowSpec window (its max_memory_usage_pages scales with
+            # max_model_len), so re-derive pages from the inner specs' window.
+            # A windowed group only ever holds ceil(window / block) live
+            # blocks; unwindowed groups keep the max_model_len scaling.
             _s = group.kv_cache_spec
             _mb = _s.max_memory_usage_bytes(vllm_config)
             _pg = _s.page_size_bytes
-            return ((_mb + _pg - 1) // _pg,
-                    getattr(_s, "block_size", None), _pg, type(_s).__name__)
+            _blk = getattr(_s, "block_size", None)
+            _c = (_mb + _pg - 1) // _pg
+            _inner = getattr(_s, "kv_cache_specs", None)
+            if _inner and _blk:
+                _wins = [
+                    getattr(x, "sliding_window", None) for x in _inner.values()
+                ]
+                _w = min(w for w in _wins if w)
+                _maxlen = vllm_config.model_config.max_model_len
+                if _w and _w < _maxlen:
+                    _c = min(_c, (_w + _blk - 1) // _blk)
+            return _c, _blk, _pg, type(_s).__name__
 
         blocks_per_request = 0
         _parts = []

@@ -100,11 +100,17 @@ PATCHED_B = """    if (glm5n_early := _glm5_next_tensor_layout(kv_cache_groups))
         if draft_names and not draft_shared:
             per_block += len(draft_names) * draft_page
         blocks_per_request = 0
-        for group in [attn_group, *mamba_groups]:
-            _gs = group.kv_cache_spec
-            _mb = _gs.max_memory_usage_bytes(vllm_config)
-            _pg = _gs.page_size_bytes
-            blocks_per_request += (_mb + _pg - 1) // _pg
+        # MLA group: the only length-scaled paged demand (280 blocks @ 1M).
+        # Mamba groups are EXCLUDED: their SSM state is length-independent
+        # and in the slot-share layout they parasitize the MLA block ids
+        # (shared_by in get_kv_cache_config_from_groups), so counting their
+        # padded pages as length-scaled demand would double-count ~4x280
+        # block ids the allocator never needs. Their fixed state cost is
+        # already inside per_block via the shared tensors.
+        _gs = attn_group.kv_cache_spec
+        _mb = _gs.max_memory_usage_bytes(vllm_config)
+        _pg = _gs.page_size_bytes
+        blocks_per_request += (_mb + _pg - 1) // _pg
         if draft_group is not None:
             _ds = draft_group.kv_cache_spec
             _mb = _ds.max_memory_usage_bytes(vllm_config)
@@ -126,7 +132,8 @@ PATCHED_B = """    if (glm5n_early := _glm5_next_tensor_layout(kv_cache_groups))
         print(
             f"[kvcheck] early glm5 accounting: "
             f"blocks/req={blocks_per_request} per_block={per_block} "
-            f"needed={blocks_per_request * per_block / 2**30:.2f} GiB",
+            f"needed={blocks_per_request * per_block / 2**30:.2f} GiB "
+            f"(mamba groups excluded: length-independent, slot-shared)",
             flush=True,
         )
         return blocks_per_request * per_block

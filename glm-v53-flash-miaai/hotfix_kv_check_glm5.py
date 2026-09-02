@@ -99,41 +99,39 @@ PATCHED_B = """    if (glm5n_early := _glm5_next_tensor_layout(kv_cache_groups))
             draft_shared = draft_page == mla_page
         if draft_names and not draft_shared:
             per_block += len(draft_names) * draft_page
+        def _cdiv(group):
+            _s = group.kv_cache_spec
+            _mb = _s.max_memory_usage_bytes(vllm_config)
+            _pg = _s.page_size_bytes
+            return ((_mb + _pg - 1) // _pg,
+                    getattr(_s, "block_size", None), _pg, type(_s).__name__)
+
         blocks_per_request = 0
-        # MLA group: the only length-scaled paged demand (280 blocks @ 1M).
-        # Mamba groups are EXCLUDED: their SSM state is length-independent
-        # and in the slot-share layout they parasitize the MLA block ids
-        # (shared_by in get_kv_cache_config_from_groups), so counting their
-        # padded pages as length-scaled demand would double-count ~4x280
-        # block ids the allocator never needs. Their fixed state cost is
-        # already inside per_block via the shared tensors.
-        _gs = attn_group.kv_cache_spec
-        _mb = _gs.max_memory_usage_bytes(vllm_config)
-        _pg = _gs.page_size_bytes
-        blocks_per_request += (_mb + _pg - 1) // _pg
-        if draft_group is not None:
-            _ds = draft_group.kv_cache_spec
-            _mb = _ds.max_memory_usage_bytes(vllm_config)
-            _pg = _ds.page_size_bytes
-            blocks_per_request += (_mb + _pg - 1) // _pg
+        _parts = []
         for group in kv_cache_groups:
             _inner = (
                 cast(UniformTypeKVCacheSpecs, group.kv_cache_spec).kv_cache_specs
                 if isinstance(group.kv_cache_spec, UniformTypeKVCacheSpecs)
                 else None
             )
-            if not _inner or not all(
+            _is_tail = bool(_inner) and all(
                 isinstance(s, KpoolTailSpec) for s in _inner.values()
-            ):
+            )
+            if group is not attn_group and not _is_tail and group is not draft_group:
+                # mamba groups: length-independent SSM state, slot-shared
+                # with the MLA block ids (allocator shared_by) — excluded.
+                _parts.append(f"mamba(~{_cdiv(group)[0]} excl)")
                 continue
-            _mb = group.kv_cache_spec.max_memory_usage_bytes(vllm_config)
-            _pg = group.kv_cache_spec.page_size_bytes
-            blocks_per_request += (_mb + _pg - 1) // _pg
+            _c, _blk, _pg, _t = _cdiv(group)
+            blocks_per_request += _c
+            _parts.append(f"{_t}(block={_blk},page={_pg})={_c}")
         print(
             f"[kvcheck] early glm5 accounting: "
             f"blocks/req={blocks_per_request} per_block={per_block} "
             f"needed={blocks_per_request * per_block / 2**30:.2f} GiB "
-            f"(mamba groups excluded: length-independent, slot-shared)",
+            f"| mla_names={len(mla_names)} mla_page={mla_page} "
+            f"idx_names={len(idx_names)} idx_page={idx_page} | "
+            + "; ".join(_parts),
             flush=True,
         )
         return blocks_per_request * per_block

@@ -14,30 +14,34 @@ positive KV-capacity failure at max_model_len 1000000:
    page_size_padded is not None ("NEVER page_size_padded") — a stale
    precondition from the pre-padded era (upstream boot-8 OOB note).
 
-With the layout detector returning None, every glm5-aware consumer
-(_pool_bytes_per_block, _max_memory_usage_bytes_from_groups,
-get_kv_cache_config_from_groups) falls back to generic paths, and the
-all-uniform "DeepseekV4" branch of _max_memory_usage_bytes_from_groups
-charges the drafter group's padded page for every block of a full 1M request:
+With the layout detector returning None, every glm5-aware consumer falls
+back to generic paths, and the memory check
+(_max_memory_usage_bytes_from_groups — which has NO glm5 branch at all in
+this image) charges the drafter group's padded page for every block of a
+full 1M request:
 
     ceil(1_000_000 / 64) * 2_351_104 B = 34.15 GiB  (vs 16.16 GiB available)
 
 -> "ValueError: To serve at least one request with the model's max seq len
 (1000000), (34.15 GiB KV cache is needed, ...)" — while the actual allocation
 only needs the honest slot-share cost. Upstream MiaAI-Lab does not hit this
-because their locally built image keeps builder and detector in sync; the
-GHCR image lags it (their issue #97, "Local rebuild gets overwritten by
-GHCR").
+because their locally built image keeps builder, detector and accounting in
+sync; the GHCR image lags it (their issue #97, "Local rebuild gets
+overwritten by GHCR").
 
-Fixes, both in vllm/v1/core/kv_cache_utils.py:
+Fixes, all in vllm/v1/core/kv_cache_utils.py:
 
   A) _glm5_next_tensor_layout: accept drafter specs whose page_size_padded
      equals mla_page (the builder's padded slot-share geometry); still reject
      any other padding.
-  B) _max_memory_usage_bytes_from_groups: exclude glm5 layouts from the
-     all-uniform "DeepseekV4" branch so slot-share layouts reach the
-     glm5-aware branch directly below, matching the allocator's
-     _pool_bytes_per_block accounting.
+  B) _max_memory_usage_bytes_from_groups: prepend an early glm5 branch that
+     computes needed memory the way the allocator does — one block id costs
+     len(mla)*mla_page + len(idx)*idx_page (+ standalone drafter pages), and
+     one max_model_len request occupies sum over groups of
+     ceil(group_max_bytes / group_page) block ids (the same cdiv definition
+     as get_max_concurrency_for_kv_cache_config). The all-uniform
+     "DeepseekV4" branch is additionally guarded so it can never capture a
+     glm5 layout.
 
 Fail-closed: preflights all anchors before writing, atomic replace,
 idempotent via marker.
@@ -57,21 +61,6 @@ MARK = "[glm53-miaai-kvcheck]"
 
 GUARD = "def _max_memory_usage_bytes_from_groups("
 
-# Fix B: exclude glm5 layouts from the all-uniform branch
-ANCHOR_B = """    elif all(
-        isinstance(group.kv_cache_spec, UniformTypeKVCacheSpecs)
-        for group in kv_cache_groups
-    ):
-        # Special case (only DeepseekV4 for now): all groups are
-        # UniformTypeKVCacheSpecs."""
-
-PATCHED_B = """    elif all(
-        isinstance(group.kv_cache_spec, UniformTypeKVCacheSpecs)
-        for group in kv_cache_groups
-    ) and _glm5_next_tensor_layout(kv_cache_groups) is None:  # [glm53-miaai-kvcheck]
-        # Special case (only DeepseekV4 for now): all groups are
-        # UniformTypeKVCacheSpecs."""
-
 # Fix A: accept the builder's padded slot-share drafter geometry
 ANCHOR_A = """        if any(s.page_size_padded is not None for s in draft_inner.values()):
             return None"""
@@ -81,6 +70,80 @@ PATCHED_A = """        if any(  # [glm53-miaai-kvcheck]
             for s in draft_inner.values()
         ):
             return None"""
+
+# Fix B: early glm5-aware accounting in _max_memory_usage_bytes_from_groups
+ANCHOR_B = """    elif all(
+        isinstance(group.kv_cache_spec, UniformTypeKVCacheSpecs)
+        for group in kv_cache_groups
+    ):
+        # Special case (only DeepseekV4 for now): all groups are
+        # UniformTypeKVCacheSpecs."""
+
+PATCHED_B = """    if (glm5n_early := _glm5_next_tensor_layout(kv_cache_groups)) is not None:
+        # [glm53-miaai-kvcheck] Honest slot-share accounting, mirroring the
+        # allocator (get_kv_cache_config_from_groups / _pool_bytes_per_block):
+        # one block id costs len(mla)*mla_page + len(idx)*idx_page plus any
+        # standalone drafter pages; one max_model_len request occupies
+        # sum over groups of ceil(group_max_bytes / group_page) block ids
+        # (same cdiv definition as get_max_concurrency_for_kv_cache_config).
+        (
+            attn_group,
+            mamba_groups,
+            mla_names,
+            idx_names,
+            mla_page,
+            idx_page,
+            tail_names,
+            _tail_page,
+            draft_group,
+        ) = glm5n_early
+        per_block = len(mla_names) * mla_page + len(idx_names) * idx_page
+        draft_names: list[str] = []
+        draft_page = 0
+        draft_shared = False
+        if draft_group is not None:
+            draft_names = list(draft_group.layer_names)
+            draft_page = next(
+                iter(
+                    cast(
+                        UniformTypeKVCacheSpecs, draft_group.kv_cache_spec
+                    ).kv_cache_specs.values()
+                )
+            ).page_size_bytes
+            draft_shared = draft_page == mla_page
+        if draft_names and not draft_shared:
+            per_block += len(draft_names) * draft_page
+        blocks_per_request = 0
+        for group in [attn_group, *mamba_groups]:
+            _gs = group.kv_cache_spec
+            _mb = _gs.max_memory_usage_bytes(vllm_config)
+            _pg = _gs.page_size_bytes
+            blocks_per_request += (_mb + _pg - 1) // _pg
+        if draft_group is not None:
+            _ds = draft_group.kv_cache_spec
+            _mb = _ds.max_memory_usage_bytes(vllm_config)
+            _pg = _ds.page_size_bytes
+            blocks_per_request += (_mb + _pg - 1) // _pg
+        for group in kv_cache_groups:
+            _inner = (
+                cast(UniformTypeKVCacheSpecs, group.kv_cache_spec).kv_cache_specs
+                if isinstance(group.kv_cache_spec, UniformTypeKVCacheSpecs)
+                else None
+            )
+            if not _inner or not all(
+                isinstance(s, KpoolTailSpec) for s in _inner.values()
+            ):
+                continue
+            _mb = group.kv_cache_spec.max_memory_usage_bytes(vllm_config)
+            _pg = group.kv_cache_spec.page_size_bytes
+            blocks_per_request += (_mb + _pg - 1) // _pg
+        return blocks_per_request * per_block
+    elif all(
+        isinstance(group.kv_cache_spec, UniformTypeKVCacheSpecs)
+        for group in kv_cache_groups
+    ) and _glm5_next_tensor_layout(kv_cache_groups) is None:  # [glm53-miaai-kvcheck]
+        # Special case (only DeepseekV4 for now): all groups are
+        # UniformTypeKVCacheSpecs."""
 
 
 def main() -> int:
@@ -103,8 +166,8 @@ def main() -> int:
             )
             return 1
     patched = src.replace(ANCHOR_A, PATCHED_A).replace(ANCHOR_B, PATCHED_B)
-    if patched.count(MARK) != 2:
-        print("[kvcheck-hotfix] FAIL replacement produced no marks", flush=True)
+    if patched.count(MARK) != 3:
+        print("[kvcheck-hotfix] FAIL replacement marks != 3", flush=True)
         return 1
     compile(patched, str(TARGET), "exec")
     fd, tmp = tempfile.mkstemp(dir=str(TARGET.parent), suffix=".py")

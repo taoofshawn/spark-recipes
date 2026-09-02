@@ -131,6 +131,13 @@ accounting are in sync. The GHCR prebuilt image lags — their open issue
 drift. With their own start.sh + this same GHCR image you would hit the
 identical error; it is not a compose-conversion artifact.
 
+2026-09-02: raised `GPU_MEM_UTIL` 0.87 -> 0.8848 (commit 3c6b8bd) per the
+boot-log's own hint (CUDA-graph memory profiling makes 0.87 behave like
+0.8552) to recover an upstream-sized pool (~690 blocks / ~1.75M tokens) on
+the next boot. Verify on first boot after the node reboot: "Available KV
+cache memory" should be ~17-18.7 GiB and blocks/req headroom larger; if the
+engine OOMs at graph capture, back off to 0.87.
+
 Fix: vendored boot hotfix `hotfix_kv_check_glm5.py` (mounted
 `/opt/glm53/hotfix_kv_check_glm5.py`, run in the compose patch loop before
 `vllm serve`), which edits `kv_cache_utils.py` in place:

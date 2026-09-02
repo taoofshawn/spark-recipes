@@ -138,6 +138,28 @@ the next boot. Verify on first boot after the node reboot: "Available KV
 cache memory" should be ~17-18.7 GiB and blocks/req headroom larger; if the
 engine OOMs at graph capture, back off to 0.87.
 
+2026-09-02 (post-reboot boot with 0.8848): VERIFIED — "Available KV cache
+memory: 16.21 GiB" (was 14.38 @ 0.87). Check passes (409 blocks / 10.41 GiB),
+health 200, serving as `glm-5.3-flash` (renamed from GLM-5.3-Flash-EXL3,
+commit bc79124, to match the other glm recipe and the omp config id).
+~621 blocks => physical ~2.2M MLA tokens, honest 1M concurrency ~1.5x.
+Not upstream's full 18.67 GiB (their kit runs different workspace/env
+settings); GLM53_INDEXER_WORKSPACE=rightsize (#86) is the next lever if
+more headroom is ever needed.
+
+### Boot warning review (2026-09-02 post-reboot boot) — all expected
+
+| warning | verdict |
+|---|---|
+| `SymmMemCommunicator: Device capability 12.1 not supported` | expected on GB10; falls back to PYNCCL (also in repo AGENTS.md table) |
+| `Custom collectives are disabled because this multi-node ...` | expected for TP over 2 nodes; PYNCCL all-reduce is the working path |
+| `Sparse MLA impl has no dense-MHA prefill path; using the top-k MQA path only` | by design — packed fp8_ds_mla sparse path is the only SM12x kernel; upstream serves the same way |
+| `Draft model DFlash2Qwen3ForCausalLM does not support external multimodal embeddings ... text-only draft inputs` | by design; the drafter drafts text tokens only |
+| `Disabling fine-grained prefix-cache hits ... KpoolTailManager requires block-aligned lookups` | upstream default; block-aligned (3584-token) hits still work. Upstream PR #84 (GLM53_FINEGRAINED_APC) re-enables 64-token hits opt-in — evaluate later |
+| `Default vLLM sampling parameters have been overridden by the model's generation_config.json (temperature 1.0, top_p 0.95)` | intended: the checkpoint ships its tuned sampling defaults; omp clients may override per-request |
+| `Triton kernel JIT compilation during inference: _topk_topp_kernel ... latency spike` | one-time compile on first top-k/top-p shape; cached afterwards. Only the very first sampled request pays it |
+| worker-side `TCPStore ... sendBytes failed` / NCCL heartbeat spam during leader weight load | rendezvous wait-window noise, non-fatal (judge boot by the LEADER log) |
+
 Fix: vendored boot hotfix `hotfix_kv_check_glm5.py` (mounted
 `/opt/glm53/hotfix_kv_check_glm5.py`, run in the compose patch loop before
 `vllm serve`), which edits `kv_cache_utils.py` in place:

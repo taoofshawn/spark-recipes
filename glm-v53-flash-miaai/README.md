@@ -59,19 +59,16 @@ curl http://127.0.0.1:4000/v1/models     # -> "id":"GLM-5.3-Flash-EXL3", max_mod
 Unchanged from upstream's validated profile: GMU 0.87, MNBT 7168, DFlash2
 k=7/draft-TP2, `EXL3_FAT_KERNEL=1`, `GLM53_*` patch knobs, `SKIP_MM_PROFILING=1`.
 
-## Notes / gotchas
+## Notes
 
-- **`HF_HOME` is `/root/.cache/huggingface` in this image** — the `HF_CACHE`
-  bind mount must land there (it does in `docker-compose.yml`), NOT on
-  `/cache/huggingface` like the DS4 recipes. Wrong path = offline model-not-found.
-- The runtime patch scripts (`/opt/glm53/patch_*.py`) are baked in the GHCR
-  image; the compose runs them guarded at boot. Only `patch_spinwait.py` is
-  host-mounted from this repo (same as upstream).
-- A rebuild-from-source path exists upstream (`BUILD=1 ./start.sh`, repo
-  `Dockerfile` + `overlay/`) but is NOT vendored here — the prebuilt image is
-  the documented default.
-- The `bias_vl` / DFlash2 / vision fixes land in the image, not in this
-  directory; `docker pull` the current tag when the upstream image bumps.
+- `HF_HOME` is `/root/.cache/huggingface` in this image (mount lands there);
+  the DS4/Anemll image uses `/cache/huggingface` instead.
+- The GHCR image carries a KV-accounting inconsistency that kills 1M boots;
+  `hotfix_kv_check_glm5.py` patches it at boot. See `research.md` for the
+  full analysis, all deployment problems/workarounds, and what to re-visit
+  on future updates (incl. Entrpi's GLM/vLLM-fork repos).
+- Upstream also supports a rebuild-from-source path (`BUILD=1 ./start.sh`);
+  not vendored here — the prebuilt image is the default.
 
 ## References
 

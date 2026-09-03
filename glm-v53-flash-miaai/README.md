@@ -21,21 +21,49 @@ baked — no local build, no `--moe-backend marlin`.
   on the same harness) — see the upstream README's KLD table.
 
 ## Deploy
+
 ```bash
-# 0) one-time on BOTH nodes (TP=2 reads weights + drafter on every rank)
-hf download Mia-AiLab/GLM-5.3-Flash-EXL3-TR3-4bpw --revision 25a44fdbf16862a46b7cc9921142c6c81350af2f
-hf download incoai/GLM-5.3-Flash-DFlash2 --revision bf582e4eacc1810f76656d1811693ff6c6737d2a
+# 0) weights on BOTH nodes, once (TP=2 reads weights + drafter on every rank).
+#    The Sparks ship no hf CLI and a PEP-668-locked pip; use a venv:
+python3 -m venv /tmp/hfvenv
+/tmp/hfvenv/bin/pip install -q huggingface_hub
+/tmp/hfvenv/bin/hf download Mia-AiLab/GLM-5.3-Flash-EXL3-TR3-4bpw \
+    --revision 25a44fdbf16862a46b7cc9921142c6c81350af2f
+/tmp/hfvenv/bin/hf download incoai/GLM-5.3-Flash-DFlash2 \
+    --revision bf582e4eacc1810f76656d1811693ff6c6737d2a
 
-# 1) worker (node 1) FIRST, then leader ~35 s later.
-#    worker: docker compose --env-file .env --env-file .env.node1 up -d
-#    leader: docker compose --env-file .env --env-file .env.node0 up -d
+# 1) pull the image on BOTH nodes:
+docker pull ghcr.io/miaai-lab/glm-5.3-flash-2x-dgx-sparks:exl3
 
-# 2) verify
-curl http://127.0.0.1:4000/v1/models     # -> "id":"glm-5.3-flash", max_model_len 1000000
-# boot-log health markers (leader):
-#   "[kvcheck-hotfix] patched ... (fixes A+B+E+D)" or "already patched"
-#   "DFlash2 drafter KV: padded slot-share block=64 mla_page=..." (fix E engaged)
-#   "GPU KV cache size" in the ~980K-1.05M range (stock is ~436K => hotfix NOT applied)
+# 2) worker (node 1) FIRST:
+docker compose --env-file .env --env-file .env.node1 up -d
+#    leader ~35 s later:
+docker compose --env-file .env --env-file .env.node0 up -d
+
+# 3) verify the endpoint (leader):
+curl -s http://127.0.0.1:4000/v1/models   # "id":"glm-5.3-flash", "max_model_len":1000000
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:4000/health   # 200
+```
+
+### Boot-log health markers (leader)
+
+The KV hotfix must apply on EVERY boot. Without it a 1M boot either dies
+outright (34.15 GiB ValueError) or — worse — serves silently while
+refusing every large request (`waiting{reason="capacity"}` stuck). Check
+all three on the leader after each boot:
+
+```bash
+docker logs glm53-exl3-miaai 2>&1 | grep -F "[kvcheck-hotfix]"
+#   -> "[kvcheck-hotfix] patched .../vllm/v1/core/kv_cache_utils.py (fixes A+B+E+D)"
+#      ("already patched" on container restarts — also good)
+
+docker logs glm53-exl3-miaai 2>&1 | grep -F "padded slot-share"
+#   -> "DFlash2 drafter KV: padded slot-share block=64 mla_page=2351104 (was block=16)"
+#      = fix E engaged; no such line means the stale builder is still live
+
+docker logs glm53-exl3-miaai 2>&1 | grep -F "GPU KV cache size"
+#   -> "GPU KV cache size: 1,050,522 tokens, Maximum concurrency ... 1.0"
+#      ~980K-1.05M = healthy | ~436K / 0.42x = hotfix NOT applied — do not serve 1M
 ```
 
 ## Cluster deviations from upstream

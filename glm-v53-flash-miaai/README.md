@@ -15,7 +15,7 @@ baked — no local build, no `--moe-backend marlin`.
 - **Served name:** `GLM-5.3-Flash-EXL3` | **Port:** 4000
 - **Context:** 1M | **KV:** `fp8` → packed `fp8_ds_mla`, pool **1,754,237
   tokens** (1.75× @1M) @ GMU **0.87**
-- **Vision:** native image + video (`--limit-mm-per-prompt {"image":4,"video":1}`),
+- **Vision:** native image + video (`--limit-mm-per-prompt {"image":10,"video":1}`),
   `--skip-mm-profiling`
 - **Quality:** KLD 0.0246 vs official FP8 0.0206 (closer than NVFP4's 0.0605
   on the same harness) — see the upstream README's KLD table.

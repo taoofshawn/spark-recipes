@@ -105,7 +105,7 @@ services:
       KV_CACHE_DTYPE: "${KV_CACHE_DTYPE:-fp8}"
       LANGUAGE_MODEL_ONLY: "${LANGUAGE_MODEL_ONLY:-0}"
       SKIP_MM_PROFILING: "${SKIP_MM_PROFILING:-1}"
-      LIMIT_MM: "${LIMIT_MM:-{\"image\":4,\"video\":1}}"
+      LIMIT_MM: "${LIMIT_MM:-{\"image\":10,\"video\":1}}"
       EXTRA_ARGS: "${EXTRA_ARGS:-}"
       # ---- multi-node ----
       NODE_RANK: "${NODE_RANK}"

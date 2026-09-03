@@ -109,30 +109,65 @@ uses whatever snapshot dir resolves first).
 
 ## Upstream watchlist (research these on every update pass)
 
-**MiaAI-Lab/GLM-5.3-Flash-EXL3-2x-DGX-Sparks** (source of image + profile):
+**MiaAI-Lab/GLM-5.3-Flash-EXL3-2x-DGX-Sparks** (source of image + profile;
+HEAD eb0469fb 2026-09-02, reviewed 2026-09-02):
 
+- **#110 + PR #112** (`LONG_PREFILL_TOKEN_THRESHOLD`) — an unset threshold
+  lets one long chunked prefill claim the whole per-step token budget and
+  FREEZE every other session for its duration (measured: 440 s at 325k,
+  MNBT=2048). PR: `--long-prefill-token-threshold 1024` fixes it for ~10%
+  on the long prefill alone. **Directly relevant to this cluster's two-
+  session usage** (our 2026-09-02 "compact crawls, other session stalls"
+  observation is the same mechanism at ~75k). ADOPT CANDIDATE — but NOT in
+  the image's serve path yet (start.sh has no flag plumbing at review
+  time); pass it via `GLM53_EXTRA_ENV`-style launch arg or wait for
+  upstream merge; measure TTFT of the other session before/after.
+- **#108** — the `padded slot-share ... exact-fit page mismatch
+  draft_bytes/token=2048` line we treat as a HEALTH MARKER is upstream
+  issue: ~5.2% structural padding per co-owned page, reproduced every
+  boot. Cosmetic-but-real; if upstream lands a rescale, re-check our
+  marker text.
+- **#106** — prefix cache stops hitting GLOBALLY after ~50-60 min of
+  concurrent agentic load; only a restart restores hits. Watch for it
+  here (symptom: `vllm:prefix_cache_hits_total` frozen + full re-prefills
+  on byte-identical prompts at low KV usage).
+- **#113** — 4-Spark DCP=4 data: on LONG agentic contexts k=3 beat k=7
+  (81.4 vs 64.0 aggregate x4, accept 50% vs 27%); k=7 remains right for
+  structured/code output (high-accept regime). Our k=7 default targets
+  coding-agent traffic — if long-context multi-stream becomes the norm
+  here, A/B k=3-4 on OUR kit (their numbers are a 4-node shape).
+- **#111** — changing reasoning_effort still invalidates the whole prefix
+  cache (effort line sits at ~token 8; #63 fixed only the thinking toggle).
+  Clients cycling effort levels pay cold re-prefills.
 - **#97** — GHCR vs local-rebuild drift. A re-synced GHCR image is the
   retirement path for our hotfix: re-test WITHOUT the hotfix first.
 - **#94** — honest KV-capacity boot line. If merged into the image, it
   supersedes our fix B.
 - **#102** — `EXL3_FAT_KERNEL=1` + MNBT=7168 head-rank silent death at
-  multimodal warmup (open as of 2026-09-01; did NOT reproduce here). If a
-  future boot dies without a traceback right after CUDA-graph capture:
-  set `EXL3_FAT_KERNEL=0` and `MAX_NUM_BATCHED_TOKENS=2048`.
+  multimodal warmup (did NOT reproduce here). If a future boot dies
+  without a traceback right after CUDA-graph capture: set
+  `EXL3_FAT_KERNEL=0` and `MAX_NUM_BATCHED_TOKENS=2048`.
 - **#86** — `GLM53_INDEXER_WORKSPACE=rightsize` reclaims ~4.5 GiB for KV
   (+26-28% capacity). We ship `stock`. Flip if KV pressure appears.
-- **#88 / #85** — read before touching SPEC_METHOD / max_num_seqs knobs.
+- **#88 / #85 / PR #100 / #99 (KV disk tier)** — read before touching
+  SPEC_METHOD / max_num_seqs / KV-tier knobs.
 - New image tags: re-run the revision-pin procedure and expect hotfix
   anchor drift (fail-closed boot = re-derive time).
 
-**Entrpi** (https://github.com/Entrpi — parallel DGX-Spark serving line):
+**Entrpi** (https://github.com/Entrpi — parallel DGX-Spark serving line;
+v2.3-tier1 as of 2026-09-02):
 
 - **`vllm-glm-5.3-flash-spark`** — vLLM fork with glm5_next port + sm121
-  fixes. The most likely PERMANENT fix for the builder/detector/accounting
-  drift; if self-consistent, prefer rebasing on it over maintaining the
-  hotfix.
+  fixes; active (2026-09-02: b12x MXFP8 drafter GEMM per-M dispatch,
+  mamba spec-state ring). The most likely PERMANENT fix for the
+  builder/detector/accounting drift; if self-consistent, prefer rebasing
+  on it over maintaining the hotfix.
 - **`glm-5.3-flash-exl3-2x-spark`** — independent implementation of this
-  same lane; compare serve flags, KV fixes, and measured numbers.
+  same lane; v2.3 ships their OWN image (`ghcr.io/entrpi/...`,
+  measured 74.2 tok/s single-stream in their FINDINGS.md, plus a math_500
+  n=50 gate). Their `docs/FINDINGS.md` is the best single reference for
+  what does NOT help on this lane (section 8) — read before spending time
+  on speculative tuning here.
 - **`ds4` / `ds4-on-spark`** — Blackwell perf forks of antirez/ds4
   (~4x prefill, ~1.5x decode); relevant to the DS4 recipes.
 - **`dgx-spark-serving-mode`** — frees UMA memory by paring the desktop

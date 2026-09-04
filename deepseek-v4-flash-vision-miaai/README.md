@@ -52,6 +52,30 @@ plus the `patches/vision_exp/` module, and the compose runs that hotfix at
 boot unconditionally. Verified upstream after the fix: red JPEG → 117 image
 tokens → "Red"; Earth-in-hands PNG → 365 tokens → accurate description.
 
+## Upstream update pass (2026-09-04, vendored sync to HEAD `bc2ef473`)
+
+- **issue27 r3 (PR #211/#212)**: upstream walked the in-flight partial-prefill
+  cap default back to **1** — the r1/r2 counting was buggy, so the earlier
+  "2 is better" A/B measured a cap that never engaged. Synced
+  `hotfix-dsv4-issue27-partial-prefill-concurrency.py` (r3 derives the count in
+  exact parity with the stock scheduler set) and reverted
+  `DSPARK_MAX_INFLIGHT_PREFILLS` 2→1 to match upstream's shipped default.
+- **issue117 shm ring buffer, now default-on upstream**: stability backport
+  (vLLM #45224 crash-hang class) for this exact image. Vendored
+  `hotfix-vllm-issue117-shm-ring-buffer.py`, wired into the always-on boot
+  chain (skip via `DSPARK_SKIP_ISSUE117_RECHECK_HOTFIX=1`).
+- **Vision hotfix host-sync removal (issues #203/#204, merged)**:
+  `vision_exp/apply.py` + `image_processor.py` now classify routing kind once
+  per forward via a shared model-local cell instead of once per MoE layer
+  (`.sum().item()` host sync × 43 layers gone). Decodes image workloads
+  measurably faster; no config change.
+- **issue138 responses-history patcher updated** (now also carries the opt-in
+  Codex `agent_message` method-rewrite; still opt-in, default off — skip).
+- Reviewed and deliberately NOT adopted (upstream opt-ins, default 0, no
+  measurement on our kit): codex-agent-message, responses-store,
+  adaptive-prefill-chunk, replicate-markov-head, sp-indexer,
+  deepgemm-sm121-mqa-alias, TP3 launcher/padding (3-node only).
+
 ## References
 
 - Forum: [DeepSeek v4 Flash Vision Exp is Released as Open Weights — post #55

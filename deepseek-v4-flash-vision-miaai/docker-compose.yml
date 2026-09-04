@@ -129,11 +129,12 @@ services:
       LIMIT_MM_PER_PROMPT: "${LIMIT_MM_PER_PROMPT:-image=8}"
       VLLM_PREFIX_CACHE_RETENTION_INTERVAL: "4096"
       DSPARK_ISSUE43_SCHED_DIAG: "0"
-      DSPARK_MAX_INFLIGHT_PREFILLS: "${DSPARK_MAX_INFLIGHT_PREFILLS:-2}"
+      DSPARK_MAX_INFLIGHT_PREFILLS: "${DSPARK_MAX_INFLIGHT_PREFILLS:-1}"
       # Hotfix toggles (all default off except the always-on chain; see README).
       DSPARK_SKIP_HOTFIX: "0"
       DSPARK_SKIP_ISSUE22_HOTFIX: "0"
       DSPARK_SKIP_SPIN_WAIT_HOTFIX: "0"
+      DSPARK_SKIP_ISSUE117_RECHECK_HOTFIX: "0"
       DSPARK_SUPPRESS_STOPS_IN_REASONING: "1"
       DSPARK_SKIP_SUPPRESS_STOPS_HOTFIX: "0"
       DSPARK_ENABLE_ASSISTANT_FINAL_HOTFIX: "0"
@@ -204,6 +205,7 @@ services:
         # .sh hotfix chain (always-on unless explicitly skipped).
         if [ "$${DSPARK_SKIP_ISSUE22_HOTFIX:-0}" != "1" ]; then if [ ! -f /opt/dspark-patches/hotfix-nvfp4-ds-mla-issue22.sh ]; then echo "FATAL: /opt/dspark-patches/hotfix-nvfp4-ds-mla-issue22.sh missing" >&2; exit 1; fi; bash /opt/dspark-patches/hotfix-nvfp4-ds-mla-issue22.sh || exit 1; fi;
         if [ "$${DSPARK_SKIP_SPIN_WAIT_HOTFIX:-0}" != "1" ]; then if [ ! -f /opt/dspark-patches/hotfix-gb10-spin-wait.sh ]; then echo "FATAL: /opt/dspark-patches/hotfix-gb10-spin-wait.sh missing" >&2; exit 1; fi; bash /opt/dspark-patches/hotfix-gb10-spin-wait.sh || exit 1; fi;
+        if [ "$${DSPARK_SKIP_ISSUE117_RECHECK_HOTFIX:-0}" != "1" ]; then if [ ! -f /opt/dspark-patches/hotfix-vllm-issue117-shm-ring-buffer.py ]; then echo "FATAL: /opt/dspark-patches/hotfix-vllm-issue117-shm-ring-buffer.py missing" >&2; exit 1; fi; python3 /opt/dspark-patches/hotfix-vllm-issue117-shm-ring-buffer.py || exit 1; python3 /opt/dspark-patches/hotfix-vllm-issue117-shm-ring-buffer.py --status || exit 1; fi;
         if [ "$${DSPARK_SKIP_HOTFIX:-0}" != "1" ]; then for _hf in hotfix-dsv4-mtp-buffer-50312.sh hotfix-dsv4-skip-topk-49486.sh hotfix-dsv4-dense-prefill-indexer-48407.sh hotfix-dsv4-skip-empty-c128-48957.sh hotfix-dsv4-flashmla-workspace-50298.sh hotfix-dsv4-grammar-advance.sh; do if [ ! -f /opt/dspark-patches/$${_hf} ]; then echo "FATAL: /opt/dspark-patches/$${_hf} missing" >&2; exit 1; fi; bash /opt/dspark-patches/$${_hf} || exit 1; done; fi;
         if [ "$${_dspark_keys_set}" = "1" ] || [ -n "$${VLLM_API_KEY:-}" ]; then bash /opt/dspark-patches/hotfix-vllm-redact-api-key-log.sh || exit 1; bash /opt/dspark-patches/hotfix-vllm-redact-api-key-log.sh --status || exit 1; fi;
 

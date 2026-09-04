@@ -1,0 +1,162 @@
+services:
+  vllm-dspark:
+    image: ${IMAGE}
+    container_name: glm53-exl3-entrpi
+    restart: "no"
+    network_mode: host
+    ipc: host
+    shm_size: 32g
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    cap_add:
+      - IPC_LOCK
+    devices:
+      - /dev/infiniband:/dev/infiniband
+    healthcheck:
+      test: ["CMD-SHELL", "if [ -n \"$$HEADLESS\" ]; then exit 0; fi; curl -fsS http://127.0.0.1:${PORT:-4000}/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 600s
+    volumes:
+      # Flat EXL3 weights dir (hardlink-materialized from the HF snapshot;
+      # Entrpi reads /models/glm53-exl3 as a plain dir, loader instanttensor)
+      - ${MODEL_HOST_PATH:-/home/sdrew/models/glm53-exl3}:/models/glm53-exl3:ro
+      # DFlash2 MXFP8 drafter (flat dir; ring draft-KV in this image)
+      - ${DFLASH_DIR:-/home/sdrew/models/glm53-dflash2-mxfp8}:/models/glm53-dflash2:ro
+      # Cache root -> /cache (HF_HOME=/cache/huggingface) + jit subdirs
+      - ${CACHE_HOST_PATH:-/home/sdrew/.cache/glm53-entrpi}:/cache
+      - ${CACHE_HOST_PATH:-/home/sdrew/.cache/glm53-entrpi}/jit/triton:/root/.triton
+      - ${CACHE_HOST_PATH:-/home/sdrew/.cache/glm53-entrpi}/jit/flashinfer:/root/.cache/flashinfer
+      - ${CACHE_HOST_PATH:-/home/sdrew/.cache/glm53-entrpi}/jit/b12x:/root/.cache/b12x
+      - ${CACHE_HOST_PATH:-/home/sdrew/.cache/glm53-entrpi}/jit/vllm:/root/.cache/vllm
+    environment:
+      # ---- GPU ----
+      CUDA_VISIBLE_DEVICES: "0"
+      CUDA_DEVICE_ORDER: PCI_BUS_ID
+      # ---- node identity (rank / headless) ----
+      NODE_RANK: "${NODE_RANK:-0}"
+      HEADLESS: "${HEADLESS:-}"
+      ROCE_IP: "${ROCE_IP:-}"
+      # ---- RoCE networking (this cluster's NICs) ----
+      NCCL_NET: IB
+      NCCL_IB_DISABLE: "0"
+      NCCL_NET_PLUGIN: none
+      NCCL_IB_HCA: "${IB_PORTS}"
+      NCCL_IB_GID_INDEX: "${NCCL_IB_GID_INDEX:-}"
+      NCCL_IB_ROCE_VERSION_NUM: "2"
+      NCCL_IB_ADDR_FAMILY: AF_INET
+      NCCL_IB_ADDR_RANGE: "${NCCL_SUBNET}"
+      NCCL_SOCKET_IFNAME: "${ETH_IF}"
+      GLOO_SOCKET_IFNAME: "${ETH_IF}"
+      TP_SOCKET_IFNAME: "${ETH_IF}"
+      MN_IF_NAME: "${ETH_IF}"
+      NCCL_NVLS_ENABLE: "0"
+      NCCL_CROSS_NIC: "0"
+      NCCL_IB_MERGE_NICS: "0"
+      NCCL_CUMEM_ENABLE: "0"
+      NCCL_IGNORE_CPU_AFFINITY: "1"
+      NCCL_DEBUG: WARN
+      TORCH_NCCL_ASYNC_ERROR_HANDLING: "1"
+      NCCL_MIN_NCHANNELS: "${NCCL_NCHANNELS:-8}"
+      NCCL_MAX_NCHANNELS: "${NCCL_NCHANNELS:-8}"
+      # ---- runtime (image lineage: local-inference-lab vLLM fork, b12x) ----
+      VLLM_HOST_IP: "${ROCE_IP}"
+      HF_HOME: /cache/huggingface
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      VLLM_ENGINE_READY_TIMEOUT_S: "3600"
+      PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"
+      TORCH_CUDA_ARCH_LIST: "12.1a"
+      FLASHINFER_CUDA_ARCH_LIST: "12.1a"
+      FLASHINFER_DISABLE_VERSION_CHECK: "1"
+      VLLM_USE_B12X_FP8_GEMM: "${VLLM_USE_B12X_FP8_GEMM:-1}"
+      VLLM_DFLASH_FP8_DRAFT_HEAD: "${VLLM_DFLASH_FP8_DRAFT_HEAD:-1}"
+      VLLM_B12X_MXFP8_MAX_M: "${VLLM_B12X_MXFP8_MAX_M:-16}"
+    command:
+      - /bin/bash
+      - -lc
+      - |
+        set -euo pipefail
+
+        # ---- GID auto-detect (Entrpi's sysfs method; GID table renumbers
+        # across reboots and a wrong index dies ~60s later in NCCL QP setup
+        # with an opaque "remote GID ::") ----
+        if [ -z "$${NCCL_IB_GID_INDEX:-}" ]; then
+          _want="$$(printf '0000:0000:0000:0000:0000:ffff:%02x%02x:%02x%02x' $${ROCE_IP//./})"
+          for _g in /sys/class/infiniband/rocep1s0f0/ports/1/gids/*; do
+            [ "$$(cat "$$_g" 2>/dev/null)" = "$$_want" ] || continue
+            _idx="$${_g##*/}"
+            [ "$$(cat "/sys/class/infiniband/rocep1s0f0/ports/1/gid_attrs/types/$$_idx" 2>/dev/null)" = *"v2"* ] || continue
+            NCCL_IB_GID_INDEX="$$_idx"; break
+          done
+          if [ -z "$${NCCL_IB_GID_INDEX:-}" ]; then
+            echo "error: no RoCE v2 GID matching $$ROCE_IP on rocep1s0f0; table:" >&2
+            for _g in /sys/class/infiniband/rocep1s0f0/ports/1/gids/*; do
+              _idx="$${_g##*/}"
+              echo "  gid $$_idx: $$(cat "$$_g" 2>/dev/null) type=$$(cat "/sys/class/infiniband/rocep1s0f0/ports/1/gid_attrs/types/$$_idx" 2>/dev/null)" >&2
+            done
+            echo "override with NCCL_IB_GID_INDEX=<idx> if the table disagrees" >&2
+            exit 2
+          fi
+          echo "GID auto-detect: NCCL_IB_GID_INDEX=$${NCCL_IB_GID_INDEX}"
+          export NCCL_IB_GID_INDEX
+        fi
+
+        # ---- preflight: weights + drafter (fail fast, like the launcher) ----
+        [ -f "/models/glm53-exl3/config.json" ] || { echo "FATAL: EXL3 weights not found at /models/glm53-exl3 (set MODEL_HOST_PATH, see README)" >&2; exit 2; }
+        if [ "$${SPEC:-dflash}" = "dflash" ]; then
+          { [ -f "/models/glm53-dflash2/config.json" ] && [ -f "/models/glm53-dflash2/model.safetensors" ]; } || { echo "FATAL: DFlash2 drafter not found or incomplete at /models/glm53-dflash2 (set DFLASH_DIR, see README)" >&2; exit 2; }
+        fi
+
+        ARGS=(serve "/models/glm53-exl3"
+          --served-model-name "$${SERVED_MODEL_NAME:-glm-5.3-flash}"
+          --host 0.0.0.0 --port "$${PORT:-4000}"
+          --trust-remote-code --quantization exl3
+          --tensor-parallel-size 2
+          --gpu-memory-utilization "$${GMU:-0.85}"
+          --max-model-len "$${MAX_LEN:-524288}"
+          --max-num-seqs "$${MAX_SEQS:-4}"
+          --block-size "$${BLOCK_SIZE:-2304}"
+          --mm-processor-cache-gb "$${MM_CACHE_GB:-0.5}"
+        )
+        [ -n "$${LOAD_FORMAT:-}" ] && ARGS+=(--load-format "$${LOAD_FORMAT}")
+        [ -n "$${MNBT:-}" ] && ARGS+=(--max-num-batched-tokens "$${MNBT}")
+        # Speculative config: MTP>0 overrides; else DFlash2 (drafter at /models/glm53-dflash2)
+        if [ "$${MTP:-0}" != "0" ]; then
+          ARGS+=(--speculative-config "{\"method\":\"mtp\",\"num_speculative_tokens\":$${MTP}}")
+        elif [ "$${SPEC:-dflash}" = "dflash" ]; then
+          ARGS+=(--speculative-config "{\"method\":\"dflash\",\"model\":\"/models/glm53-dflash2\",\"num_speculative_tokens\":$${DFLASH_TOKENS:-7}}")
+        fi
+        # KV cache: dtype + skip-layers + memory budget (empty -> 14.4e9 like the launcher)
+        [ -n "$${KV_DTYPE:-}" ] && ARGS+=(--kv-cache-dtype "$${KV_DTYPE}")
+        [ -n "$${KV_SKIP_LAYERS:-}" ] && ARGS+=(--kv-cache-dtype-skip-layers "$${KV_SKIP_LAYERS}")
+        _kvmem="$${KV_CACHE_MEMORY:-}"
+        [ "$$_kvmem" = "auto" ] && _kvmem=""
+        [ -z "$$_kvmem" ] && _kvmem=14400000000
+        ARGS+=(--kv-cache-memory "$$_kvmem")
+        # Attention backend + prefix granularity + mixed-prefill (KDA lane)
+        [ -n "$${ATTN_BACKEND:-}" ] && ARGS+=(--attention-backend "$${ATTN_BACKEND}")
+        [ -n "$${PREFIX_MATCH_UNIT:-}" ] && ARGS+=(--prefix-match-unit "$${PREFIX_MATCH_UNIT}")
+        [ -n "$${MIXED_PREFILL_CAP:-}" ] && ARGS+=(--mixed-prefill-token-cap "$${MIXED_PREFILL_CAP}")
+        [ -n "$${MIXED_PREFILL_MAX_DEFER:-}" ] && ARGS+=(--mixed-prefill-max-defer-steps "$${MIXED_PREFILL_MAX_DEFER}")
+        [ -n "$${MIXED_PREFILL_DECODE_WEIGHT:-}" ] && ARGS+=(--mixed-prefill-decode-weight "$${MIXED_PREFILL_DECODE_WEIGHT}")
+        [ -n "$${KDA_PREFILL:-}" ] && ARGS+=(--kda-prefill-backend "$${KDA_PREFILL}")
+        # Eager / mm profiling
+        [ "$${EAGER:-0}" != "0" ] && ARGS+=(--enforce-eager)
+        [ "$${SKIP_MM_PROFILING:-1}" != "0" ] && ARGS+=(--skip-mm-profiling)
+        # Parsers / thinking default (Entrpi: reasoning off by default)
+        ARGS+=(--tool-call-parser glm47 --enable-auto-tool-choice
+          --reasoning-parser glm45
+          --default-chat-template-kwargs '{"enable_thinking": false}')
+        # Multi-node TP=2
+        ARGS+=(--distributed-executor-backend mp
+          --nnodes 2 --node-rank "$${NODE_RANK:-0}"
+          --master-addr "$${MASTER_ADDR}" --master-port "$${MPORT:-29521}")
+        [ -n "$${HEADLESS:-}" ] && ARGS+=(--headless)
+
+        echo "launched image=$IMAGE rank=$${NODE_RANK:-0} host=$${ROCE_IP} gid=$${NCCL_IB_GID_INDEX} kv=$$_kvmem/$${KV_DTYPE:-auto} max_len=$${MAX_LEN:-524288} seqs=$${MAX_SEQS:-4}"
+
+        exec vllm "$${ARGS[@]}"

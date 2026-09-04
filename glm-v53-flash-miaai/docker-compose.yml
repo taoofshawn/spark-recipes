@@ -38,6 +38,13 @@ services:
       # accounting (GHCR image's check double-counts the drafter's padded
       # pages -> 34.15 GiB false positive at 1M; see hotfix docstring)
       - ./hotfix_kv_check_glm5.py:/opt/glm53/hotfix_kv_check_glm5.py:ro
+      # K-pool tail OOB fix (vcruz305 KPOOL_TAIL_BUG): the image's hybrid
+      # model-state path builds attn metadata WITHOUT positions=, so the
+      # indexer skips compute_kpool_tail_slot_mapping and the generic paged
+      # mapping writes a one-entry block-table row OOB (intermittent
+      # corruption; long generations). Patch loop below already lists
+      # patch_kpool_tail_slotmap — image doesn't ship it; mounted here.
+      - ./patch_kpool_tail_slotmap.py:/opt/glm53/patch_kpool_tail_slotmap.py:ro
     environment:
       # ---- GPU ----
       CUDA_VISIBLE_DEVICES: "0"
@@ -93,7 +100,7 @@ services:
       QUANTIZATION: "${QUANTIZATION:-exl3}"
       ENFORCE_EAGER: "${ENFORCE_EAGER:-0}"
       EXL3_FUSED_MOE: "${EXL3_FUSED_MOE:-1}"
-      EXL3_FAT_KERNEL: "${EXL3_FAT_KERNEL:-1}"
+      EXL3_FAT_KERNEL: "${EXL3_FAT_KERNEL:-0}"
       SPEC_METHOD: "${SPEC_METHOD:-dflash}"
       DFLASH_TOKENS: "${DFLASH_TOKENS:-7}"
       DFLASH_DRAFT_TP: "${DFLASH_DRAFT_TP:-2}"

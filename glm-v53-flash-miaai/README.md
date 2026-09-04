@@ -64,6 +64,12 @@ docker logs glm53-exl3-miaai 2>&1 | grep -F "padded slot-share"
 docker logs glm53-exl3-miaai 2>&1 | grep -F "GPU KV cache size"
 #   -> "GPU KV cache size: 1,050,522 tokens, Maximum concurrency ... 1.0"
 #      ~980K-1.05M = healthy | ~436K / 0.42x = hotfix NOT applied — do not serve 1M
+
+docker logs glm53-exl3-miaai 2>&1 | grep -F "positions=input_batch.positions"
+#   -> "mamba_hybrid.py now passes positions=input_batch.positions"
+#      = K-pool tail OOB fix engaged; without it the tail cache writes OOB
+#      (intermittent corruption on long generations). "already patched" on
+#      container restarts — also good.
 ```
 
 ## Cluster deviations from upstream
@@ -80,22 +86,31 @@ docker logs glm53-exl3-miaai 2>&1 | grep -F "GPU KV cache size"
 | `NCCL_IB_HCA` / socket ifs | per-node CX7 pins | `${IB_PORTS}` / `${ETH_IF},${ETH_IF2}` | repo convention (same NICs on this cluster) |
 
 Unchanged from upstream's validated profile: MNBT 7168, DFlash2
-k=7/draft-TP2, `EXL3_FAT_KERNEL=1`, `GLM53_*` patch knobs, `SKIP_MM_PROFILING=1`.
+k=7/draft-TP2, `GLM53_*` patch knobs, `SKIP_MM_PROFILING=1`.
+Deviations (2026-09-04 research pass): `EXL3_FAT_KERNEL=0` (public `:exl3`
+predates PR#77's E2 kernels — `=1` was a silent no-op), image digest-pinned
+(`:exl3@sha256:9bb1557a…`), `--long-prefill-token-threshold 3584` (= MNBT/2,
+PR#112 validated on this geometry; supersedes the 1024 value), and
+`GLM53_MIXED_PREFILL_CHUNK=2048` (was `skip`; #119: newcomer TTFT 67-71s →
+10.1s).
 
 ## Notes
 
 - `HF_HOME` is `/root/.cache/huggingface` in this image (mount lands there);
   the DS4/Anemll image uses `/cache/huggingface` instead.
-- **Image = the unmodified public image.** We run
-  `ghcr.io/miaai-lab/glm-5.3-flash-2x-dgx-sparks:exl3` pulled straight from
-  GHCR (no local build, no fork). The upstream image has baked bugs — a
-  stale DFlash2 KV builder branch and missing glm5 KV accounting that make
-  1M-context boots fail or silently refuse large requests;
-  `hotfix_kv_check_glm5.py` (host-mounted, run at boot before `vllm serve`)
-  patches the image's vLLM in place. It is fail-closed: if a future image
-  update changes the code it anchors on, the boot aborts loudly — retire or
-  re-derive the hotfix at that point (see `research.md` Problem 4 +
-  watchlist, incl. Entrpi's vLLM fork as a permanent-fix lane).
+- **Image = the unmodified public image, digest-pinned.** We run
+  `ghcr.io/miaai-lab/glm-5.3-flash-2x-dgx-sparks:exl3@sha256:9bb1557a…`
+  (verified identical on both nodes 2026-09-04). The upstream image has
+  baked bugs — a stale DFlash2 KV builder branch and missing glm5 KV
+  accounting that make 1M-context boots fail or silently refuse large
+  requests; `hotfix_kv_check_glm5.py` (host-mounted, run at boot before
+  `vllm serve`) patches the image's vLLM in place. It is fail-closed: if a
+  future image update changes the code it anchors on, the boot aborts
+  loudly — retire or re-derive the hotfix at that point (see
+  `research.md` Problem 4 + watchlist, incl. Entrpi's vLLM fork as a
+  permanent-fix lane). `patch_kpool_tail_slotmap.py` is the same pattern:
+  it fixes the image's K-pool tail OOB (positions never passed on the
+  hybrid path) and is fail-closed too (see boot markers above).
 - Upstream also supports a rebuild-from-source path (`BUILD=1 ./start.sh`);
   not vendored here — the prebuilt image is the default.
 

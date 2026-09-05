@@ -12,6 +12,7 @@ services:
         hard: -1
     cap_add:
       - IPC_LOCK
+    gpus: all
     devices:
       - /dev/infiniband:/dev/infiniband
     healthcheck:

@@ -94,7 +94,7 @@ services:
           for _g in /sys/class/infiniband/rocep1s0f0/ports/1/gids/*; do
             [ "$$(cat "$$_g" 2>/dev/null)" = "$$_want" ] || continue
             _idx="$${_g##*/}"
-            [ "$$(cat "/sys/class/infiniband/rocep1s0f0/ports/1/gid_attrs/types/$$_idx" 2>/dev/null)" = *"v2"* ] || continue
+            [[ "$$(cat "/sys/class/infiniband/rocep1s0f0/ports/1/gid_attrs/types/$$_idx" 2>/dev/null)" == *"v2"* ]] || continue
             NCCL_IB_GID_INDEX="$$_idx"; break
           done
           if [ -z "$${NCCL_IB_GID_INDEX:-}" ]; then

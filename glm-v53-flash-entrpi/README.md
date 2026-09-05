@@ -118,6 +118,41 @@ docker logs glm53-exl3-entrpi 2>&1 | grep -F "Setting attention block size"
   `IB_PORTS`. Our compose sets `NCCL_IB_HCA` to both. If you see NCCL
   errors with the dual-HCA set, drop `roceP2p1s0f0` from `IB_PORTS` to match
   Entrpi's validated single-HCA topology.
+- **Driver generation (09-05 watch, issue #4/#114).** NVIDIA 610.43.02
+  costs ~4 GiB more unified memory and is nondeterministic at boot
+  (0/4 launches); 580.173.02 is stable. This cluster is on 580.173.02 —
+  don't "upgrade" blindly; re-check `nvidia-smi` if a DGX update lands.
+- **Vision+text concurrency (09-05 watch, forum 381350/273).** A pair of
+  simultaneous requests — one text, one image — crashed the EXL3 engine
+  fatally (`CUDA_ERROR_NOT_PERMITTED` at DeepGEMM mhc_pre_tilelang) on a
+  config dump identical to ours (exl3 + dflash2 k=7 + fp8_ds_mla +
+  instanttensor). Test concurrent vision+text before relying on it.
+- **Benchmark discipline (09-05 watch, forum 382099).** Under spec
+  decode, long-prefill TTFT can alternate ~2× after mixed workloads
+  (engine-state-dependent; restart clears). GPU util% lies on stall-bound
+  steps — power draw is the honest signal. Always restart between config
+  A/B runs and read cumulative `vllm:prompt_tokens_total`.
+
+## Switching profiles (the short version)
+
+`.env` edit → redeploy (both nodes: `docker compose --env-file .env
+--env-file .env.node{1,0} down`; worker up, leader ~35 s later). Full
+table + tradeoffs in the "Choosing a configuration" section above and
+`research.md`. The three rows you'll actually use:
+
+- **Default (as shipped):** 524k requests, 1.29M pool, ~30 tok/s prose,
+  MAX_SEQS=4.
+- **Agentic (multi-session/subagents — the pattern that timed out on the
+  other lane):** add `MAX_LEN=131072 MAX_SEQS=12 MNBT=4096 SPEC=none
+  MIXED_PREFILL_DECODE_WEIGHT=1.0 MIXED_PREFILL_CAP=512` → 12–16 streams
+  at 88–103 agg tok/s, pool 1,858,451.
+- **1M requests:** `MAX_LEN=1048576 KV_DTYPE=nvfp4_ds_mla
+  VLLM_NVFP4_MLA_DYNAMIC_SCALE=1 MNBT=4096` → 2,144,814 pool, two 1M
+  requests at once, but ~15 min cold 1M read and a small KV quality step.
+
+Knobs are read by the compose command block and forwarded to `vllm
+serve` exactly as Entrpi's launcher does; every knob is one `.env`
+line.
 
 ## Deviations from Entrpi's kit (this repo's conventions)
 
@@ -149,6 +184,8 @@ recipe runs at a time). Differences:
 
 ## References
 
+- `research.md` in this directory — maintenance notes, profile system,
+  upstream watchlist (incl. the 09-05 forum risks).
 - [Entrpi/glm-5.3-flash-exl3-2x-spark](https://github.com/Entrpi/glm-5.3-flash-exl3-2x-spark)
   — README (validated config table + measured performance), `docs/FINDINGS.md`
   (fork provenance + what does NOT help; read before speculative tuning),

@@ -85,7 +85,7 @@ services:
         # across reboots and a wrong index dies ~60s later in NCCL QP setup
         # with an opaque "remote GID ::") ----
         if [ -z "$${NCCL_IB_GID_INDEX:-}" ]; then
-          _want="$$(printf '0000:0000:0000:0000:0000:ffff:%02x%02x:%02x%02x' $${ROCE_IP//./})"
+          _want="$$(printf '0000:0000:0000:0000:0000:ffff:%02x%02x:%02x%02x' $$(echo "$${ROCE_IP}" | tr . ' '))"
           for _g in /sys/class/infiniband/rocep1s0f0/ports/1/gids/*; do
             [ "$$(cat "$$_g" 2>/dev/null)" = "$$_want" ] || continue
             _idx="$${_g##*/}"

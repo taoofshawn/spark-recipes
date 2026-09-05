@@ -5,17 +5,19 @@ README is the deploy doc; this file is the memory. Anything not needed to
 maintain or re-derive the recipe was pruned — git history retains the full
 adoption narrative (see `git log glm-v53-flash-miaai/`).
 
-## Current state (2026-09-04)
+## Current state (2026-09-05)
 
 - Deployed and validated on the 2-node cluster (spark-0f0b / spark-6d14).
   Serves as `glm-5.3-flash` on :4000, 1M ctx, DFlash2 k=7. Boot-log health
   markers and what they mean: see README "Boot-log health markers".
 - Single-stream ~24-28 tok/s decode, 4-way aggregate ~59 tok/s (upstream
   documents 33-74 on their kit). Prefill ~600-750 tok/s.
-- **2026-09-04 research pass applied:** threshold 1024→3584 (PR#112),
-  mixed-prefill gate skip→2048 (#119), EXL3_FAT_KERNEL=1→0 (no-op on this
-  image), image digest-pinned, kpool-tail OOB patch vendored (new hotfix,
-  see below). Image, weight and drafter pins still byte-valid.
+- **2026-09-05 research pass applied:** fine-grained prefix-cache patcher
+  vendored (`patch_hybrid_prefix_hit.py`, PR #125, 4th boot marker:
+  `hybrid APC groups`). All pins still byte-valid (image/weights/drafters
+  verified 09-05). Both sparks on driver 580.173.02 (the good one per
+  #114). Upstream main = frozen at eb0469f functionally (HEAD 3021f24 is
+  only .github templates, PR #126).
 - The DS4-vision recipe (`deepseek-v4-flash-vision-miaai`) shares this
   cluster and port; only one may serve at a time.
 
@@ -113,6 +115,43 @@ our exact image (extracted + dry-run patched 09-04):
   now passes positions=input_batch.positions". Fail-closed like the KV
   hotfix (compose loop runs it with `|| exit 1`; anchors checked).
 
+## The fine-grained prefix-cache hotfix — `patch_hybrid_prefix_hit.py`
+
+Added 2026-09-05 (vendored from MiaAI-Lab PR #125, authors rwl4 +
+plotarmordev lineage; measured EXACTLY on our geometry: 2× DGX Spark TP=2,
+DFlash2 k=7 draft TP=2, FP8 KV, max_model_len=1,000,000, **MNBT=7168**).
+
+The stock hybrid `kv_cache_coordinator.py` has three bugs that zero out
+meaningful prefix reuse on this kit:
+
+1. **EAGLE flagging**: `dflash` is `use_eagle()`, and GLM never sets
+   `is_eagle_group` (DeepSeekV4-only annotator) — so the coordinator flags
+   EVERY group and MLA drops its last scheduler-aligned block (~3584).
+2. **Drafter SWA in the hybrid min**: the DFlash2 SlidingWindow group
+   re-aligns down by a full 3584-token scheduler page after the EAGLE pop,
+   wiping a longer MLA hit.
+3. **Fine-grained veto by a non-participant**: the eligibility check
+   includes `KpoolTailManager` (1-block circular scratch that OPTS OUT of
+   prefix caching), so its presence knocks ALL reusable groups back to
+   3584-token alignment (`Disabling fine-grained prefix-cache hits ...
+   KpoolTailManager` — the boot line we used to call benign).
+
+The patcher (applied by the compose patch loop — the loop already listed
+`patch_hybrid_prefix_hit`, the image just didn't ship it):
+- flags only exact SlidingWindowSpec (drafter) groups as EAGLE;
+- keeps the drafter group out of `curr_hit_length` shrinking (MLA/Mamba
+  still constrain — skipping a mamba miss is a correctness hole, vLLM
+  #47491/#43090);
+- ignores non-participating managers in the fine-grained eligibility check
+  (MLA threshold stays).
+
+Measured (PR #125, on our geometry): prefix cache-hit **73.7% → 99.5%**,
+TTFT **−91.1%** (11.2×) on matched short append, redundant repeat-prefill
+−99.75%; long-doc cold 8.31 s → warm 1.15 s (7.24×). Boot marker: grep
+`hybrid APC groups` → the group log line. Fail-closed (`raise SystemExit`
+on anchor drift, 5 anchors verified against `9bb1557a` 2026-09-05), and
+idempotent (re-applies as "already present — skipping").
+
 ## Known-benign boot/log lines (all verified on this cluster)
 
 | line | verdict |
@@ -121,7 +160,8 @@ our exact image (extracted + dry-run patched 09-04):
 | `Custom collectives are disabled because this multi-node ...` | expected for TP across 2 nodes |
 | `Sparse MLA impl has no dense-MHA prefill path; using the top-k MQA path only` | by design; only SM12x kernel |
 | `Draft model DFlash2Qwen3ForCausalLM does not support external multimodal embeddings` | by design; drafter is text-only |
-| `Disabling fine-grained prefix-cache hits ... KpoolTailManager` | upstream default; 3584-token block-aligned hits still work |
+| `Disabling fine-grained prefix-cache hits ... KpoolTailManager` | **FIXED 09-05 (PR #125 patch)** — with patch_hybrid_prefix_hit.py applied you instead see `hybrid APC groups:`; if this line still appears, the patch did NOT apply — do not trust 3584-aligned hits |
+| `hybrid APC groups: [...]` | fine-grained 64-token hits engaged (PR #125); MLA/Mamba constrained as designed |
 | sampling defaults overridden by `generation_config.json` (temp 1.0, top_p 0.95) | checkpoint ships tuned defaults; clients may override |
 | one-time Triton JIT `_topk_topp_kernel` latency spike | first sampled request only; cached after |
 | worker TCPStore/NCCL spam during leader load | rendezvous noise; judge by leader log |
@@ -309,6 +349,91 @@ different image — treat native-kernel numbers as non-transferable:**
   by the PR author, KV pool 1.9M vs 1.35M tokens at 7168) — adopt ONLY
   after #121's rebuild-corruption story is resolved, and expect hotfix
   anchor drift (fail-closed boot = re-derive time).
+
+**09-05 update-pass deltas (MiaAI upstream + forum):**
+
+- **PR #125 (rwl4, 09-04, open) — ADOPTED as `patch_hybrid_prefix_hit.py`.**
+  Fine-grained 64-token prefix-cache hits on our exact geometry (TP=2,
+  k=7 draft TP=2, FP8, 1M, MNBT=7168): cache-hit 73.7→99.5%, TTFT −91%,
+  long-doc 8.31→1.15s. Anchors verified against our `9bb1557a` image,
+  dry-run + idempotency proven. See the hotfix section above.
+- **#121 REFINED (AI-hobbyist88, 09-04)** — long-generation corruption
+  (stray U+FFFD, ~char 2-5k) ALSO hits our pinned `9bb1557a` image at
+  ≥4096 tokens (3/4 corrupt @4096, 1/2 @8192; ≤2048 clean). This
+  partially invalidates the 09-04 "pinned image clean" framing. NO fix
+  yet; high-value watch for our 1M recipe. Could be a decode-quality
+  issue not the rebuild-overlay one. Marker: if any long output shows
+  U+FFFD, treat as real.
+- **#114 RESOLVED (09-04)** — 1M+vision boot nondeterminism root cause =
+  **NVIDIA driver generation**: 610.43.02-open 0-for-4 (loses ~4 GiB
+  UMA), 580.173.02 passes first try. **BOTH our sparks are on
+  580.173.02** (verified 09-05) — we're already on the safe side; if a
+  DGX update ever lands 610, expect nondeterminism and pin 580.
+- **#115 (TP4 stall) EXONERATES #86 + PR#77 E2** — the 4-node soak stalls
+  were a **lossy RoCE fabric through a switch** (per-rank packet_seq_err
+  up to 3.1M, global pause, no PFC/ECN, /health stays 200 with flat
+  counters). Simossss: "your 2-node recipe has no switch between the
+  Sparks, which would explain why you never see it." -> our direct
+  connect is safe; #86 rightsize stays a no-op in stock mode (keep
+  `stock` as we do); #77 fat-kernel exonerated from the stall.
+- **#118 new comment (09-04)** — on a dedicated head, default 0.87+1M
+  still fails (14.52 GiB KV needed vs 13.71 available); 0.8824 + MAX_LEN
+  850000 boots (their daily config). Validates our **GMU 0.8848**; do NOT
+  lower unless a boot fails on this cluster.
+- **#123 (09-05) real bug on our image/geometry** — thinking mode +
+  `stream:true` HANGS forever (zero bytes, client timeout); non-streaming
+  and `enable_thinking:false` work fine. On 9bb1557a + eb0469f. If our
+  clients stream thinking, this is live risk; workaround: thinking off
+  or non-streaming.
+- **#128 (09-05, TP=4 only)** — runtime wedge in `apply_exl3_fused_moe`
+  (exl3.py:1099 sort region / :1152 stream sync), same image family but
+  TP=4/16 seqs/0.80/`GLM53_MIXED_PREFILL_CHUNK=128`. Does NOT transfer
+  to our TP=2/seqs 4; strong clue that fused-MoE orchestration is
+  fragile under load — watch our `num_preemptions`/freeze behavior.
+- **PR #124 (09-04) dense-EXL3 overlay +22-26% decode** — REAL but a
+  rebuild lane (patches against image, drafter to 5bpw, re-qualify
+  acceptance). Per adoption rule: not drop-in; if we ever rebuild (we
+  don't — #121), this is the first thing to take.
+- **PR #130 (09-05)** — APC per-group retention + draft eviction; measured
+  on MNBT 2048/262k geometry (not ours); documents a BRANCHING REGRESSION
+  for aggressive policies; nothing changes by default. Near-miss.
+- **PR #127 (09-05)** — chat-template update from zai-org upstream
+  `690b7052`; only relevant if we want the newest template. Info.
+- **PR #129 (09-05)** — `LIMIT_MM image:4` default breaks agents resending
+  history with 5 images (we ship 10 — already fixed; documented for
+  stateless clients like OpenCode/Open WebUI).
+- **EXL3_TEMP_ROWS_FUSED=192 (forum 382120, Sparkdown_Format 09-04)** —
+  mixed-step host-sync fix on the SAME MiaAI kit (story: 45 MLA
+  torch.unique + 42 MoE counts.max().item() per step; 830→480ms mixed
+  step, agg decode ~10-13→24 tok/s, prefill 150→380 tok/s, worst gap
+  1264→570ms). **NOT adopted** — the win came from a fixed-shape no-dedup
+  gather in the author's own NVFP4 code + `EXL3_TEMP_ROWS_FUSED` env
+  raise. OUR image hard-codes `TEMP_ROWS_FUSED = 128` (exl3.py:52, no
+  env var!) and already avoids `.item()` host sync (passes `-1` for
+  num-active); only the `fat.tolist()` fallback path (exl3.py:352-365)
+  would benefit, and only if step tokens >128 — a patch to raise 128→192
+  is *plausible* but unmeasured on our image. QUEUE as A/B if mixed
+  decode+prefill steps still starve after the 09-04 knobs.
+- **C2/C3 forum 382099 (09-02/09-05)** — spec-decode makes long-prefill
+  TTFT alternate ~2× after mixed workloads (measured on entrpi
+  v2-glmnext image); knobs that helped: `--mixed-prefill-token-cap -1`
+  (5.6× decode during 76k prefill), max-num-seqs 4→8 (+40% agg, −10%
+  KV), MNBT 8192→4096 (−30% short TTFT). All measured on the entrpi
+  fork image — flag `does NOT transfer` unless re-measured on ours; but
+  the TTFT-alternation behavior WARNING applies to both lanes (same
+  engine geometry). Watch whenever benchmarking mixed workloads: restart
+  engines between configs; power draw is the honest signal (96% util at
+  36W = stalled on syncs).
+- **C4 forum (09-04)** — fatal `CUDA_ERROR_NOT_PERMITTED` when vision +
+  text run concurrently (DeepGEMM mhc_pre_tilelang, same EXL3 engine
+  family + dflash2 k=7 + fp8_ds_mla + instanttensor). Both our recipes
+  load the vision tower. Real crash risk for concurrent vision+text;
+  verify before serving that combo on either lane (user said "try the
+  newer image" — no in-thread resolution yet).
+- **C5/C6 forum (09-04/05)** — degenerate-output reports (draft acceptance
+  collapses to 0.00, '!!!!!' thinking) on the EXL3 lane + a known
+  1 tok/s-for-10-20s stutter quirk on GLM quant stacks (0rand 600k
+  session; also on Intel W4A16). Watch items; no fix.
 
 ## Other-recipe crossover findings (from the in-repo recipe sweep)
 

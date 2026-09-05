@@ -45,6 +45,16 @@ services:
       # corruption; long generations). Patch loop below already lists
       # patch_kpool_tail_slotmap — image doesn't ship it; mounted here.
       - ./patch_kpool_tail_slotmap.py:/opt/glm53/patch_kpool_tail_slotmap.py:ro
+      # Fine-grained prefix-cache hits (PR #125): the stock hybrid coordinator
+      # vetoes 64-token lookup because KpoolTailManager (1-block scratch, opts
+      # out of prefix caching) sits in the fine-grained eligibility check, so
+      # ALL groups fall back to 3584-token alignment. Patcher flags only the
+      # drafter SWA group as EAGLE, keeps it out of the hybrid min, and ignores
+      # non-participating managers in the eligibility check (MLA+Mamba still
+      # constrain). Measured on our exact geometry (TP=2, k=7 draft TP=2, FP8,
+      # 1M, MNBT=7168): cache-hit 73.7%->99.5%, TTFT -91%, long-doc
+      # 8.31s->1.15s. Patch loop below already lists patch_hybrid_prefix_hit.
+      - ./patch_hybrid_prefix_hit.py:/opt/glm53/patch_hybrid_prefix_hit.py:ro
     environment:
       # ---- GPU ----
       CUDA_VISIBLE_DEVICES: "0"

@@ -50,7 +50,7 @@ curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:4000/health   # 200
 The KV hotfix must apply on EVERY boot. Without it a 1M boot either dies
 outright (34.15 GiB ValueError) or — worse — serves silently while
 refusing every large request (`waiting{reason="capacity"}` stuck). Check
-all three on the leader after each boot:
+all four on the leader after each boot:
 
 ```bash
 docker logs glm53-exl3-miaai 2>&1 | grep -F "[kvcheck-hotfix]"
@@ -70,6 +70,12 @@ docker logs glm53-exl3-miaai 2>&1 | grep -F "positions=input_batch.positions"
 #      = K-pool tail OOB fix engaged; without it the tail cache writes OOB
 #      (intermittent corruption on long generations). "already patched" on
 #      container restarts — also good.
+
+docker logs glm53-exl3-miaai 2>&1 | grep -F "hybrid APC groups"
+#   -> "hybrid APC groups: [...]; eagle_group_ids=[...]" = fine-grained
+#      64-token prefix-cache hits engaged (PR #125). Without it the stock
+#      coordinator logs "Disabling fine-grained prefix-cache hits ..." and
+#      every group falls back to 3584-token alignment (~74% hit -> ~99%).
 ```
 
 ## Cluster deviations from upstream

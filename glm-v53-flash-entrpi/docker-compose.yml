@@ -75,6 +75,11 @@ services:
       VLLM_USE_B12X_FP8_GEMM: "${VLLM_USE_B12X_FP8_GEMM:-1}"
       VLLM_DFLASH_FP8_DRAFT_HEAD: "${VLLM_DFLASH_FP8_DRAFT_HEAD:-1}"
       VLLM_B12X_MXFP8_MAX_M: "${VLLM_B12X_MXFP8_MAX_M:-16}"
+      # ---- multimodal / sampling / thinking defaults (glm-v53-flash parity) ----
+      LIMIT_MM: "${LIMIT_MM:-}"
+      THINKING: "${THINKING:-true}"
+      REASONING_EFFORT: "${REASONING_EFFORT:-high}"
+      GEN_CFG: "${GEN_CFG:-}"
     command:
       - /bin/bash
       - -lc
@@ -144,13 +149,21 @@ services:
         [ -n "$${MIXED_PREFILL_MAX_DEFER:-}" ] && ARGS+=(--mixed-prefill-max-defer-steps "$${MIXED_PREFILL_MAX_DEFER}")
         [ -n "$${MIXED_PREFILL_DECODE_WEIGHT:-}" ] && ARGS+=(--mixed-prefill-decode-weight "$${MIXED_PREFILL_DECODE_WEIGHT}")
         [ -n "$${KDA_PREFILL:-}" ] && ARGS+=(--kda-prefill-backend "$${KDA_PREFILL}")
+        # Parsers / thinking + effort default (glm-v53-flash parity: thinking
+        # ON at REASONING_EFFORT; clients override per request via the OpenAI
+        # reasoning_effort field). The checkpoint template honors both keys.
+        ARGS+=(--tool-call-parser glm47 --enable-auto-tool-choice
+          --reasoning-parser glm45
+          --default-chat-template-kwargs "{\"enable_thinking\": $${THINKING:-true}, \"reasoning_effort\": \"$${REASONING_EFFORT:-high}\"}")
+        # Multimodal cap + sampling defaults (recipe-owned, same values as
+        # glm-v53-flash: temp 1.0 / top_p 0.95; --generation-config vllm makes
+        # the pin independent of whatever the checkpoint's generation_config
+        # ships). 10 images/prompt per operator ask.
+        [ -n "$${LIMIT_MM:-}" ] && ARGS+=(--limit-mm-per-prompt "$${LIMIT_MM}")
+        [ -n "$${GEN_CFG:-}" ] && ARGS+=(--generation-config vllm --override-generation-config "$${GEN_CFG}")
         # Eager / mm profiling
         [ "$${EAGER:-0}" != "0" ] && ARGS+=(--enforce-eager)
         [ "$${SKIP_MM_PROFILING:-1}" != "0" ] && ARGS+=(--skip-mm-profiling)
-        # Parsers / thinking default (Entrpi: reasoning off by default)
-        ARGS+=(--tool-call-parser glm47 --enable-auto-tool-choice
-          --reasoning-parser glm45
-          --default-chat-template-kwargs '{"enable_thinking": false}')
         # Multi-node TP=2
         ARGS+=(--distributed-executor-backend mp
           --nnodes 2 --node-rank "$${NODE_RANK:-0}"

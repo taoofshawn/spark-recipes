@@ -29,11 +29,13 @@ README is the deploy doc; this file is the memory.
 - vLLM path inside the image: `/usr/local/lib/python3.12/dist-packages`
   (same as the miaai lane — this is the local-inference-lab preview
   lineage, NOT /opt/venv or /opt/env).
-- Weights: flat dir `/home/sdrew/models/glm53-exl3` (139 files,
-  hardlinked to the Mia-AiLab HF snapshot blobs — nlink=2, zero extra
-  disk; do NOT `rm -rf` the HF cache or these links break).
-- Drafter: `/home/sdrew/models/glm53-dflash2-mxfp8` (MXFP8, 1.20 GiB,
-  CC BY-NC-ND — never redistribute the bytes).
+- Weights: `Mia-AiLab/GLM-5.3-Flash-EXL3-TR3-4bpw` rev `25a44fdbf…`. The image's
+  `--load-format instanttensor` needs a flat dir (NOT the HF hub symlink layout),
+  so a hardlink-materialized copy lives at `$CACHE_HOST_PATH/models/glm53-exl3`
+  (zero extra space; source blobs stay in the HF cache).
+- Drafter: `local-inference-lab/GLM-5.3-Flash-DFlash2-MXFP8` rev `62f758c0…`,
+  resolved at boot from `$HF_CACHE/hub/models--local-inference-lab--GLM-5.3-Flash-DFlash2-MXFP8/snapshots/…`
+  (MXFP8, 1.20 GiB, CC BY-NC-ND — never redistribute the bytes).
 - Cache root: `/home/sdrew/.cache/glm53-entrpi`, mounted at `/cache`
   (`HF_HOME=/cache/huggingface`) + jit subdirs. Created at first boot.
 
@@ -148,20 +150,20 @@ not a patch.
 
 ## Revision-pin procedure (for any bump)
 
-Pins live in `.env` (`IMAGE@sha256`, `DFLASH_REVISION`; weights are a
-host dir, not a pin). Steps:
+Pins live in `.env` (`IMAGE@sha256`, `MODEL_REVISION`, `DFLASH_REVISION`).
+Steps:
 1. Image: `docker manifest inspect` (or pull) the new tag, replace the
    digest in `.env`. THEN verify the four serve-arg knobs still exist
    (a new image may retire a flag → boot fails vs silently ignores).
-2. Drafter: if Entrpi changes `DFLASH_REPO` (the MXFP8 copy only has
-   `62f758c0` and a 09-02 HEAD `610aa967` that DROPS lil.yaml — all
-   serving files byte-identical, so either rev serves; pin `62f758c0`
-   as shipped), update `.env` + re-download on both nodes.
+2. Drafter: if Entrpi changes `DFLASH_MODEL`/`DFLASH_REVISION` (the MXFP8 copy
+   only has `62f758c0` and a 09-02 HEAD `610aa967` that DROPS lil.yaml — all
+   serving files byte-identical, so either rev serves; pin `62f758c0` as
+   shipped), update `.env` + `hf download ... --revision <rev>` on both nodes.
 3. Weights: only if upstream switches quant/checkpoint — currently
-   brandonmusic = Mia-AiLab bytes; re-point only the hardlink source.
-4. TFTR: `--load-format instanttensor` requires the flat dir; do NOT
-   point at an HF hub snapshot (symlink layout) — materialize hardlinks
-   as the README does.
+   brandonmusic = Mia-AiLab bytes. Update `MODEL`/`MODEL_REVISION`, re-run
+   `hf download`, then re-materialize the flat dir with hardlinks.
+4. `--load-format instanttensor` requires the flat dir; do NOT point it at an
+   HF hub snapshot (symlink layout) — materialize hardlinks as the README does.
 
 ## When to use this vs glm-v53-flash-miaai
 

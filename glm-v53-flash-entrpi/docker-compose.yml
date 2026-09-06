@@ -22,12 +22,13 @@ services:
       retries: 3
       start_period: 600s
     volumes:
-      # Flat EXL3 weights dir (hardlink-materialized from the HF snapshot;
-      # Entrpi reads /models/glm53-exl3 as a plain dir, loader instanttensor)
-      - ${MODEL_HOST_PATH:-/home/sdrew/models/glm53-exl3}:/models/glm53-exl3:ro
-      # DFlash2 MXFP8 drafter (flat dir; ring draft-KV in this image)
-      - ${DFLASH_DIR:-/home/sdrew/models/glm53-dflash2-mxfp8}:/models/glm53-dflash2:ro
-      # Cache root -> /cache (HF_HOME=/cache/huggingface) + jit subdirs
+      # EXL3 weights: flat dir (the image's instanttensor loader wants a plain
+      # dir, NOT the HF hub symlink layout); materialized from the HF cache
+      # snapshot via hardlinks (see README provisioning).
+      - ${MODEL_HOST_PATH:-/home/sdrew/.cache/glm53-entrpi/models/glm53-exl3}:/models/glm53-exl3:ro
+      # HF hub cache (drafter resolved at boot from snapshots/<rev>)
+      - ${HF_CACHE:-/home/sdrew/.cache/huggingface}:/cache/huggingface
+      # Cache root -> /cache (JIT caches) + jit subdirs
       - ${CACHE_HOST_PATH:-/home/sdrew/.cache/glm53-entrpi}:/cache
       - ${CACHE_HOST_PATH:-/home/sdrew/.cache/glm53-entrpi}/jit/triton:/root/.triton
       - ${CACHE_HOST_PATH:-/home/sdrew/.cache/glm53-entrpi}/jit/flashinfer:/root/.cache/flashinfer
@@ -60,6 +61,9 @@ services:
       MM_CACHE_GB: "${MM_CACHE_GB:-0.5}"
       LOAD_FORMAT: "${LOAD_FORMAT:-}"
       DFLASH_TOKENS: "${DFLASH_TOKENS:-7}"
+      # drafter (resolved from HF cache at boot)
+      DFLASH_MODEL: "${DFLASH_MODEL:-local-inference-lab/GLM-5.3-Flash-DFlash2-MXFP8}"
+      DFLASH_REVISION: "${DFLASH_REVISION:-62f758c0a0e19b9cb76fc098c911b8ed76daff5b}"
       KV_DTYPE: "${KV_DTYPE:-}"
       KV_SKIP_LAYERS: "${KV_SKIP_LAYERS:-}"
       KV_CACHE_MEMORY: "${KV_CACHE_MEMORY:-}"
@@ -141,11 +145,21 @@ services:
           export NCCL_IB_GID_INDEX
         fi
 
-        # ---- preflight: weights + drafter (fail fast, like the launcher) ----
+        # ---- preflight EXL3 weights (flat dir; instanttensor needs a plain dir) ----
         [ -f "/models/glm53-exl3/config.json" ] || { echo "FATAL: EXL3 weights not found at /models/glm53-exl3 (set MODEL_HOST_PATH, see README)" >&2; exit 2; }
-        if [ "$${SPEC:-dflash}" = "dflash" ]; then
-          { [ -f "/models/glm53-dflash2/config.json" ] && [ -f "/models/glm53-dflash2/model.safetensors" ]; } || { echo "FATAL: DFlash2 drafter not found or incomplete at /models/glm53-dflash2 (set DFLASH_DIR, see README)" >&2; exit 2; }
-        fi
+        # ---- resolve the DFlash2 drafter to its HF snapshot dir (offline; cached on both nodes) ----
+        resolve_snapshot() {
+          local hub="$1" rev="$2"
+          local dir="/cache/huggingface/hub/models--$$(echo "$$hub" | sed 's|/|--|g')"
+          if [ -n "$$rev" ] && [ -d "$$dir/snapshots/$$rev" ]; then echo "$$dir/snapshots/$$rev"; return 0; fi
+          local snap; for snap in "$$dir"/snapshots/*/; do
+            if [ -f "$$snap/config.json" ]; then echo "$$snap"; return 0; fi
+          done
+          echo ""
+        }
+        DFLASH_MODEL_DIR="$$(resolve_snapshot "$${DFLASH_MODEL}" "$${DFLASH_REVISION:-}")"
+        [ -n "$$DFLASH_MODEL_DIR" ] || { echo "FATAL: DFlash2 drafter not found in HF cache for $$DFLASH_MODEL. Download on both nodes first (see README)." >&2; exit 2; }
+        echo "[glm53-exl3-entrpi] drafter=$$DFLASH_MODEL_DIR"
 
         ARGS=(serve "/models/glm53-exl3"
           --served-model-name "$${SERVED_MODEL_NAME:-glm-5.3-flash}"
@@ -160,11 +174,11 @@ services:
         )
         [ -n "$${LOAD_FORMAT:-}" ] && ARGS+=(--load-format "$${LOAD_FORMAT}")
         [ -n "$${MNBT:-}" ] && ARGS+=(--max-num-batched-tokens "$${MNBT}")
-        # Speculative config: MTP>0 overrides; else DFlash2 (drafter at /models/glm53-dflash2)
+        # Speculative config: MTP>0 overrides; else DFlash2 (drafter snapshot dir)
         if [ "$${MTP:-0}" != "0" ]; then
           ARGS+=(--speculative-config "{\"method\":\"mtp\",\"num_speculative_tokens\":$${MTP}}")
         elif [ "$${SPEC:-dflash}" = "dflash" ]; then
-          ARGS+=(--speculative-config "{\"method\":\"dflash\",\"model\":\"/models/glm53-dflash2\",\"num_speculative_tokens\":$${DFLASH_TOKENS:-7}}")
+          ARGS+=(--speculative-config "{\"method\":\"dflash\",\"model\":\"$$DFLASH_MODEL_DIR\",\"num_speculative_tokens\":$${DFLASH_TOKENS:-7}}")
         fi
         # KV cache: dtype + skip-layers + memory budget (empty -> 14.4e9 like the launcher)
         [ -n "$${KV_DTYPE:-}" ] && ARGS+=(--kv-cache-dtype "$${KV_DTYPE}")

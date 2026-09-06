@@ -29,10 +29,10 @@ README is the deploy doc; this file is the memory.
 - vLLM path inside the image: `/usr/local/lib/python3.12/dist-packages`
   (same as the miaai lane — this is the local-inference-lab preview
   lineage, NOT /opt/venv or /opt/env).
-- Weights: flat dir `/home/sdrew/models/glm53-exl3` (139 files,
+- Weights: flat dir `/home/sdrew/.cache/glm53-entrpi/models/glm53-exl3` (139 files,
   hardlinked to the Mia-AiLab HF snapshot blobs — nlink=2, zero extra
   disk; do NOT `rm -rf` the HF cache or these links break).
-- Drafter: `/home/sdrew/models/glm53-dflash2-mxfp8` (MXFP8, 1.20 GiB,
+- Drafter: `/home/sdrew/.cache/glm53-entrpi/models/glm53-dflash2-mxfp8` (MXFP8, 1.20 GiB,
   CC BY-NC-ND — never redistribute the bytes).
 - Cache root: `/home/sdrew/.cache/glm53-entrpi`, mounted at `/cache`
   (`HF_HOME=/cache/huggingface`) + jit subdirs. Created at first boot.

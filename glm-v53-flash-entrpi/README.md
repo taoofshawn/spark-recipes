@@ -56,13 +56,13 @@ python3 -m venv /tmp/hfvenv && /tmp/hfvenv/bin/pip install -q huggingface_hub
 from huggingface_hub import snapshot_download
 snapshot_download('local-inference-lab/GLM-5.3-Flash-DFlash2-MXFP8',
                   revision='62f758c0a0e19b9cb76fc098c911b8ed76daff5b',
-                  local_dir='/home/sdrew/models/glm53-dflash2-mxfp8')"
+                  local_dir='/home/sdrew/.cache/glm53-entrpi/models/glm53-dflash2-mxfp8')"
 # 0b) weights — the EXL3 bytes are already cached as the Mia-AiLab HF
 #     snapshot (brandonmusic mirror, same 120 shards). Materialize the flat
 #     dir the loader wants with hardlinks (zero extra space):
 SN=/home/sdrew/.cache/huggingface/hub/models--Mia-AiLab--GLM-5.3-Flash-EXL3-TR3-4bpw/snapshots/25a44fdbf16862a46b7cc9921142c6c81350af2f
-mkdir -p /home/sdrew/models/glm53-exl3
-cd "$SN" && for f in *; do [ -f "$f" ] && ln "$(readlink -f "$f")" /home/sdrew/models/glm53-exl3/"$f"; done
+mkdir -p /home/sdrew/.cache/glm53-entrpi/models/glm53-exl3
+cd "$SN" && for f in *; do [ -f "$f" ] && ln "$(readlink -f "$f")" /home/sdrew/.cache/glm53-entrpi/models/glm53-exl3/"$f"; done
 
 # 1) worker (rank 1) first, then leader ~35 s later:
 docker compose --env-file .env --env-file .env.node1 up -d

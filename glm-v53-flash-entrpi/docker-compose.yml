@@ -24,9 +24,9 @@ services:
     volumes:
       # Flat EXL3 weights dir (hardlink-materialized from the HF snapshot;
       # Entrpi reads /models/glm53-exl3 as a plain dir, loader instanttensor)
-      - ${MODEL_HOST_PATH:-/home/sdrew/models/glm53-exl3}:/models/glm53-exl3:ro
+      - ${MODEL_HOST_PATH:-/home/sdrew/.cache/glm53-entrpi/models/glm53-exl3}:/models/glm53-exl3:ro
       # DFlash2 MXFP8 drafter (flat dir; ring draft-KV in this image)
-      - ${DFLASH_DIR:-/home/sdrew/models/glm53-dflash2-mxfp8}:/models/glm53-dflash2:ro
+      - ${DFLASH_DIR:-/home/sdrew/.cache/glm53-entrpi/models/glm53-dflash2-mxfp8}:/models/glm53-dflash2:ro
       # Cache root -> /cache (HF_HOME=/cache/huggingface) + jit subdirs
       - ${CACHE_HOST_PATH:-/home/sdrew/.cache/glm53-entrpi}:/cache
       - ${CACHE_HOST_PATH:-/home/sdrew/.cache/glm53-entrpi}/jit/triton:/root/.triton

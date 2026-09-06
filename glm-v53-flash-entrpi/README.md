@@ -49,17 +49,17 @@ sync; echo 3 | sudo tee /proc/sys/vm/drop_caches   # hot page cache at load time
 ```
 
 ```bash
-# 0) one-time provisioning (both nodes)
-# 0a) drafter (1.2 GiB) — sparks have no hf CLI; use a venv:
-python3 -m venv /tmp/hfvenv && /tmp/hfvenv/bin/pip install -q huggingface_hub
-/tmp/hfvenv/bin/python -c "
-from huggingface_hub import snapshot_download
-snapshot_download('local-inference-lab/GLM-5.3-Flash-DFlash2-MXFP8',
-                  revision='62f758c0a0e19b9cb76fc098c911b8ed76daff5b',
-                  local_dir='/home/sdrew/.cache/glm53-entrpi/models/glm53-dflash2-mxfp8')"
-# 0b) weights — the EXL3 bytes are already cached as the Mia-AiLab HF
-#     snapshot (brandonmusic mirror, same 120 shards). Materialize the flat
-#     dir the loader wants with hardlinks (zero extra space):
+# 0) one-time provisioning (both nodes). Both artifacts are pulled into the
+#    default HF hub cache (~/.cache/huggingface/hub/models--<owner>--<name>/)
+#    via `hf download`, so a fresh box re-downloads them to the same place.
+#    If `hf` is not installed: python3 -m venv /tmp/hfvenv && /tmp/hfvenv/bin/pip install -q -U huggingface_hub
+#    (then use /tmp/hfvenv/bin/hf download <repo> --revision <rev>).
+# 0a) drafter (1.2 GiB): lands in the HF hub cache, resolved at boot:
+hf download local-inference-lab/GLM-5.3-Flash-DFlash2-MXFP8 --revision 62f758c0a0e19b9cb76fc098c911b8ed76daff5b
+# 0b) weights (164 GiB): `hf download` fetches the snapshot, then materialize
+#     a flat dir with hardlinks (the instanttensor loader wants a plain dir;
+#     hardlinks add zero extra space):
+hf download Mia-AiLab/GLM-5.3-Flash-EXL3-TR3-4bpw --revision 25a44fdbf16862a46b7cc9921142c6c81350af2f
 SN=/home/sdrew/.cache/huggingface/hub/models--Mia-AiLab--GLM-5.3-Flash-EXL3-TR3-4bpw/snapshots/25a44fdbf16862a46b7cc9921142c6c81350af2f
 mkdir -p /home/sdrew/.cache/glm53-entrpi/models/glm53-exl3
 cd "$SN" && for f in *; do [ -f "$f" ] && ln "$(readlink -f "$f")" /home/sdrew/.cache/glm53-entrpi/models/glm53-exl3/"$f"; done

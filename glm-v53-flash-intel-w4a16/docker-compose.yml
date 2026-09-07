@@ -1,6 +1,11 @@
 services:
   vllm-dspark:
     image: ${IMAGE}
+    # Clear the image's ENTRYPOINT (["vllm","serve"]) — the command block below
+    # is the actual entry; without this the bash script is appended to
+    # `vllm serve` as args and the container dies at argparse (parity with
+    # glm-v53-flash / glm-v53-flash-miaai, which also set entrypoint: []).
+    entrypoint: []
     container_name: glm53-intel-w4a16
     restart: "no"
     network_mode: host

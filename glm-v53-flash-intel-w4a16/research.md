@@ -86,11 +86,15 @@ appears in the earlier posts). @miken's result stack, decoded from his text:
   prune.
 - **Template**: Intel ships a complete `chat_template.jinja` (10,644 B) with
   image/video/audio macros, `reasoning_effort` (low|high, else → max) and
-  `clear_thinking`. It is NOT the canada-quant variant (rodman80 vendored a
-  11,213 B `chat_template_mm.jinja` with `enable_thinking` + extra tool-sort
-  hardening for their repo, because canada-quant's HF repo had no mm
-  template). We use the shipped one; a `--chat-template` override exists in
-  rodman80's repo if we ever need theirs.
+  `clear_thinking` — but it has **no `enable_thinking` branch** (thinking is
+  structurally always-on). We vendor rodman80's `chat_template_mm.jinja`
+  (11,213 B, validated on this image with the same base model) and pass
+  `--chat-template` + `--default-chat-template-kwargs {"enable_thinking":
+  true, "reasoning_effort": "high"}` (explicit pins; `THINKING`/`REASONING_EFFORT`
+  env). Default-path output is identical to the Intel template (both emit the
+  full think block); rodman80's additionally honors `THINKING=false` (empty
+  think block) and carries tool-sort hardening. miken's receipts ran the
+  Intel-shipped template — the default path is unchanged.
 
 ## What differs between @miken and rodman80 (open A/B items)
 

@@ -39,6 +39,11 @@ services:
       # Hybrid prefix-cache (APC) patch script — applied at boot before vllm
       # serve (idempotent + fail-closed: anchors drift -> boot aborts).
       - ./patches/patch_hybrid_prefix_hit.py:/patches/patch_hybrid_prefix_hit.py:ro
+      # Fixed chat template (enable_thinking + reasoning_effort + image/video
+      # macros; rodman80's copy, validated on this image). The Intel repo ships
+      # a complete template but it ignores enable_thinking — this file makes
+      # the THINKING toggle explicit (parity with glm-v53-flash-entrpi).
+      - ./patches/chat_template_mm.jinja:/models/chat_template_mm.jinja:ro
     environment:
       # ---- GPU ----
       CUDA_VISIBLE_DEVICES: "0"
@@ -71,8 +76,12 @@ services:
       DFLASH_MODEL: "${DFLASH_MODEL:-incoai/GLM-5.3-Flash-DFlash2}"
       DFLASH_REVISION: "${DFLASH_REVISION:-dc77ff1c99eeb2df044ee3d4f0094eb033fee410}"
       DFLASH_TOKENS: "${DFLASH_TOKENS:-7}"
-      # ---- sampling / thinking defaults (glm recipe parity) ----
+      # ---- sampling / thinking defaults (explicit, repo parity: thinking ON
+      # at REASONING_EFFORT; temp 1.0 / top_p 0.95) ----
+      THINKING: "${THINKING:-true}"
       REASONING_EFFORT: "${REASONING_EFFORT:-high}"
+      TEMPERATURE: "${TEMPERATURE:-1.0}"
+      TOP_P: "${TOP_P:-0.95}"
       GEN_CFG: "${GEN_CFG:-}"
       # ---- RoCE networking (this cluster's NICs) ----
       NCCL_NET: IB
@@ -176,15 +185,23 @@ services:
         ARGS+=(--moe-backend "$${MOE_BACKEND:-marlin}")
         # Speculative: DFlash2 k=7 (fixed — any other count wedges the boot)
         ARGS+=(--speculative-config "{\"method\":\"dflash\",\"model\":\"$$DFLASH_MODEL_DIR\",\"num_speculative_tokens\":$${DFLASH_TOKENS:-7}}")
-        # Parsers (glm-glue). The chat template is the Intel repo's shipped
-        # chat_template.jinja (vLLM picks it up from the model dir; it has
-        # image/video macros + reasoning_effort/clear_thinking support) — no
-        # --chat-template needed, unlike the lanes whose HF checkpoint omits it.
+        # Parsers (glm-glue) + explicit thinking defaults. The vendored
+        # chat_template_mm.jinja (mounted at /models/chat_template_mm.jinja)
+        # honors enable_thinking + reasoning_effort; without the kwargs the
+        # template defaults to effort=max/thinking-on, so we pin them
+        # server-side (clients override per request via chat_template_kwargs /
+        # the OpenAI reasoning_effort field).
         ARGS+=(--tool-call-parser glm47 --enable-auto-tool-choice
           --reasoning-parser glm45
-          --default-chat-template-kwargs "{\"reasoning_effort\": \"$${REASONING_EFFORT:-high}\"}")
-        # Sampling pins (repo parity: temp 1.0 / top_p 0.95)
-        [ -n "$${GEN_CFG:-}" ] && ARGS+=(--generation-config vllm --override-generation-config "$${GEN_CFG}")
+          --chat-template /models/chat_template_mm.jinja
+          --default-chat-template-kwargs "{\"enable_thinking\": $${THINKING:-true}, \"reasoning_effort\": \"$${REASONING_EFFORT:-high}\"}")
+        # Sampling pins — explicit recipe-owned (temp 1.0 / top_p 0.95, same
+        # values as the other recipes). --generation-config vllm ignores the
+        # checkpoint's generation_config.json for SAMPLING only (multi-EOS
+        # stop set still loads from it), so a checkpoint refresh can't drift
+        # top_p back to vLLM's 1.0.
+        GEN_CFG="{\"temperature\": $${TEMPERATURE:-1.0}, \"top_p\": $${TOP_P:-0.95}}"
+        ARGS+=(--generation-config vllm --override-generation-config "$${GEN_CFG}")
         # Eager / autotune / async
         [ "$${EAGER:-0}" != "0" ] && ARGS+=(--enforce-eager)
         [ "$${DISABLE_FLASHINFER_AUTOTUNE:-1}" != "0" ] && ARGS+=(--no-enable-flashinfer-autotune)

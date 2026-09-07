@@ -30,7 +30,8 @@ rodman80's A/B harness are the reference protocol.
 | Speed (miken, 2× Spark TP2) | cold prefill **1,405 tok/s**; decode prose 23–25 / code **52** / structured **39** tok/s; 8-way wave **26–75** tok/s/stream; DFlash2 code acceptance **0.68–0.71** |
 | Speed (rodman80, same image) | C1 31.8 tok/s (TTFT 0.35 s), C4 69.2 / C6 **81.1** tok/s aggregate, acceptance 0.418, boot ~8 min, prefill 1.3–1.6k tok/s flat to 300K |
 | Quality (miken / Intel card) | tool-eval hardmode **90/100 max**; needle-exact @419K/836K/947K, 0 U+FFFD in CJK, vision passes; GSM8K 0.9712 / MMLU 0.8620 (99.84% of BF16) |
-| Modalities | text, images/video, tool calling (`glm47` parser), thinking (effort low/high/→max, `clear_thinking` toggle) |
+| Modalities | text, images/video, tool calling (`glm47` parser), thinking ON at effort `high` (explicit server-side pins) |
+| Sampling (explicit) | **temp 1.0 / top_p 0.95 / thinking true / reasoning_effort high** — `--generation-config vllm` + `--override-generation-config` + `--default-chat-template-kwargs`, so checkpoint/template defaults can't silently drift them |
 
 ## Why this quant (miken's verdicts, post 5)
 
@@ -201,7 +202,7 @@ docker logs glm53-intel-w4a16 2>&1 | grep -F "Model loading took"
 | model | `canada-quant/glm-5.3-w4a16-mtp` (rodman80) | **`Intel/GLM-5.3-Flash-W4A16-AutoRound` + surgery** | user goal: the Intel quant from the thread |
 | KV pin | 9 GiB (rodman80) / 12.52 GB (miken) | **12.52 GB** (miken's receipt) | miken = the thread's target numbers; 9 GiB row documented |
 | seqs / graphs | 6 + eager (rodman80) / 8 + graphs (miken) | **8 + graphs** | same |
-| template | `--chat-template` vendored mm file (rodman80) | **model's shipped `chat_template.jinja`** (has image macros + effort/clear_thinking) | Intel repo ships a complete template; rodman80's did not |
+| template | `--chat-template` vendored mm file (rodman80) | **same** — vendored `patches/chat_template_mm.jinja` (rodman80's, validated on this image; honors `enable_thinking` + `reasoning_effort`) | the Intel repo's shipped template ignores `enable_thinking` — vendoring makes the THINKING toggle explicit (parity with entrpi) |
 
 ## When to use this vs the other glm recipes
 

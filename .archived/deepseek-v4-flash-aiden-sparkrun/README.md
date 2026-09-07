@@ -6,7 +6,7 @@ cluster, run and managed entirely through `sparkrun`.
 - **Model:** `deepseek-ai/DeepSeek-V4-Flash-0731`
 - **Context:** 1,048,576 tokens (sparse attention + fp8 KV)
 - **Nodes:** 2 (tensor parallel), leader + worker
-- **Served as:** `deepseek-v4-flash` on port `4000`
+- **Served as:** `deepseek-v4-flash` on port `8000`
 
 ## Prerequisites
 
@@ -63,8 +63,8 @@ sparkrun status
 sparkrun logs <id>   # follow startup
 
 # Health + model metadata once booted:
-curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:4000/health   # expect 200
-curl -s http://127.0.0.1:4000/v1/models | python3 -m json.tool           # see below
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8000/health   # expect 200
+curl -s http://127.0.0.1:8000/v1/models | python3 -m json.tool           # see below
 ```
 
 Look for:
@@ -81,7 +81,7 @@ request`.
 ## Talk to it
 
 ```bash
-curl -s http://127.0.0.1:4000/v1/chat/completions \
+curl -s http://127.0.0.1:8000/v1/chat/completions \
   -H 'Content-Type: application/json' \
   -d '{"model":"deepseek-v4-flash",
        "messages":[{"role":"user","content":"Say hi"}],
@@ -96,10 +96,10 @@ Reasoning is surfaced in the assistant message's `reasoning` field (see below).
 This model build emits chain-of-thought in the assistant message's
 **`reasoning`** field (the native field name for this vLLM image); `content`
 holds the final answer. Clients that read `reasoning` (the current standard)
-work directly against the server on port `4000`.
+work directly against the server on port `8000`.
 
 ```bash
-curl -s http://127.0.0.1:4000/v1/chat/completions \
+curl -s http://127.0.0.1:8000/v1/chat/completions \
   -H 'Content-Type: application/json' \
   -d '{"model":"deepseek-v4-flash",
        "messages":[{"role":"user","content":"Say hi"}],
@@ -160,7 +160,7 @@ handling. They ship with the recipe, so nothing extra to install.
   sparkrun recipe runs the same aiden 3.75 image as the compose recipe, so the
   identical "stay on 3.75 / don't grab 3.76.1 without a field report" guidance
   applies and is kept in sync. HF model rev `9e165c30` unchanged (= HEAD).
-- **Port:** `4000` (default). Override with `sparkrun run ... --port 8080`.
+- **Port:** `8000` (default). Override with `sparkrun run ... --port 8080`.
 - **Reasoning effort** defaults to `high` (community A/B sweet spot);
   `thinking` defaults to `true`; `max` is per-request only (no win + safety
   regression on 0731).

@@ -8,7 +8,7 @@ README is the deploy doc; this file is the memory.
 - Adopted 09-04 (v2.3-tier1, branch `glm-v53-flash-entrpi`), fully
   provisioned on the cluster (image pulled, weights hardlinked, MXFP8
   drafter downloaded on both nodes). NOT YET BOOTED on this cluster —
-  DS4 vision currently owns :4000 and only one recipe serves at a time.
+  DS4 vision currently owns :8000 and only one recipe serves at a time.
 - **09-05 update pass: NO upstream changes.** Entrpi kit HEAD still
   63f254f (v2.3-tier1), vLLM fork still f223ff9, `docs/FINDINGS.md` +
   `docs/COMPARISON.md` unchanged, image digest confirmed unmoved
@@ -21,7 +21,7 @@ README is the deploy doc; this file is the memory.
 ## Environment facts (do not rediscover)
 
 - Each DGX Spark exposes ONE GPU; TP=2 spans both nodes. Worker first,
-  leader ~35 s later. Port 4000 (repo convention; Entrpi's own default
+  leader ~35 s later. Port 8000 (repo convention; Entrpi's own default
   is 8000 — anything copied from their docs must have the port fixed).
 - Image: `ghcr.io/entrpi/glm-5.3-flash-exl3-2x-spark:v2.3-tier1` —
   ENTRYPOINT `/opt/nvidia/nvidia_entrypoint.sh` (exec's its args, so

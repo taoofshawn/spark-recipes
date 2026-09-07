@@ -14,7 +14,7 @@ specific model work on this specific hardware.
 Two models are covered:
 
 - **DeepSeek-V4-Flash-0731** (`deepseek-ai/DeepSeek-V4-Flash-0731`) — the main workhorse.
-  Served as `deepseek-v4-flash` on port `4000`.
+  Served as `deepseek-v4-flash` on port `8000`.
 - **MiMo-V2.5 + DFlash** (Xiaomi) — a second, independent recipe. Not part of the DeepSeek
   cluster of recipes.
 
@@ -71,7 +71,7 @@ deepseek-v4-flash-vision-miaai/             # docker-compose recipe (DSv4 vision
 
 ### The two DeepSeek recipes: pick the right one
 
-Both serve the same model/port (deepseek-v4-flash :4000, 1M context) but differ in HOW the
+Both serve the same model/port (deepseek-v4-flash :8000, 1M context) but differ in HOW the
 runtime is obtained and which backend flags apply. **Flags and env vars are NOT interchangeable
 between them** — each belongs to a specific image/build; mixing them fails at startup.
 
@@ -88,7 +88,7 @@ change targets one, the other usually needs the equivalent change.
 
 ### docker-compose recipes (all now under `.archived/`: `deepseek-v4-flash-aiden`, `...-tonyd2wild`, `mimo-v25-dflash-tonyd2wild`)
 
-- **`.env`** = shared config (`MASTER_ADDR`, `PORT=4000`, `ETH_IF`, `ETH_IF2`, `IB_PORTS`).
+- **`.env`** = shared config (`MASTER_ADDR`, `PORT=8000`, `ETH_IF`, `ETH_IF2`, `IB_PORTS`).
 - **`.env.node0` / `.env.node1`** = per-node overrides (`NODE_RANK=0|1`, `HEADLESS=1` on worker,
   `ROCE_IP`).
 - `docker-compose.yml` = image + env + a big `command` block that, at boot: auto-detects the
@@ -97,7 +97,7 @@ change targets one, the other usually needs the equivalent change.
 - **Start order: worker (node 1) FIRST, then leader (node 0) ~30–35 s later.** This is
   repeatedly emphasized; the multi-node TCP store (`master_addr:25000`) must be up before the
   follower connects.
-- Verify: `curl http://127.0.0.1:4000/v1/models` should show `"id":"deepseek-v4-flash"` and
+- Verify: `curl http://127.0.0.1:8000/v1/models` should show `"id":"deepseek-v4-flash"` and
   `"max_model_len":1048576`.
 
 ### sparkrun recipe (`deepseek-v4-flash-aiden-sparkrun`)
@@ -332,7 +332,7 @@ flags or config patterns to adopt there.
    commits; grab the diff of anything touching DSpark/encoder/loader/batching.
 4. **Image/model pass:** check Docker Hub tags for aiden, HF model `lastModified`/siblings.
 5. **Evaluate before adopting:** every candidate must (a) apply to our pinned image/revision,
-   (b) not contradict the recipe's validated invariants (start order, port 4000, offline serving,
+   (b) not contradict the recipe's validated invariants (start order, port 8000, offline serving,
    GMU/KV dtype/backend wiring), and (c) be backed by a measured claim. Reject "in theory"
    improvements that touch the fragile cross-recipe knobs.
 6. **Adopt surgically:** recipe-level changes go in the recipe dir (not `upstream/`); overlays
@@ -366,7 +366,7 @@ states what changed, the measured before/after, and any gotchas hit.
 - **Do** read each recipe's README before touching it — they carry the hard-won constraints.
 - **Do** keep the reasoning-effort/tool-arg fix files in sync across all recipes that carry
   them, and respect the `/opt/venv` vs `/opt/env` split.
-- **Do** keep start-order, port-4000, and offline-serving conventions intact.
+- **Do** keep start-order, port-8000, and offline-serving conventions intact.
 - **Do** document the "why" in new commits the way this repo already does (inline comments,
   dated change notes, measurement claims with numbers).
 - **Don't** reorder or "tidy" env vars / flags that look duplicated — they are image-specific;

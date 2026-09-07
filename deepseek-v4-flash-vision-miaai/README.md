@@ -12,14 +12,14 @@ OpenAI `image_url` support — **not** the caption-shim approach.
   both nodes; later commits are README/eval only)
 - **Served name:** `deepseek-v4-flash` (cluster convention; upstream serves
   `deepseek-v4-flash-vision-exp`)
-- **Port:** 4000 | **Context:** 1M | **KV:** `nvfp4_ds_mla` (2,331,430-token
+- **Port:** 8000 | **Context:** 1M | **KV:** `nvfp4_ds_mla` (2,331,430-token
   pool @ GMU 0.83) | **DSpark:** k=6 | **Vision:** images only (no video —
   the official weights have no video encoder; GIF decodes as a still frame)
 
 ## Architecture (from upstream)
 
 ```
-  client ──► :4000 vllm (Anemll dspark-vllm-gx10:0.1.1, TP=2, 2 nodes)
+  client ──► :8000 vllm (Anemll dspark-vllm-gx10:0.1.1, TP=2, 2 nodes)
                  ▲ boot-time hotfix chain (./patches/, all read-only mounts)
 ```
 
@@ -196,7 +196,7 @@ hf download deepseek-ai/DeepSeek-V4-Flash-Vision-Exp --revision 86f746b36186f0e5
 #    leader: docker compose --env-file .env --env-file .env.node0 up -d
 
 # 2) verify
-curl http://127.0.0.1:4000/v1/models     # -> "id":"deepseek-v4-flash", max_model_len 1048576
+curl http://127.0.0.1:8000/v1/models     # -> "id":"deepseek-v4-flash", max_model_len 1048576
 # vision smoke: image_url chat completion (see upstream smoke script)
 ```
 
@@ -204,7 +204,7 @@ curl http://127.0.0.1:4000/v1/models     # -> "id":"deepseek-v4-flash", max_mode
 
 | knob | upstream | here | why |
 |---|---|---|---|
-| `PORT` / `VLLM_PORT` | 8888 | 4000 | cluster convention |
+| `PORT` / `VLLM_PORT` | 8888 | 8000 | cluster convention |
 | `SERVED_MODEL_NAME` | deepseek-v4-flash-vision-exp | `deepseek-v4-flash` | user requirement — one name across recipes |
 | `GPU_MEMORY_UTILIZATION` | 0.80 default | 0.83 | upstream README-measured value (ViT takes more weight RAM than 0731) |
 | start order | `start-deepseek…sh` orchestrator | compose `.env.node0/1` | repo convention; worker first |

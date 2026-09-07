@@ -780,7 +780,7 @@ On **both** head and worker logs (`docker logs glm53-nvfp4`):
 - `Initial free memory ... reserved N GiB` with N ≈ your KV pin + weights, and
   no `NV_ERR_NO_MEMORY` in `dmesg`/`journalctl -k` in the death window.
 - `Mamba ... / KDA state cache` allocation lines; `Uvicorn running on
-  http://0.0.0.0:4000` — ready.
+  http://0.0.0.0:8000` — ready.
 - Deep-decode request (28-32K prompt) completes ≥100 tokens — persistent_topk
   overlay verified. `/health` → 200.
 

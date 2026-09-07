@@ -20,7 +20,7 @@ import sys
 import time
 import urllib.request
 
-URL = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:4000/v1/chat/completions"
+URL = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8000/v1/chat/completions"
 
 TOOLS = [
     {"type": "function", "function": {"name": "read_file", "description": "Read a file from disk", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}},

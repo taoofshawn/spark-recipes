@@ -56,7 +56,7 @@ metadata:
 
 defaults:
   model_revision: 9e165c30e2704aec5d9d593cce3eebd58bbef1cb
-  port: 4000
+  port: 8000
   host: 0.0.0.0
   tensor_parallel: 2
   # GMU kept at 0.83 (validated 3.2x @1M). The 3.75 forum validated 0.87-0.90

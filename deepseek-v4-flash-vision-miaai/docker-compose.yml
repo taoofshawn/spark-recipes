@@ -1,4 +1,4 @@
-# DeepSeek-V4-Flash-Vision-Exp (native vision) — 2x DGX Spark, port 4000.
+# DeepSeek-V4-Flash-Vision-Exp (native vision) — 2x DGX Spark, port 8000.
 # Adoption of MiaAI-Lab/DeepSeek-v4-Flash-DSpark-2x-DGX-Spark into this repo's
 # docker-compose conventions (shared .env + per-node .env.node0/.env.node1,
 # GID auto-detect, worker-first start). All hotfixes are vendored in ./patches/
@@ -22,7 +22,7 @@ services:
     devices:
       - /dev/infiniband:/dev/infiniband
     healthcheck:
-      test: ["CMD-SHELL", "if [ -n \"$$HEADLESS\" ]; then exit 0; fi; curl -fsS http://127.0.0.1:${PORT:-4000}/health || exit 1"]
+      test: ["CMD-SHELL", "if [ -n \"$$HEADLESS\" ]; then exit 0; fi; curl -fsS http://127.0.0.1:${PORT:-8000}/health || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -122,7 +122,7 @@ services:
       DSPARK_REVISION: "${DSPARK_REVISION:-}"
       DSPARK_ENCODING_FILE: "${DSPARK_ENCODING_FILE:-}"
       SERVED_MODEL_NAME: "${SERVED_MODEL_NAME:-deepseek-v4-flash}"
-      VLLM_PORT: "${PORT:-4000}"
+      VLLM_PORT: "${PORT:-8000}"
       VLLM_HOST: 0.0.0.0
       GPU_MEMORY_UTILIZATION: "${GPU_MEMORY_UTILIZATION:-0.83}"
       MAX_MODEL_LEN: "${MAX_MODEL_LEN:-1048576}"
@@ -254,7 +254,7 @@ services:
         exec /usr/local/bin/vllm serve "$${DSPARK_MODEL:-deepseek-ai/DeepSeek-V4-Flash-Vision-Exp}" \
           $${REVISION_ARGS} \
           --served-model-name "$${SERVED_MODEL_NAME:-deepseek-v4-flash}" \
-          --host "$${VLLM_HOST:-0.0.0.0}" --port "$${VLLM_PORT:-4000}" --trust-remote-code \
+          --host "$${VLLM_HOST:-0.0.0.0}" --port "$${VLLM_PORT:-8000}" --trust-remote-code \
           "$${API_KEY_ARGS[@]}" $${VLLM_QUANTIZATION_ARGS} \
           --tensor-parallel-size 2 --pipeline-parallel-size 1 \
           --kv-cache-dtype nvfp4_ds_mla --block-size 256 \

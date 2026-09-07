@@ -20,7 +20,7 @@ Forum discussion: [GLM-5.3-Flash main thread](https://forums.developer.nvidia.co
 |---|---|
 | Model | GLM-5.3-Flash, 320B total / 18B active, EXL3/TR3 4bpw (`brandonmusic/GLM-5.3-Flash-tr3-4bpw`, = `Mia-AiLab/...` mirror bytes) |
 | Drafter | DFlash2 **MXFP8** (`local-inference-lab/GLM-5.3-Flash-DFlash2-MXFP8`, rev `62f758c0…`) — 1.20 GiB; ring draft-KV |
-| Served name | `glm-5.3-flash` | Port: **4000** (repo convention; Entrpi default is 8000) |
+| Served name | `glm-5.3-flash` | Port: **8000** (repo convention; Entrpi default was 8000) |
 | Context | **524,288** default per-request; pool **1,287,194 tokens** @ fp8_ds_mla, KV budget 14.4 GB, GMU 0.85 |
 | Speed (measured by Entrpi) | ~30 tok/s prose, 71 structured, TTFT ~0.4s; 4-way aggregate ~47 tok/s |
 | Quality (measured by Entrpi) | math_500 91%, GPQA 70%, 133k-retrieval 10/10, spec-decode lossless up to argmax ties |
@@ -69,8 +69,8 @@ docker compose --env-file .env --env-file .env.node1 up -d
 docker compose --env-file .env --env-file .env.node0 up -d
 
 # 2) verify (leader):
-curl -s http://127.0.0.1:4000/v1/models    # "id":"glm-5.3-flash"
-curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:4000/health   # 200
+curl -s http://127.0.0.1:8000/v1/models    # "id":"glm-5.3-flash"
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8000/health   # 200
 
 # 3) optional warm-up: Entrpi ships scripts/glm53-warmup.sh in the kit repo
 #    (compiles hot shapes so the first real request doesn't pay ~7s)
@@ -158,7 +158,7 @@ line.
 
 | | Entrpi kit | ours | why |
 |---|---|---|---|
-| port | 8000 | **4000** | repo/omp convention |
+| port | 8000 | **8000** | repo convention; model-name proxy serves :4000 |
 | mechanism | install.sh + `~/.glm53-serve.env` + launcher scripts | docker-compose (`.env`/`.env.node0/1`) | repo convention |
 | GID | launcher auto-detect (sysfs) | same, in compose command block | same method |
 | NICs | one per box | both (`IB_PORTS`) | this cluster's validated set |
@@ -166,7 +166,7 @@ line.
 
 ## When to use this vs `glm-v53-flash-miaai`
 
-Both serve the same model bytes and the same served name on :4000 (only one
+Both serve the same model bytes and the same served name on :8000 (only one
 recipe runs at a time). Differences:
 
 - **This lane**: self-consistent image with the fixes baked in (builder/

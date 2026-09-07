@@ -17,7 +17,7 @@
 set -u
 
 ### ---- config -------------------------------------------------------------
-HEALTH_URL="http://127.0.0.1:${PORT:-4000}/health"
+HEALTH_URL="http://127.0.0.1:${PORT:-8000}/health"
 CHECK_INTERVAL=60          # seconds between probes
 FAIL_THRESHOLD=3           # consecutive failures before recovery fires
 CURL_TIMEOUT=15            # per-probe timeout

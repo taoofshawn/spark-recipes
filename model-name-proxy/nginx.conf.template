@@ -1,0 +1,76 @@
+# nginx config template for model-name-proxy (OpenResty / nginx 1.27).
+# Placeholders (__SPOOF_RULES_*__, __BACKEND_MODEL__, $SPOOF_MODEL, $UPSTREAM)
+# are expanded by docker-entrypoint.sh at container start; see that file for
+# the variables.
+
+env BACKEND_MODEL;
+
+worker_processes 1;
+error_log /dev/stderr warn;
+pid /tmp/nginx.pid;
+
+events {
+    worker_connections 512;
+}
+
+http {
+    lua_package_path "/usr/local/openresty/lualib/?.lua;/usr/local/openresty/lualib/?/init.lua;;";
+    lua_package_cpath "/usr/local/openresty/lualib/?.so;;";
+    access_log off;
+    sendfile on;
+    keepalive_timeout 65;
+
+    # Disable upstream compression so sub_filter can rewrite bodies (nginx
+    # cannot substitute inside gzipped streams).
+    proxy_set_header Accept-Encoding "";
+
+    upstream vllm_backend {
+        server $UPSTREAM;
+        keepalive 8;
+    }
+
+    server {
+        listen 4000;
+        server_name _;
+
+        # ---- streaming passthrough (SSE-safe): the whole point vs the old
+        # SparkRun proxy that hid spec-decode metrics. Nothing is buffered
+        # except tiny request bodies during the model-name rewrite.
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_buffering off;
+        proxy_request_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 3600s;   # long generations must not be cut off
+        proxy_send_timeout 3600s;
+        proxy_pass_header Server;
+        add_header X-Model-Name-Proxy "1" always;
+
+        # ---- health: pure passthrough, no body rewrite ----
+        location = /health {
+            proxy_pass http://vllm_backend;
+        }
+
+        # ---- /v1/models: spoof served model names in the response ----
+        # Expanded by the entrypoint into one sub_filter per real name.
+        location = /v1/models {
+            sub_filter_types application/json;
+            sub_filter_once off;
+            __SPOOF_RULES_MODELS__
+            proxy_pass http://vllm_backend;
+        }
+
+        # ---- everything else: chat/completions, completions, metrics, tokens
+        # Response spoofing uses the same sub_filter rules (SSE deltas carry
+        # "model":"spark-model" too); request model normalization runs in Lua
+        # sub_filter operates per data chunk: OpenAI delta objects fit in one
+        # SSE frame, so spoofing is reliable; a name split across frames would
+        # pass through unrewritten (harmless — spoofing is cosmetic here).
+        location / {
+            sub_filter_types application/json text/event-stream;
+            rewrite_by_lua_file /usr/local/openresty/nginx/lua/access.lua;
+            __SPOOF_RULES_GENERAL__
+            proxy_pass http://vllm_backend;
+        }
+    }
+}

@@ -1,4 +1,4 @@
-# GLM-5.3-Flash EXL3 4bpw — 2x DGX Spark, port 4000.
+# GLM-5.3-Flash EXL3 4bpw — 2x DGX Spark, port 8000.
 # Adoption of MiaAI-Lab/GLM-5.3-Flash-EXL3-2x-DGX-Sparks into this repo's
 # docker-compose conventions. Prebuilt GHCR image (overlay baked at build),
 # runtime patches applied at boot. Provenance + constraint matrix: README.md.
@@ -20,7 +20,7 @@ services:
     devices:
       - /dev/infiniband:/dev/infiniband
     healthcheck:
-      test: ["CMD-SHELL", "if [ -n \"$$HEADLESS\" ]; then exit 0; fi; curl -fsS http://127.0.0.1:${PORT:-4000}/health || exit 1"]
+      test: ["CMD-SHELL", "if [ -n \"$$HEADLESS\" ]; then exit 0; fi; curl -fsS http://127.0.0.1:${PORT:-8000}/health || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -103,7 +103,7 @@ services:
       DFLASH_MODEL: "${DFLASH_MODEL:-incoai/GLM-5.3-Flash-DFlash2}"
       DFLASH_REVISION: "${DFLASH_REVISION:-bf582e4eacc1810f76656d1811693ff6c6737d2a}"
       SERVED_MODEL_NAME: "${SERVED_MODEL_NAME:-GLM-5.3-Flash-EXL3}"
-      PORT: "${PORT:-4000}"
+      PORT: "${PORT:-8000}"
       TP: 2
       NNODES: 2
       MASTER_PORT: "${MASTER_PORT:-29521}"
@@ -171,7 +171,7 @@ services:
 
         ARGS=(
           --served-model-name "$${SERVED_MODEL_NAME:-GLM-5.3-Flash-EXL3}"
-          --host 0.0.0.0 --port "$${PORT:-4000}"
+          --host 0.0.0.0 --port "$${PORT:-8000}"
           --tensor-parallel-size "$${TP:-2}" --nnodes "$${NNODES:-2}"
           --node-rank "$${NODE_RANK}" --master-addr "$${MASTER_ADDR}" --master-port "$${MASTER_PORT:-29521}"
           --distributed-executor-backend mp

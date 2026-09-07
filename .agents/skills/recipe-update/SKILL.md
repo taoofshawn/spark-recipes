@@ -30,7 +30,7 @@ anything.
 Adoption rule — every candidate change must:
 1. apply to our pinned image/revision (not a different image),
 2. NOT contradict the recipe's validated invariants (start order worker→head,
-   port 4000, offline serving, GMU/KV-pin/dtype/backend wiring),
+   port 8000, offline serving, GMU/KV-pin/dtype/backend wiring),
 3. be backed by a measured claim, not "in theory."
 
 Reject anything that touches the fragile cross-recipe knobs casually
@@ -108,7 +108,7 @@ regression reports that could hit this cluster's config.
 Filter candidates through the adoption rule above. For each accepted change, follow
 the repo's surgical-edit conventions (AGENTS.md): recipe-level changes go in the
 recipe dir (NOT `upstream/`); overlays copied between recipes stay in sync; respect
-the `/opt/venv` vs `/opt/env` image-path split; keep start-order / port-4000 /
+the `/opt/venv` vs `/opt/env` image-path split; keep start-order / port-8000 /
 offline-serving / KV-pin semantics intact.
 
 ## Branch, commit, push (the deliverable)

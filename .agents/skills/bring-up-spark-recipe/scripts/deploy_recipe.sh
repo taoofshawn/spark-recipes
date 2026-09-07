@@ -74,4 +74,4 @@ say "Launch HEAD (rank 0, API server)"
 rsh "$HEAD" "cd $REPO_DIR && docker compose --env-file .env --env-file .env.node0 up -d $BUILD_FLAG"
 
 say "Done. Watch: ssh $HEAD 'docker logs -f glm53-nvfp4'  (readiness ~15-25 min)"
-echo "Verify:  curl -s http://127.0.0.1:4000/health   and   curl -s http://127.0.0.1:4000/v1/models"
+echo "Verify:  curl -s http://127.0.0.1:8000/health   and   curl -s http://127.0.0.1:8000/v1/models"

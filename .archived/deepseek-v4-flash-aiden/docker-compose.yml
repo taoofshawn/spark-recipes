@@ -89,7 +89,7 @@ services:
       MODEL_PATH: deepseek-ai/DeepSeek-V4-Flash-0731
       MODEL_REVISION: 9e165c30e2704aec5d9d593cce3eebd58bbef1cb
       SERVED_MODEL_NAME: deepseek-v4-flash
-      PORT: "${PORT:-4000}"
+      PORT: "${PORT:-8000}"
       # GPU memory utilization kept conservative at 0.83 (matches the validated
       # sparkrun port; 1M is comfortably reachable ~3.2x). The aiden forum
       # validated 0.87-0.90 on 3.75 (372268 #677: 0.90 -> 3.1M-token KV pool;

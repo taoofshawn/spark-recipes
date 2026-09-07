@@ -25,7 +25,7 @@ rodman80's A/B harness are the reference protocol.
 | Model | GLM-5.3-Flash, 320B total / 18B active, **INT4 W4A16 group-128 sym GPTQ** (Intel AutoRound quant; attention/router/shared-expert/vision/norms stay BF16) — post-surgery copy, **~82 GiB/rank** |
 | Surgery | `prepare-model.sh`: auto-round config → stock GPTQ config with 679 `dynamic` skip rules (the model does **not** load as shipped) |
 | Drafter | DFlash2 **k=7** (`incoai/GLM-5.3-Flash-DFlash2`, rev `dc77ff1c…`; CC **BY-NC-ND-4.0**) |
-| Served name | `glm-5.3-flash` | Port: **4000** (repo convention) |
+| Served name | `glm-5.3-flash` | Port: **8000** (repo convention) |
 | Context | **1,048,576** default; KV pool **1,752,785 tokens** @ fp8 KV, pin 12.52 GB, GMU 0.85 (miken's receipt: `Maximum concurrency ... 1.67x`) |
 | Speed (miken, 2× Spark TP2) | cold prefill **1,405 tok/s**; decode prose 23–25 / code **52** / structured **39** tok/s; 8-way wave **26–75** tok/s/stream; DFlash2 code acceptance **0.68–0.71** |
 | Speed (rodman80, same image) | C1 31.8 tok/s (TTFT 0.35 s), C4 69.2 / C6 **81.1** tok/s aggregate, acceptance 0.418, boot ~8 min, prefill 1.3–1.6k tok/s flat to 300K |
@@ -113,8 +113,8 @@ docker compose --env-file .env --env-file .env.node1 up -d
 docker compose --env-file .env --env-file .env.node0 up -d
 
 # 3) verify (leader):
-curl -s http://127.0.0.1:4000/v1/models        # "id":"glm-5.3-flash", max_model_len 1048576
-curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:4000/health   # 200
+curl -s http://127.0.0.1:8000/v1/models        # "id":"glm-5.3-flash", max_model_len 1048576
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8000/health   # 200
 ```
 
 Cold boot ~8–10 min (weight load + engine init; JIT caches persist, `init
@@ -194,7 +194,7 @@ docker logs glm53-intel-w4a16 2>&1 | grep -F "Model loading took"
 
 | | miken post / rodman80 repo | here | why |
 |---|---|---|---|
-| port | 8000 | **4000** | repo/omp convention |
+| port | 8000 | **8000** | repo convention; model-name proxy serves :4000 |
 | mechanism | `start.sh`/`launch-*.sh` orchestrators | docker-compose (`.env`/`.env.node0/1`) | repo convention |
 | GID | hardcoded `3` (rodman80) | sysfs auto-detect in the command block | GID renumbers across reboots |
 | NICs | one rail per box (rodman80) | both (`IB_PORTS`) | this cluster's validated set |
@@ -206,7 +206,7 @@ docker logs glm53-intel-w4a16 2>&1 | grep -F "Model loading took"
 
 ## When to use this vs the other glm recipes
 
-Same weights-class, same served name on :4000 (one recipe at a time):
+Same weights-class, same served name on :8000 (one recipe at a time):
 
 - **intel-w4a16 (this)**: the W4A16 trade — highest KV pool/concurrency per
   GiB, ~82 GiB/rank, best prefill of the 4bpw lanes at 1M ctx; quality ~0.99×

@@ -12,7 +12,7 @@ baked — no local build, no `--moe-backend marlin`.
   `brandonmusic/GLM-5.3-Flash-tr3-4bpw` snapshot `5ab363a8…`, ~164 GiB,
   120 shards) — EXL3/TR3 uniform-K4, revision `25a44fd…`
 - **Drafter:** DFlash2 `incoai/GLM-5.3-Flash-DFlash2`, k=7, draft TP=2
-- **Served name:** `glm-5.3-flash` | **Port:** 4000
+- **Served name:** `glm-5.3-flash` | **Port:** 8000
 - **Context:** 1M | **KV:** `fp8` → packed `fp8_ds_mla`, pool ~1M tokens
   (1.0-1.05× @1M, verified on this cluster) @ GMU **0.8848**
 - **Vision:** native image + video (`--limit-mm-per-prompt {"image":10,"video":1}`),
@@ -41,8 +41,8 @@ docker compose --env-file .env --env-file .env.node1 up -d
 docker compose --env-file .env --env-file .env.node0 up -d
 
 # 3) verify the endpoint (leader):
-curl -s http://127.0.0.1:4000/v1/models   # "id":"glm-5.3-flash", "max_model_len":1000000
-curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:4000/health   # 200
+curl -s http://127.0.0.1:8000/v1/models   # "id":"glm-5.3-flash", "max_model_len":1000000
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8000/health   # 200
 ```
 
 ### Boot-log health markers (leader)
@@ -82,9 +82,9 @@ docker logs glm53-exl3-miaai 2>&1 | grep -F "hybrid APC groups"
 
 | knob | upstream | here | why |
 |---|---|---|---|
-| `PORT` | 8888 | 4000 | cluster convention |
+| `PORT` | 8888 | 8000 | cluster convention |
 | `MASTER_ADDR` | 10.0.0.1 | 192.168.0.170 | wired RoCE IPs |
-| `MASTER_PORT` | 29521 | 29521 (unchanged) | no collision on 4000/25000 |
+| `MASTER_PORT` | 29521 | 29521 (unchanged) | no collision on 8000/25000 |
 | `SERVED_MODEL_NAME` | `GLM-5.3-Flash-EXL3` | `glm-5.3-flash` | matches the other glm recipe / omp config id |
 | `GPU_MEM_UTIL` | 0.87 | 0.8848 | CUDA-graph memory profiling makes 0.87 behave like 0.8552; 0.8848 restores the effective pool (boot-log hint) |
 | JIT caches | host paths in `.env` | node-local `/vllm-cache` | repo convention |

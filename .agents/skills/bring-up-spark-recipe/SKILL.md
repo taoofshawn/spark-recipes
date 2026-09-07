@@ -6,7 +6,7 @@ description: Use when bringing a recipe in the spark-recipes repo up on the 2-no
 # Bring Up a Spark Recipe
 
 Deploy a `spark-recipes` recipe onto the fixed 2-node DGX Spark (GB10) cluster and
-leave it serving healthily on port 4000. This is the standing operational loop for
+leave it serving healthily on port 8000. This is the standing operational loop for
 this repo; it encodes the cluster's hard-won constraints so a fresh agent can go
 from "repo checkout" to "model serving" without re-discovering them.
 
@@ -146,8 +146,8 @@ Poll the head log for the readiness sequence and confirm the model actually serv
 # Boot progress
 ssh spark-0f0b.shawndo.intra 'docker logs --tail 5 glm53-nvfp4'
 # Health (use /health — /v1/models returns 200 even with a dead engine)
-curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:4000/health
-curl -s http://127.0.0.1:4000/v1/models
+curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8000/health
+curl -s http://127.0.0.1:8000/v1/models
 ```
 
 Health = `/health` returns 200 AND `/v1/models` shows the right `id` + `max_model_len`.
@@ -176,7 +176,7 @@ decaying gently):
 - Read `vllm:spec_decode_num_draft_tokens_total` + `...accepted_tokens_total` and
   `..._per_pos_total ` from `/metrics` before and after a warm generation, and
   compute the deltas. Skip the first inference (it JIT-compiles drafter kernels).
-- `http://127.0.0.1:4000/metrics`.
+- `http://127.0.0.1:8000/metrics`.
 
 ### 10. Run the recipe's load test
 

@@ -19,7 +19,7 @@ cluster, built from [tonyd2wild's DSpark stack](https://github.com/tonyd2wild/De
 | tokenizer | `deepseek_v4` mode with `fastokens` shim (`VLLM_USE_FASTOKENS=1`) |
 | thinking default | `true` (server `reasoning_effort=high`; clients can override per request) |
 | context length | 1M (1048576) |
-| serve | port `4000`, served model `deepseek-v4-flash` |
+| serve | port `8000`, served model `deepseek-v4-flash` |
 
 > ⚠️ Keep this recipe's native backend wiring — `nvfp4_ds_mla` KV with the v1
 > runner via `--distributed-executor-backend mp`, and B12X MoE via
@@ -194,7 +194,7 @@ recipe (this recipe is compose-based).
 # Building & deploying from scratch on new DGX Sparks
 
 Everything below is what it takes to go from a pair of fresh GB10 Sparks to a
-serving `deepseek-v4-flash` on :4000. It reflects a real deployment; the gotchas
+serving `deepseek-v4-flash` on :8000. It reflects a real deployment; the gotchas
 marked ⚠️ are ones actually hit.
 
 ## 0) Prerequisites (each node)
@@ -327,7 +327,7 @@ docker compose --env-file .env --env-file .env.node1 up -d
 docker compose --env-file .env --env-file .env.node0 up -d
 ```
 
-API serves at `http://HEAD_NODE_IP:4000/v1` (served model `deepseek-v4-flash`).
+API serves at `http://HEAD_NODE_IP:8000/v1` (served model `deepseek-v4-flash`).
 
 ## 8) Confirm it is healthy
 
@@ -336,7 +336,7 @@ First boot takes **~7–8 min** (model load ~3 min + warmup/compile). Watch the 
 ```bash
 docker logs -f ds4-dspark
 # wait for: "Application startup complete"
-curl -s http://127.0.0.1:4000/v1/models | python3 -m json.tool
+curl -s http://127.0.0.1:8000/v1/models | python3 -m json.tool
 # expect: "id": "deepseek-v4-flash", "max_model_len": 1048576
 ```
 
@@ -379,7 +379,7 @@ never benchmark straight after boot or after a quiet period.
 | `THINKING` | true | server `thinking` default; clients can override per request |
 | `REASONING_EFFORT` | high | server `reasoning_effort` default (low/high/max; high is the agentic sweet spot) |
 | `VLLM_USE_FASTOKENS` | 1 | fastokens shim (10x+ faster tokenize, TTFT win at large context); installed at boot if missing |
-| `PORT` | 4000 | serve port |
+| `PORT` | 8000 | serve port |
 
 `MAX_NUM_BATCHED_TOKENS=8192` and `max-cudagraph-capture-size=seqs×(k+1)` are
 derived per the upstream's validated profile — don't touch without re-measuring.

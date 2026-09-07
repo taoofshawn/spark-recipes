@@ -8,7 +8,7 @@ adoption narrative (see `git log glm-v53-flash-miaai/`).
 ## Current state (2026-09-05)
 
 - Deployed and validated on the 2-node cluster (spark-0f0b / spark-6d14).
-  Serves as `glm-5.3-flash` on :4000, 1M ctx, DFlash2 k=7. Boot-log health
+  Serves as `glm-5.3-flash` on :8000, 1M ctx, DFlash2 k=7. Boot-log health
   markers and what they mean: see README "Boot-log health markers".
 - Single-stream ~24-28 tok/s decode, 4-way aggregate ~59 tok/s (upstream
   documents 33-74 on their kit). Prefill ~600-750 tok/s.
@@ -214,7 +214,7 @@ PRs/issues; owner paused new-PR merges per #104. Reviewed 2026-09-04):
   90k fixed cost is ~7% of our pool vs ~25% of theirs. **Our 4×100k
   session load fits: 4×(90k+100k) = 760k < 1.05M pool.** Do NOT blind-drop
   MAX_NUM_SEQS to 3; watch `vllm:num_preemptions_total` on the leader
-  (`curl localhost:4000/metrics | grep num_preemptions`) instead — only
+  (`curl localhost:8000/metrics | grep num_preemptions`) instead — only
   drop if preemptions show up under sustained 4-stream load.
 
 - **#110 + PR #112** (`LONG_PREFILL_TOKEN_THRESHOLD`) — see above;
@@ -541,7 +541,7 @@ Keep k=7 for now (A/B `DFLASH_TOKENS=3` is queued, see below).
   preemptions appear under sustained 4-stream load.
 
 Adopt nothing else without a measured A/B against the 09-04 baseline; the
-validated invariants (worker-first, port 4000, offline serving, GMU wiring,
+validated invariants (worker-first, port 8000, offline serving, GMU wiring,
 boot markers) are non-negotiable. Prefix-cache note: live hit rate was
 81.9% during the burst; with gate=2048 in place #106's freeze did not
 reproduce in a 75-min upstream soak — keep watching the counter.
@@ -560,7 +560,7 @@ reproduce in a 75-min upstream soak — keep watching the counter.
    scratch project name, and run the marker checks before touching the
    serving setup.
 5. Adopt only what (a) applies to the running image/revision, (b) doesn't
-   break the validated invariants (worker-first, port 4000, offline
+   break the validated invariants (worker-first, port 8000, offline
    serving, GMU/hotfix wiring), and (c) carries a measured claim. Document
    the why in the commit, and update this file + README markers when the
    hotfix or profile changes.

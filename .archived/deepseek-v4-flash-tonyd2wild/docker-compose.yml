@@ -146,7 +146,7 @@ services:
       MODEL_PATH: deepseek-ai/DeepSeek-V4-Flash-0731
       MODEL_REVISION: 9e165c30e2704aec5d9d593cce3eebd58bbef1cb
       SERVED_MODEL_NAME: deepseek-v4-flash
-      PORT: "${PORT:-4000}"
+      PORT: "${PORT:-8000}"
       # Campaign-2026-08-20 STACK winner (Patch A + fused-Markov) validated at
       # gmu 0.78 / seq 6 — README-validated lane; 0.80+ is the flagged
       # boots-then-dies edge; Patch A costs ~2.5 GB headroom. ~1.38M-token KV

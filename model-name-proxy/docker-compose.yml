@@ -1,0 +1,49 @@
+# model-name-proxy — generic-name front for the vLLM recipes.
+#
+# Clients always talk to :4000 with model "spark-model"; the active backend
+# recipe serves on :8000 with its own name. The proxy rewrites:
+#   * /v1/models response ids            real name -> spark-model
+#   * chat/completions request model     anything  -> BACKEND_MODEL (real name)
+#   * chat/completions response model    real name -> spark-model
+# Everything else (streaming SSE, /metrics with the DSpark spec-decode
+# counters, /health, /v1/completions, /tokenize, ...) passes through
+# byte-for-byte — this proxy does NOT hide metrics the way the SparkRun
+# proxy did.
+#
+# Run on the leader node (spark-0f0b.shawndo.intra):
+#   docker compose --env-file .env up -d --build
+#   curl -s http://127.0.0.1:4000/v1/models | jq -r .data[].id   # -> spark-model
+#
+# Switching backend recipes: edit BACKEND_MODEL in .env to that recipe's
+# --served-model-name, restart, and no client changes are needed.
+
+services:
+  model-name-proxy:
+    build: .
+    image: model-name-proxy:latest
+    container_name: model-name-proxy
+    restart: unless-stopped
+    # host networking: the backend is vLLM bound to the host's :8000, and the
+    # proxy must be reachable as spark.shawndo.intra:4000 like the old setup.
+    network_mode: host
+    environment:
+      # Response spoofing mode: "1" = rewrite response model names (JSON +
+      # SSE deltas) to SPOOF_MODEL; "0" = responses untouched so you can see
+      # the real active model in /v1/models and completion payloads. Request
+      # normalization is always on, so clients never change either way.
+      SPOOF_RESPONSES: "${SPOOF_RESPONSES:-1}"
+      SPOOF_MODEL: "${SPOOF_MODEL:-spark-model}"
+      # Real served names the proxy recognizes in responses (comma-separated).
+      # Extend when a new recipe lands with a new served name.
+      SPOOF_FROM: "${SPOOF_FROM:-deepseek-v4-flash,glm-5.3-flash,mimo-v25-dflash,deepseek-v4-flash-dspark,GLM-5.3-Flash-EXL3}"
+      # The ACTIVE backend's real served name. Requests with model=spark-model
+      # are rewritten to this before hitting vLLM.
+      BACKEND_MODEL: "${BACKEND_MODEL:-deepseek-v4-flash}"
+      # vLLM API address (host network -> loopback of the leader).
+      UPSTREAM: "${UPSTREAM:-127.0.0.1:8000}"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:4000/health >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

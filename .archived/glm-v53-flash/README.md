@@ -29,7 +29,7 @@ model on GB10 — with eight SM121 kernel patches baked into a local image
 | `max_num_seqs` | 6 · `block-size` 2304 (kpool page invariant) · `--moe-backend marlin` |
 | Context | 262,144 (TP2 ceiling — the model-native 1M needs TP4 / 4 nodes) |
 | Thinking | **on, `high`** server-side (all-recipes parity — and now a real toggle via `THINKING`, see Tool-calling notes) |
-| Serve | port `4000`, served model `glm-5.3-flash` |
+| Serve | port `8000`, served model `glm-5.3-flash` |
 
 Measured on THIS cluster: **23–28 tok/s** single-stream, ~51–62 tok/s
 aggregate at C6 (first boot, cold JIT — see audit trail). Upstream DFlash2
@@ -82,8 +82,8 @@ boot; first boots are slower. If a rank dies silently 1–2 min after
 ```bash
 # API up + model id + context (use /health for liveness — /v1/models returns
 # 200 even with a dead engine):
-curl -s http://127.0.0.1:4000/health
-curl -s http://127.0.0.1:4000/v1/models   # -> "glm-5.3-flash", max_model_len 262144
+curl -s http://127.0.0.1:8000/health
+curl -s http://127.0.0.1:8000/v1/models   # -> "glm-5.3-flash", max_model_len 262144
 
 # Boot markers to confirm (head + worker logs):
 #   Loading model weights took ...          (no pe_dim=64 assert — patched image)

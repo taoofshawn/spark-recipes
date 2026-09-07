@@ -56,12 +56,17 @@ This repo is deployed on a specific pair of nodes. Do not invent other hardware 
 
 ```
 README.md                       # short index; stable recipes in main, in-progress on branches
-deepseek-v4-flash-tonyd2wild/               # docker-compose recipe (NVFP4 DS-MLA KV stack)
-  └── upstream/                             # VENDORED upstream repo — do NOT edit (see below)
+glm-v53-flash-intel-w4a16/                  # docker-compose recipe (Intel W4A16 AutoRound, DFlash2)
+glm-v53-flash-entrpi/                       # docker-compose recipe (EXL3 lane)
+deepseek-v4-flash-vision-miaai/             # docker-compose recipe (DSv4 vision)
 .archived/                                  # archived recipes (kept for reference, not maintained)
   ├── deepseek-v4-flash-aiden/              #   docker-compose recipe (the "reference" compose)
   ├── deepseek-v4-flash-aiden-sparkrun/     #   sparkrun port of aiden (no rebuild, docker-pull)
-  └── mimo-v25-dflash-tonyd2wild/           #   docker-compose recipe (MiMo-V2.5 + DFlash)
+  ├── deepseek-v4-flash-tonyd2wild/         #   NVFP4 DS-MLA KV stack (vendored upstream/)
+  ├── glm-v53-flash/                        #   NVFP4 reference vLLM patch stack
+  ├── glm-v53-flash-miaai/                  #   EXL3 1M-native hotfix lane (entrpi supersedes)
+  ├── mimo-v25-dflash-tonyd2wild/           #   docker-compose recipe (MiMo-V2.5 + DFlash)
+  └── deepseek-v4-flash-vision-miaai/       #   DSv4 vision lane (moved from top level)
 ```
 
 ### The two DeepSeek recipes: pick the right one
@@ -74,14 +79,14 @@ between them** — each belongs to a specific image/build; mixing them fails at 
 |---|---|---|---|
 | `deepseek-v4-flash-aiden` | docker-compose | prebuilt `aidendle94/sparkrun-vllm-ds4-gb10` (digest-pinned, "3.75"), `FLASHINFER_MLA_SPARSE_DSV4` attention | the battle-tested baseline; most documented — **archived → `.archived/`** |
 | `deepseek-v4-flash-aiden-sparkrun` | sparkrun recipe (`.yaml`) | same aiden image, `builder: docker-pull` (critical — without it sparkrun does a source build instead) | sparkrun-native management, no rebuild — **archived → `.archived/`** |
-| `deepseek-v4-flash-tonyd2wild` | docker-compose | locally built `vllm-dspark-runtime:dspark-nvfp4-stage-c` (4-stage overlay), `nvfp4_ds_mla` KV | most patched; full from-scratch build guide in its README |
+| `deepseek-v4-flash-tonyd2wild` | docker-compose | locally built `vllm-dspark-runtime:dspark-nvfp4-stage-c` (4-stage overlay), `nvfp4_ds_mla` KV | most patched; full from-scratch build guide in its README — **archived → `.archived/`** |
 
 `aiden-sparkrun` is the same as `aiden` but managed through sparkrun (cluster abstraction). If a
 change targets one, the other usually needs the equivalent change.
 
 ## How the recipes work
 
-### docker-compose recipes (`deepseek-v4-flash-aiden`, `...-tonyd2wild`, `mimo-v25-dflash-tonyd2wild`)
+### docker-compose recipes (all now under `.archived/`: `deepseek-v4-flash-aiden`, `...-tonyd2wild`, `mimo-v25-dflash-tonyd2wild`)
 
 - **`.env`** = shared config (`MASTER_ADDR`, `PORT=4000`, `ETH_IF`, `ETH_IF2`, `IB_PORTS`).
 - **`.env.node0` / `.env.node1`** = per-node overrides (`NODE_RANK=0|1`, `HEADLESS=1` on worker,
@@ -166,7 +171,7 @@ config hard-codes one of these. Wrong path = overlay silently not applied.
 - **Spec-decode benchmarking caveat:** use `stream:false` and read
   `usage.completion_tokens`; streamed deltas measure steps/s, not tok/s (up to ~4× under-report).
 
-## Vendored upstream — `deepseek-v4-flash-tonyd2wild/upstream/`
+## Vendored upstream — `.archived/deepseek-v4-flash-tonyd2wild/upstream/`
 
 This directory is a **full, unmodified copy** of tonyd2wild's upstream repo, pinned at a commit.
 - **Do not edit files under `upstream/` for local customization** — that lives in the parent
@@ -192,6 +197,8 @@ This directory is a **full, unmodified copy** of tonyd2wild's upstream repo, pin
   write-up). Keep that pattern — it is how regressions get explained later.
 - `.gitignore` ignores `.worktrees/`, `__pycache__`, `*.pyc`. No CI, no tests, no tooling in the
   repo. The "tests" are curl health checks and boot-log markers documented in each README.
+- The 2026-09 reorg moved the three superseded recipes (`deepseek-v4-flash-tonyd2wild`,
+  `glm-v53-flash`, `glm-v53-flash-miaai`) to `.archived/` (branch `reorg-archived-2026-09`).
 - One inconsistency to know about: some READMEs still say `git checkout <recipe-branch>` (e.g.
   `deepseek-v4-flash-aiden-sparkrun`, `deepseek-v4-flash-tonyd2wild`), but those branches were
   merged into `main` and deleted. **Everything lives on `main` now** (plus
@@ -256,10 +263,10 @@ Search terms worth running on every review: `deepseek v4 flash`, `dspark`, `b12x
 topics in the DGX Spark board — because recipe-relevant info frequently lands in threads whose
 titles do not contain "deepseek".
 
-### 2) tonyd2wild's GitHub repos — direct source for the tonyd2wild recipe
+### 2) tonyd2wild's GitHub repos — direct source for the tonyd2wild recipe (now `.archived/`)
 
 **Primary:** `tonyd2wild/DeepSeek-v4-Flash-0731-DSpark-1M-NVFP4-KV-2x-DGX-Spark` —
-fully vendored in `deepseek-v4-flash-tonyd2wild/upstream/` at a pinned
+fully vendored in `.archived/deepseek-v4-flash-tonyd2wild/upstream/` at a pinned
 commit (see `upstream/VENDORED-AT.md`). Review pass:
 
 ```bash

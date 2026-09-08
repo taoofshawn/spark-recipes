@@ -3,17 +3,27 @@
 Working notes for future update/maintenance sessions on this recipe. The
 README is the deploy doc; this file is the memory.
 
-## Current state (2026-09-06)
-
-- Created from main (`32134ea`). **NOT YET BOOTED on this cluster** — user
-  downloads the model/prepares the Sparks separately. Everything below that is
-  marked *measured* is measured by upstream authors (@miken / rodman80),
-  nothing is measured here yet. Treat this recipe as unvalidated-here until
-  the first boot: check every boot marker in the README against the receipt
-  numbers.
-- Model pinned `5eee1846…` (Intel HEAD, 2026-09-01 upload), image digest
+## Current state (2026-09-07)
+- Model pinned `5eee1846…` (Intel HEAD, 2026-09-01 upload; re-verified
+  2026-09-07 via HF API — UNCHANGED, no new revisions), image digest
   `4def0ef6…` (sm121-v11-dflash2, single-arm64 manifest, verified via
   `docker manifest inspect --verbose` 2026-09-06).
+- **2026-09-07 update pass (forum+HF sweep):** thread 382041 has no posts
+  after 09-04 (nothing to adopt). The actionable finding is
+  florianbrede-ayet's `tp2_glm53flash_autoround_mtp3_pmu128` recipe (forum
+  382632): same Intel quant, same digest-pinned base, native MTP3 +
+  PMU128 + 13.5 GB KV pin (1.92M pool) + seqs 6, receipts tool-eval 91/100,
+  108 tok/s @ C6, 82-token avg reprocessing. Vendored verbatim into
+  `mtp3-pmu128/` and wired as the opt-in `LANE=mtp3` row (see README). Our
+  indexer overlay was already byte-identical to tonyd2wild's latest
+  (`8a3ecfb0…`) — the kpool patch chain moved to per-request tail-cache
+  handling on 09-02 and we already had it.
+- DFlash2 drafter: upstream main moved to `bf582e4e` (README/figure only;
+  config/weights identical). Our pin `dc77ff1c` still resolves — no bump
+  needed.
+- Forum 381350 post 340 (robert287, 09-05): NVFP4 quants (except RedHat's)
+  have a ModelOpt/vLLM issue; "EXL and AutoRound quants do not exhibit the
+  same problem" — quality corroboration for this lane.
 
 ## Provenance: what @miken actually references (post 5)
 
@@ -118,6 +128,15 @@ pool (1.75M vs 1.34M); (3) MNBT: only rodman80's data, keep 8192; (4) does
 
 ## Watchlist
 
+- **florianbrede-ayet/spark-recipes (mtp3-pmu128 lane)**: the vendored lane's
+  upstream — watch for new patches to the #53388/#53906 series, PMU changes,
+  and fresh A/B numbers vs DFlash2. The A/B on THIS cluster (dflash2 k=7 vs
+  mtp3+PMU128, both on the same image/quant) is the standing open question;
+  florianbrede claims MTP3 wins reasoning-heavy workloads (forum 382632).
+- **vLLM #53388 / #53906 upstreaming**: both patches in `mtp3-pmu128/patches/`
+  are exact upstream hunks against `487ecf187`; when the image's vLLM picks
+  them up natively the vendored series becomes a no-op — verify with
+  `apply_runtime_patches.py --verify-only` before any image bump.
 - **tonyd2wild / GLM-5.3-Flash-NVFP4-DFlash2-2x-DGX-Spark**: new image tags
   (`sm121-v12`+ / `-hybrid-*`), any Dockerfile change to the dflash2 overlay or
   patch_v7/v8 — every image bump re-runs the "new vLLM?" gate (qzeros mod,

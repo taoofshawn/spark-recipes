@@ -79,10 +79,54 @@ All are `.env` edits (one line each); defaults = miken's row:
 
 | You want | Set | You get |
 |---|---|---|
-| **miken's validated row (default)** | (nothing) | 1M ctx, 8 seqs, 1.75M-token pool @ 12.52 GB pin, graphs on, DFlash2 k=7 |
+| **miken's validated row (default, dflash2 lane)** | (nothing) | 1M ctx, 8 seqs, 1.75M-token pool @ 12.52 GB pin, graphs on, DFlash2 k=7 |
 | **rodman80's validated row** | `MAX_SEQS=6 KV_CACHE_MEMORY=9663676416 EAGER=1` | same ctx; C6 81.1 measured; 9 GiB pin → 1.34M pool |
 | **262K staging (faster boots)** | `MAX_LEN=262144 KV_CACHE_MEMORY=3221225472 MAX_SEQS=6` | 3 GiB pin |
 | **Profiler-sized KV (safe fallback)** | `KV_CACHE_MEMORY=` | pool sized by the profiler (no bypass of the activation check) |
+
+### The mtp3 lane (native MTP3 + PMU128 — alternative to DFlash2)
+
+[florianbrede-ayet's recipe](https://github.com/florianbrede-ayet/spark-recipes/tree/main/tp2_glm53flash_autoround_mtp3_pmu128)
+([forum 382632](https://forums.developer.nvidia.com/t/glm-5-3-flash-intel-autoquant-w4a16-tp2-mtp3-concurrent-agentic-use/382632))
+runs the **same Intel quant on the same digest-pinned base image** but with
+**native MTP3** (`--speculative-config
+'{"method":"mtp","num_speculative_tokens":3,"disable_eagle_block_drop":true}'`,
+upstream PR #53388 baked into the image — no drafter checkpoint) and **PMU128**
+prefix matching (`--prefix-match-unit 128`, upstream #53906 + a scheduler-LCM
+patch series). The full patch lane is vendored verbatim in
+`mtp3-pmu128/` (checksummed; build with its Dockerfile, which applies the
+patches fail-closed at build time):
+
+| | dflash2 lane (default) | mtp3 lane |
+|---|---|---|
+| spec decoding | DFlash2 k=7 drafter checkpoint | native MTP3, `disable_eagle_block_drop=true` |
+| prefix matching | block 2304 + hybrid APC patch at boot | `--prefix-match-unit 128` (baked #53388/#53906/LCM patches) |
+| KV pin / pool | 12.52 GB → 1.75M tokens | 13.5 GB → **1,920,956 tokens** |
+| seqs | 8 | 6 |
+| upstream receipts | miken: tool-eval 90/100, DFlash2 code accept 0.68–0.71 | florianbrede: tool-eval **91/100**, up to **108 tok/s @ C6**, **82-token** avg reprocessing/turn, multi-day soak clean |
+
+Run it (`.env` edits + rebuild; see `mtp3-pmu128/README.md` for the build):
+
+```bash
+LANE=mtp3
+IMAGE=glm53-intel-mtp3-pmu128:20260907     # built from mtp3-pmu128/Dockerfile
+KV_CACHE_MEMORY=13500000000
+MAX_SEQS=6
+PMU=1
+```
+
+The mtp3 image bakes the #53388/#53906 coordinator patches, so the boot-time
+hybrid-APC patch (`patches/patch_hybrid_prefix_hit.py`) is skipped in that
+lane (the compose command block gates on `LANE`); the SM121 indexer overlay
+is byte-identical in both. `prepare-model.sh` surgery is unchanged — same
+checkpoint, same GPTQ metadata transformation.
+
+Boot markers (mtp3 lane): `speculative_config=SpeculativeConfig(method='mtp',
+num_speculative_tokens=3, ...)` (no `DFlash2DraftModel` architecture line),
+`Setting attention block size to 4608` (same as dflash2), and with PMU=1 the
+`usage.prompt_tokens_details.cached_tokens` field in chat responses reports
+per-request prefix reuse (florianbrede: 199,936 cached / 64 computed on a
+200K replay).
 
 ## Deploy
 
@@ -205,12 +249,12 @@ docker logs glm53-intel-w4a16 2>&1 | grep -F "Model loading took"
 | template | `--chat-template` vendored mm file (rodman80) | **same** — vendored `patches/chat_template_mm.jinja` (rodman80's, validated on this image; honors `enable_thinking` + `reasoning_effort`) | the Intel repo's shipped template ignores `enable_thinking` — vendoring makes the THINKING toggle explicit (parity with entrpi) |
 
 ## When to use this vs the other glm recipes
-
-Same weights-class, same served name on :8000 (one recipe at a time):
-
 - **intel-w4a16 (this)**: the W4A16 trade — highest KV pool/concurrency per
   GiB, ~82 GiB/rank, best prefill of the 4bpw lanes at 1M ctx; quality ~0.99×
-  of BF16 (card) with EXL3 still ahead on hard tool evals (92 vs 90).
+  of BF16 (card) with EXL3 still ahead on hard tool evals (92 vs 90). Two
+  lanes: DFlash2 k=7 (default, miken's row) and the vendored native-MTP3 +
+  PMU128 lane (`mtp3-pmu128/`, florianbrede's receipts: tool-eval 91,
+  108 tok/s @ C6) — A/B on this cluster pending.
 - **glm-v53-flash-miaai / -entrpi (EXL3)**: quality crown (KLD 0.0246,
   tool-eval 92), different drafter geometry; entrpi is the lowest-maintenance
   EXL3 lane, miaai the 1M-native hotfix lane.
@@ -223,6 +267,11 @@ Same weights-class, same served name on :8000 (one recipe at a time):
   (@miken post 5 = the measured A/B + surgery + receipts; post 1 = model link)
 - Weights: [Intel/GLM-5.3-Flash-W4A16-AutoRound](https://huggingface.co/Intel/GLM-5.3-Flash-W4A16-AutoRound)
   (AutoRound 0.15, `auto_round:auto_gptq`, sym g128, MIT)
+- mtp3 lane: [florianbrede-ayet/spark-recipes/tp2_glm53flash_autoround_mtp3_pmu128](https://github.com/florianbrede-ayet/spark-recipes/tree/main/tp2_glm53flash_autoround_mtp3_pmu128)
+  ([forum 382632](https://forums.developer.nvidia.com/t/glm-5-3-flash-intel-autoquant-w4a16-tp2-mtp3-concurrent-agentic-use/382632);
+  vendored verbatim in `mtp3-pmu128/` — #53388/#53906/LCM patches + PMU128;
+  upstream vLLM PRs: [vllm-project/vllm#53388](https://github.com/vllm-project/vllm/pull/53388),
+  [#53906](https://github.com/vllm-project/vllm/pull/53906))
 - Recipe/harness: [rodman80/glm-5.3-flash-w4a16-2x-DGX-Sparks](https://github.com/rodman80/glm-5.3-flash-w4a16-2x-DGX-Sparks)
   (A/B harness + `benchmarks/{RESULTS,COMPARISON}.md`; sibling quant
   [canada-quant/glm-5.3-w4a16-mtp](https://huggingface.co/canada-quant/glm-5.3-w4a16-mtp))

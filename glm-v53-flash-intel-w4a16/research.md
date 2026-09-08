@@ -3,11 +3,29 @@
 Working notes for future update/maintenance sessions on this recipe. The
 README is the deploy doc; this file is the memory.
 
-## Current state (2026-09-07)
+## Current state (2026-09-08)
 - Model pinned `5eee1846…` (Intel HEAD, 2026-09-01 upload; re-verified
   2026-09-07 via HF API — UNCHANGED, no new revisions), image digest
   `4def0ef6…` (sm121-v11-dflash2, single-arm64 manifest, verified via
   `docker manifest inspect --verbose` 2026-09-06).
+- **2026-09-08 update pass (forum+HF sweep):** Intel HEAD re-verified
+  UNCHANGED (`5eee1846…`, lastModified 2026-09-01). DFlash2 drafter
+  upstream still `bf582e4e` (files untouched since 08-31). Adopted
+  florianbrede's third recipe `tp2_glm53flash_autoround_dflash2_k7_pmu128`
+  (external DFlash2 k7 + PMU128 on the SAME base digest) as the opt-in
+  `LANE=dflash2pmu` row: vendored verbatim into `dflash2-pmu128/`
+  (SHA256SUMS-verified), compose gated (baked-patch lanes skip the boot-time
+  hybrid-APC patch), drafter pin bumped to `bf582e4e` for that lane. Receipts
+  TEB 90 (158/176), PP 1,679 tok/s, TG 33.1/54.7 @C1/C4, ~82-token recompute.
+  Watch items from 381350 (not adopted, measured on other images/stacks):
+  klement's k=4-over-k=7 DFlash2 A/B (mixed workloads), eugr fork
+  `fix-tool-choice-enforcement` mod (TC-45; fork-specific, PR #380), rodman80
+  dual-fabric NCCL (+~5% long prefill, both-CX7-NIC rails), rodman80
+  chat-template refresh (tool-result-ID dedup — ours verified byte-identical
+  already), voktolom post 434 (PMU128 + retention-0 on eugr b12x: warm TTFT
+  seconds → ~0.2 s; retention flag behavior confirmed image-specific),
+  sakra0616 post 444 (Anthropic-adapter `--chat-template` MUST be explicit
+  for CC prefix caching — we already mount the vendored template, covered).
 - **2026-09-07 update pass (forum+HF sweep):** thread 382041 has no posts
   after 09-04 (nothing to adopt). The actionable finding is
   florianbrede-ayet's `tp2_glm53flash_autoround_mtp3_pmu128` recipe (forum

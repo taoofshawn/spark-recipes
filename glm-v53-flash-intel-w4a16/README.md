@@ -1,5 +1,24 @@
 # glm-v53-flash-intel-w4a16 — GLM-5.3-Flash Intel W4A16 AutoRound (2× DGX Spark)
 
+## 2026-09-08 update pass
+
+- **Adopted the `dflash2pmu` lane** (DFlash2 k=7 + PMU128, florianbrede-ayet
+  `tp2_glm53flash_autoround_dflash2_k7_pmu128`, forum 382632): vendored
+  verbatim into `dflash2-pmu128/` (SHA256SUMS-verified, all 21 files hash OK);
+  `LANE=dflash2pmu` wired into docker-compose (baked-patch lanes skip the
+  boot-time hybrid-APC patch) and `.env` rows. Receipts: TEB 90, PP 1,679,
+  TG 33.1/54.7 @C1/C4, ~82-token recompute; A/B on this cluster pending.
+- **DFlash2 drafter refresh for that lane:** upstream validated pin
+  `bf582e4e…` (2026-08-31 upload; our default-lane pin `dc77ff1c…` is the
+  2026-08-28 revision, still current as the default).
+- **Watchlist datapoints from the 381350 thread** (not adopted — measured on
+  different images): klement k=4-over-k=7 DFlash2 A/B; eugr `fix-tool-choice-`
+  enforcement mod (TC-45, fork-specific); rodman80 dual-fabric NCCL +5% long
+  prefill; rodman80 chat-template update (tool-result-ID robustness).
+- No changes to: image digest, GMU/KV pins, MAX_SEQS, block size, sampling
+  pins, prepare-model.sh surgery. Intel checkpoint revision unchanged
+  (`5eee1846…`, lastModified 2026-09-01).
+
 **Adoption** of the W4A16-AutoRound lane from
 [forum 382041](https://forums.developer.nvidia.com/t/intel-glm-5-3-flash-w4a16-autoround/382041)
 (@miken, post 5) into this repo's docker-compose conventions: serve
@@ -82,9 +101,11 @@ All are `.env` edits (one line each); defaults = miken's row:
 | **miken's validated row (default, dflash2 lane)** | (nothing) | 1M ctx, 8 seqs, 1.75M-token pool @ 12.52 GB pin, graphs on, DFlash2 k=7 |
 | **rodman80's validated row** | `MAX_SEQS=6 KV_CACHE_MEMORY=9663676416 EAGER=1` | same ctx; C6 81.1 measured; 9 GiB pin → 1.34M pool |
 | **262K staging (faster boots)** | `MAX_LEN=262144 KV_CACHE_MEMORY=3221225472 MAX_SEQS=6` | 3 GiB pin |
-| **Profiler-sized KV (safe fallback)** | `KV_CACHE_MEMORY=` | pool sized by the profiler (no bypass of the activation check) |
+| **dflash2pmu lane (PMU128, baked patches)** | `LANE=dflash2pmu` + `IMAGE=glm53-intel-dflash2-pmu128:20260908` + `DFLASH_REVISION=bf582e4e…` + `KV_CACHE_MEMORY=13500000000 MAX_SEQS=6 PMU=1` | DFlash2 k=7 + PMU128 prefix matching; 1.81M pool; see `dflash2-pmu128/README.md` |
+| **mtp3 lane (native MTP3 + PMU128)** | see the pmu128-lanes section below | native MTP3, PMU128; 1.92M pool |
 
-### The mtp3 lane (native MTP3 + PMU128 — alternative to DFlash2)
+### The pmu128 lanes (mtp3 and dflash2pmu — florianbrede's patch-baked alternatives)
+
 
 [florianbrede-ayet's recipe](https://github.com/florianbrede-ayet/spark-recipes/tree/main/tp2_glm53flash_autoround_mtp3_pmu128)
 ([forum 382632](https://forums.developer.nvidia.com/t/glm-5-3-flash-intel-autoquant-w4a16-tp2-mtp3-concurrent-agentic-use/382632))
@@ -101,9 +122,7 @@ patches fail-closed at build time):
 |---|---|---|
 | spec decoding | DFlash2 k=7 drafter checkpoint | native MTP3, `disable_eagle_block_drop=true` |
 | prefix matching | block 2304 + hybrid APC patch at boot | `--prefix-match-unit 128` (baked #53388/#53906/LCM patches) |
-| KV pin / pool | 12.52 GB → 1.75M tokens | 13.5 GB → **1,920,956 tokens** |
-| seqs | 8 | 6 |
-| upstream receipts | miken: tool-eval 90/100, DFlash2 code accept 0.68–0.71 | florianbrede: tool-eval **91/100**, up to **108 tok/s @ C6**, **82-token** avg reprocessing/turn, multi-day soak clean |
+| receipts | miken: TEB 90, code accept 0.68–0.71 | florianbrede: TEB 91, 108 tok/s @ C6, 82-token avg reprocessing/turn, multi-day soak clean |
 
 Run it (`.env` edits + rebuild; see `mtp3-pmu128/README.md` for the build):
 
@@ -115,11 +134,52 @@ MAX_SEQS=6
 PMU=1
 ```
 
-The mtp3 image bakes the #53388/#53906 coordinator patches, so the boot-time
-hybrid-APC patch (`patches/patch_hybrid_prefix_hit.py`) is skipped in that
-lane (the compose command block gates on `LANE`); the SM121 indexer overlay
-is byte-identical in both. `prepare-model.sh` surgery is unchanged — same
-checkpoint, same GPTQ metadata transformation.
+**The dflash2pmu sub-lane (DFlash2 k=7 + PMU128 — same base image, new drafter pin).**
+
+[florianbrede-ayet's `tp2_glm53flash_autoround_dflash2_k7_pmu128` recipe](https://github.com/florianbrede-ayet/spark-recipes/tree/main/tp2_glm53flash_autoround_dflash2_k7_pmu128)
+(same [forum 382632](https://forums.developer.nvidia.com/t/glm-5-3-flash-intel-autoquant-w4a16-tp2-mtp3-concurrent-agentic-use/382632))
+keeps the **default lane's external DFlash2 k=7** but bakes a PMU128 patch
+series into an image built from the **same digest-pinned base** (`4def0ef6…`):
+#53388 block-drop, #53906 coordinator partial hits, scheduler LCM/mamba block
+alignment, and `dflash2-pmu128-swa-fine-hits.patch` (derived from draft PR
+#54397). `--prefix-match-unit 128` removes the 2304-token block granularity;
+the SWA fine-hits patch makes the drafter's SWA group retain fine-grained
+replay boundaries instead of zeroing the hybrid min. Vendored verbatim in
+`dflash2-pmu128/` (SHA256SUMS-verified).
+
+| | dflash2 (default) | dflash2pmu | mtp3 |
+|---|---|---|---|
+| spec decoding | DFlash2 k=7 | DFlash2 k=7 + `disable_eagle_block_drop` | native MTP3 |
+| prefix matching | block 2304 + boot-time hybrid APC patch | `--prefix-match-unit 128`, patches baked | `--prefix-match-unit 128`, patches baked |
+| drafter rev | `dc77ff1c…` (08-28) | `bf582e4e…` (08-31) | none |
+| KV pin / pool | 12.52 GB → 1.75M tokens | 13.5 GB → 1.81M tokens | 13.5 GB → 1.92M tokens |
+| seqs | 8 | 6 | 6 |
+| receipts | miken: TEB 90, code accept 0.68–0.71 | florianbrede: TEB **90** (158/176), PP 1,679, TG 33.1/54.7 @C1/C4, ~82-token recompute | florianbrede: TEB 91, 108 tok/s @ C6 |
+
+Run it (`.env` edits + rebuild; see `dflash2-pmu128/README.md` for the build):
+
+```bash
+LANE=dflash2pmu
+IMAGE=glm53-intel-dflash2-pmu128:20260908   # built from dflash2-pmu128/Dockerfile
+DFLASH_REVISION=bf582e4eacc1810f76656d1811693ff6c6737d2a
+KV_CACHE_MEMORY=13500000000
+MAX_SEQS=6
+PMU=1
+```
+
+Watch items from upstream: prompts exactly 4,608-aligned do not materialize
+the replay-cap Mamba checkpoint (0 hits at N=36,864 — no fix upstream,
+deliberate); retention-0 keeps 8×200K prefixes but peak admission was only 2
+concurrent in their N8 test (not a C8 proof). On this cluster the DFlash2 +
+PMU128 lane is untested — A/B pending like the mtp3 lane.
+
+
+Both pmu128 images bake the #53388/#53906 coordinator patches (and, for
+dflash2pmu, the SWA fine-hits patch), so the boot-time hybrid-APC patch
+(`patches/patch_hybrid_prefix_hit.py`) is skipped in those lanes (the compose
+command block gates on `LANE`); the SM121 indexer overlay is code-identical
+in all three. `prepare-model.sh` surgery is unchanged — same checkpoint,
+same GPTQ metadata transformation.
 
 Boot markers (mtp3 lane): `speculative_config=SpeculativeConfig(method='mtp',
 num_speculative_tokens=3, ...)` (no `DFlash2DraftModel` architecture line),
@@ -272,6 +332,10 @@ docker logs glm53-intel-w4a16 2>&1 | grep -F "Model loading took"
   vendored verbatim in `mtp3-pmu128/` — #53388/#53906/LCM patches + PMU128;
   upstream vLLM PRs: [vllm-project/vllm#53388](https://github.com/vllm-project/vllm/pull/53388),
   [#53906](https://github.com/vllm-project/vllm/pull/53906))
+- dflash2pmu lane: [florianbrede-ayet/spark-recipes/tp2_glm53flash_autoround_dflash2_k7_pmu128](https://github.com/florianbrede-ayet/spark-recipes/tree/main/tp2_glm53flash_autoround_dflash2_k7_pmu128)
+  (same forum 382632; vendored verbatim in `dflash2-pmu128/` — #53388/#53906/LCM
+  + SWA fine-hits patches baked, DFlash2 drafter pin `bf582e4e…`, validate.sh
+  gate included)
 - Recipe/harness: [rodman80/glm-5.3-flash-w4a16-2x-DGX-Sparks](https://github.com/rodman80/glm-5.3-flash-w4a16-2x-DGX-Sparks)
   (A/B harness + `benchmarks/{RESULTS,COMPARISON}.md`; sibling quant
   [canada-quant/glm-5.3-w4a16-mtp](https://huggingface.co/canada-quant/glm-5.3-w4a16-mtp))

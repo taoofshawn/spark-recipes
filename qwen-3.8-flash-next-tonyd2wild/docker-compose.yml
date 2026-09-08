@@ -1,0 +1,217 @@
+services:
+  vllm-dspark:
+    image: ${IMAGE}
+    # Clear the image's ENTRYPOINT — the command block below is the actual
+    # entry (parity with the other recipes in this repo).
+    entrypoint: []
+    container_name: qwen38fn-nvfp4
+    restart: "no"
+    network_mode: host
+    ipc: host
+    shm_size: 32g
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    cap_add:
+      - IPC_LOCK
+    gpus: all
+    devices:
+      - /dev/infiniband:/dev/infiniband
+    healthcheck:
+      test: ["CMD-SHELL", "if [ -n \"$$HEADLESS\" ]; then exit 0; fi; curl -fsS http://127.0.0.1:${PORT:-8000}/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 900s
+    volumes:
+      # NVFP4 checkpoint (byte-for-byte; no requantizing). EACH rank needs a
+      # readable local copy.
+      - ${MODEL_HOST_PATH}:/models/qwen38fn:ro
+      # Cache root -> /root/.cache (torch/inductor caches; node-local disk)
+      - ${CACHE_HOST_PATH}:/root/.cache
+      # ---- overlays (upstream OVERLAYS=1 mechanism; paths inside the stock
+      # nightly image's vllm package). Bind-mount :ro so any drift fails
+      # loudly at boot instead of silently serving stock code. ----
+      # PR #55375 (peakcrosser7, merged 2026-09-05): fused PLE conv state-index
+      # stride fix — without it, MTP + >1 concurrent prefill writes conv state
+      # to the wrong slot.
+      - ./patches/upstream-overlays/ops_ple.py:/usr/local/lib/python3.12/dist-packages/vllm/models/qwen4_exp/nvidia/ops/ple.py:ro
+      # PR #54846 (andreasgru, open): fp8_e4m3/nvfp4 KV on the QSA attention
+      # path — stock vLLM refuses anything but BF16 KV on this model.
+      - ./patches/upstream-overlays/ops_qsa.py:/usr/local/lib/python3.12/dist-packages/vllm/models/qwen4_exp/nvidia/ops/qsa.py:ro
+      - ./patches/upstream-overlays/qsa.py:/usr/local/lib/python3.12/dist-packages/vllm/models/qwen4_exp/nvidia/qsa.py:ro
+      - ./patches/upstream-overlays/platforms_interface.py:/usr/local/lib/python3.12/dist-packages/vllm/platforms/interface.py:ro
+      # Kai/2Wild's two MTP-loading fixes (draft-local layer index; FP8
+      # block-scaled MTP experts) — without them the MTP head fails to load.
+      # Same gaps fixed independently by sfxnz and MiaAI-Lab (no shared code).
+      - ./patches/upstream-overlays/modelopt.py:/usr/local/lib/python3.12/dist-packages/vllm/model_executor/layers/quantization/modelopt.py:ro
+      # PLE_MODE=mmap (CONTEXT profile) adds the disk-backed table pair:
+      # - ./patches/ple_layer.py:/usr/local/lib/python3.12/dist-packages/vllm/models/qwen4_exp/nvidia/ple_layer.py:ro
+      # - ./patches/ple_mmap.py:/usr/local/lib/python3.12/dist-packages/vllm/models/qwen4_exp/nvidia/ops/ple_mmap.py:ro
+      # - ./patches/compilation.py:/usr/local/lib/python3.12/dist-packages/vllm/config/compilation.py:ro
+      # (GRAPHS=piecewise also mounts compilation.py — see the command block)
+    environment:
+      # ---- GPU ----
+      CUDA_VISIBLE_DEVICES: "0"
+      CUDA_DEVICE_ORDER: PCI_BUS_ID
+      # ---- node identity (rank / headless) ----
+      NODE_RANK: "${NODE_RANK:-0}"
+      HEADLESS: "${HEADLESS:-}"
+      ROCE_IP: "${ROCE_IP:-}"
+      # Multi-node rendezvous + serve port (read by the command block)
+      MASTER_ADDR: "${MASTER_ADDR}"
+      PORT: "${PORT:-8000}"
+      MPORT: "${MPORT:-29531}"
+      # ---- serving profile (upstream TP2 SPEED default; see .env) ----
+      GMU: "${GMU:-0.70}"
+      MAX_LEN: "${MAX_LEN:-262144}"
+      MAX_SEQS: "${MAX_SEQS:-6}"
+      MNBT: "${MNBT:-4096}"
+      KV_DTYPE: "${KV_DTYPE:-fp8_e4m3}"
+      MTP: "${MTP:-3}"
+      GRAPHS: "${GRAPHS:-nocompile}"
+      PREFIX_CACHE: "${PREFIX_CACHE:-0}"
+      PLE_MODE: "${PLE_MODE:-none}"
+      DRAFT_VOCAB: "${DRAFT_VOCAB:-}"
+      TOOL_PARSER: "${TOOL_PARSER:-qwen3_xml}"
+      DISABLE_FLASHINFER_AUTOTUNE: "${DISABLE_FLASHINFER_AUTOTUNE:-1}"
+      ASYNC: "${ASYNC:-0}"
+      SERVED_MODEL_NAME: "${SERVED_MODEL_NAME:-qwen3.8-flash-next}"
+      # ---- sampling / thinking defaults (repo parity; upstream pins thinking
+      # off, no temp/top_p overrides) ----
+      THINKING: "${THINKING:-false}"
+      TEMPERATURE: "${TEMPERATURE:-1.0}"
+      TOP_P: "${TOP_P:-0.95}"
+      # ---- RoCE networking (this cluster's NICs) ----
+      NCCL_NET: IB
+      NCCL_IB_DISABLE: "0"
+      NCCL_NET_PLUGIN: none
+      NCCL_IB_HCA: "${IB_PORTS}"
+      NCCL_IB_GID_INDEX: "${NCCL_IB_GID_INDEX:-}"
+      NCCL_IB_ROCE_VERSION_NUM: "2"
+      NCCL_IB_ADDR_FAMILY: AF_INET
+      NCCL_IB_ADDR_RANGE: "${NCCL_SUBNET}"
+      NCCL_SOCKET_IFNAME: "${ETH_IF}"
+      GLOO_SOCKET_IFNAME: "${ETH_IF}"
+      TP_SOCKET_IFNAME: "${ETH_IF}"
+      MN_IF_NAME: "${ETH_IF}"
+      NCCL_NVLS_ENABLE: "0"
+      NCCL_CROSS_NIC: "0"
+      NCCL_IB_MERGE_NICS: "0"
+      NCCL_CUMEM_ENABLE: "0"
+      NCCL_IGNORE_CPU_AFFINITY: "1"
+      NCCL_DEBUG: WARN
+      TORCH_NCCL_ASYNC_ERROR_HANDLING: "1"
+      # ---- runtime (stock nightly; Spark vLLM environment) ----
+      VLLM_HOST_IP: "${ROCE_IP}"
+      HF_HOME: /root/.cache/huggingface
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      VLLM_ENGINE_READY_TIMEOUT_S: "3600"
+      PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"
+      CUTE_DSL_ARCH: "sm_121a"
+      TORCH_CUDA_ARCH_LIST: "12.1a"
+      FLASHINFER_CUDA_ARCH_LIST: "12.1a"
+      FLASHINFER_DISABLE_VERSION_CHECK: "1"
+      VLLM_USE_DEEP_GEMM: "0"        # DeepGEMM faults on sm_121 (vLLM #54125)
+      VLLM_USE_V2_MODEL_RUNNER: "1"
+      TORCHINDUCTOR_CACHE_DIR: "/root/.cache/torchinductor"
+    command:
+      - /bin/bash
+      - -lc
+      - |
+        set -euo pipefail
+
+        # ---- GID auto-detect (sysfs; GID table renumbers across reboots and a
+        # wrong index dies ~60 s later in NCCL QP setup) ----
+        if [ -z "$${NCCL_IB_GID_INDEX:-}" ]; then
+          _want="$$(printf '0000:0000:0000:0000:0000:ffff:%02x%02x:%02x%02x' $$(echo "$${ROCE_IP}" | tr . ' '))"
+          for _g in /sys/class/infiniband/rocep1s0f0/ports/1/gids/*; do
+            [ "$$(cat "$$_g" 2>/dev/null)" = "$$_want" ] || continue
+            _idx="$${_g##*/}"
+            [[ "$$(cat "/sys/class/infiniband/rocep1s0f0/ports/1/gid_attrs/types/$$_idx" 2>/dev/null)" == *"v2"* ]] || continue
+            NCCL_IB_GID_INDEX="$$_idx"; break
+          done
+          if [ -z "$${NCCL_IB_GID_INDEX:-}" ]; then
+            echo "error: no RoCE v2 GID matching $$ROCE_IP on rocep1s0f0; table:" >&2
+            for _g in /sys/class/infiniband/rocep1s0f0/ports/1/gids/*; do
+              _idx="$${_g##*/}"
+              echo "  gid $$_idx: $$(cat "$$_g" 2>/dev/null) type=$$(cat "/sys/class/infiniband/rocep1s0f0/ports/1/gid_attrs/types/$$_idx" 2>/dev/null)" >&2
+            done
+            echo "override with NCCL_IB_GID_INDEX=<idx> if the table disagrees" >&2
+            exit 2
+          fi
+          echo "GID auto-detect: NCCL_IB_GID_INDEX=$${NCCL_IB_GID_INDEX}"
+          export NCCL_IB_GID_INDEX
+        fi
+
+        # ---- preflight: checkpoint present (offline serving) ----
+        M=/models/qwen38fn
+        [ -f "$$M/config.json" ] || { echo "FATAL: $$M/config.json missing — download nvidia/Qwen3.8-Flash-Next-NVFP4 (see .env) on this node" >&2; exit 2; }
+
+        ARGS=(serve "$$M"
+          --served-model-name "$${SERVED_MODEL_NAME:-qwen3.8-flash-next}"
+          --host 0.0.0.0 --port "$${PORT:-8000}"
+          --trust-remote-code
+          --quantization modelopt
+          --tensor-parallel-size 2
+          --gpu-memory-utilization "$${GMU:-0.70}"
+          --max-model-len "$${MAX_LEN:-262144}"
+          --max-num-seqs "$${MAX_SEQS:-6}"
+          --max-num-batched-tokens "$${MNBT:-4096}"
+          --kv-cache-dtype "$${KV_DTYPE:-fp8_e4m3}"
+        )
+        # Prefix caching: OFF by default — GDN prefix-cache crash (vLLM #54173)
+        # unverified in this nightly.
+        [ "$${PREFIX_CACHE:-0}" = "1" ] && ARGS+=(--enable-prefix-caching) || ARGS+=(--no-enable-prefix-caching)
+        # Speculative: native MTP3 (MTP4 trails at every load — README table).
+        if [ "$${MTP:-3}" != "0" ]; then
+          ARGS+=(--speculative-config "{\"method\":\"mtp\",\"num_speculative_tokens\":$${MTP:-3}}")
+        fi
+        # Graphs: nocompile (default) = CUDA graphs for decode, torch.compile
+        # OFF — NEVER pair the 4096 chunk with compile on (8–15 tok/s decode,
+        # README gotcha) and compile duplicates the resident PLE table.
+        case "$${GRAPHS:-nocompile}" in
+          eager)     ARGS+=(--enforce-eager) ;;
+          piecewise) ARGS+=(--compilation-config "{\"cudagraph_mode\":\"PIECEWISE\"}")
+                     DOCKER_MOUNTS+=(./patches/compilation.py:/usr/local/lib/python3.12/dist-packages/vllm/config/compilation.py:ro) ;;
+          full)      ARGS+=(--compilation-config "{\"cudagraph_mode\":\"FULL_AND_PIECEWISE\"}")
+                     DOCKER_MOUNTS+=(./patches/compilation.py:/usr/local/lib/python3.12/dist-packages/vllm/config/compilation.py:ro) ;;
+          nocompile) ARGS+=(--compilation-config "{\"mode\":0,\"cudagraph_mode\":\"FULL_DECODE_ONLY\"}") ;;
+          *) echo "FATAL: GRAPHS must be eager|piecewise|full|nocompile" >&2; exit 2 ;;
+        esac
+        # PLE table placement. none = resident in unified memory (SPEED;
+        # requires nocompile). mmap = on NVMe (CONTEXT; requires the ple_*
+        # overlays and piecewise/full graphs). resident/staged = experimental
+        # upstream, measured slow — refuse here rather than ship a trap.
+        case "$${PLE_MODE:-none}" in
+          none) ;;
+          mmap) ARGS+=(--no-enforce-eager)
+                DOCKER_MOUNTS+=(./patches/ple_layer.py:/usr/local/lib/python3.12/dist-packages/vllm/models/qwen4_exp/nvidia/ple_layer.py:ro
+                                ./patches/ple_mmap.py:/usr/local/lib/python3.12/dist-packages/vllm/models/qwen4_exp/nvidia/ops/ple_mmap.py:ro)
+                ARGS+=() ;;
+          *) echo "FATAL: PLE_MODE must be none|mmap (resident/staged are experimental upstream)" >&2; exit 2 ;;
+        esac
+        # DRAFT_VOCAB=65536: reduced-vocabulary MTP draft (prose +10% at TP2,
+        # TTFT slightly worse under load; not default upstream).
+        [ -n "$${DRAFT_VOCAB:-}" ] && DOCKER_MOUNTS+=(./patches/mtp_draft_vocab.py:/usr/local/lib/python3.12/dist-packages/vllm/models/qwen4_exp/nvidia/mtp.py:ro)
+        # Parsers + thinking default (upstream: thinking off server-side)
+        ARGS+=(--reasoning-parser qwen3 --enable-auto-tool-choice
+          --tool-call-parser "$${TOOL_PARSER:-qwen3_xml}"
+          --default-chat-template-kwargs "{\"enable_thinking\": $${THINKING:-false}}")
+        # Sampling pins (repo parity; upstream ships no overrides — these are
+        # no-ops vs upstream behavior but keep the knobs explicit).
+        GEN_CFG="{\"temperature\": $${TEMPERATURE:-1.0}, \"top_p\": $${TOP_P:-0.95}}"
+        ARGS+=(--generation-config vllm --override-generation-config "$${GEN_CFG}")
+        [ "$${DISABLE_FLASHINFER_AUTOTUNE:-1}" != "0" ] && ARGS+=(--no-enable-flashinfer-autotune)
+        [ "$${ASYNC:-0}" != "0" ] && ARGS+=(--async-scheduling)
+        # Multi-node TP=2
+        ARGS+=(--distributed-executor-backend mp
+          --nnodes 2 --node-rank "$${NODE_RANK:-0}"
+          --master-addr "$${MASTER_ADDR}" --master-port "$${MPORT:-29531}")
+        [ -n "$${HEADLESS:-}" ] && ARGS+=(--headless)
+
+        echo "launched image=$IMAGE rank=$${NODE_RANK:-0} host=$${ROCE_IP} gid=$${NCCL_IB_GID_INDEX} ple=$${PLE_MODE:-none} graphs=$${GRAPHS:-nocompile} kv=$${KV_DTYPE} mtp=$${MTP:-3} gmu=$${GMU:-0.70} maxlen=$${MAX_LEN:-262144}"
+
+        exec vllm "$${ARGS[@]}"

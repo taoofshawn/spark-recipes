@@ -69,15 +69,15 @@ services:
       BLOCK_SIZE: "${BLOCK_SIZE:-2304}"
       KV_DTYPE: "${KV_DTYPE:-fp8_e4m3}"
       KV_CACHE_MEMORY: "${KV_CACHE_MEMORY:-}"
-      # Drafter lane: "dflash2" (default, miken's validated row) or "mtp3"
-      # (vendored florianbrede lane — see mtp3-pmu128/README.md). mtp3 requires
-      # an image built from mtp3-pmu128/Dockerfile (patches baked at build).
-      LANE: "${LANE:-dflash2}"
+      # Drafter lane: "dflash2" (default, miken's validated row), "dflash2pmu"
+      # (dflash2 + PMU128 — needs an image built from dflash2-pmu128/Dockerfile),
+      # or "mtp3" (vendored florianbrede lane — see mtp3-pmu128/README.md; also
+      # needs its own image). See .env for the exact build/run rows.
       # DFlash2 drafter (dflash2 lane; resolved from the HF cache snapshot at boot)
       DFLASH_MODEL: "${DFLASH_MODEL:-incoai/GLM-5.3-Flash-DFlash2}"
       DFLASH_REVISION: "${DFLASH_REVISION:-dc77ff1c99eeb2df044ee3d4f0094eb033fee410}"
       DFLASH_TOKENS: "${DFLASH_TOKENS:-7}"
-      # PMU128 prefix matching (mtp3 lane; needs the mtp3-pmu128 image)
+      # PMU128 prefix matching (mtp3/dflash2pmu lanes; needs a patch-baked image)
       PMU: "${PMU:-0}"
       DISABLE_FLASHINFER_AUTOTUNE: "${DISABLE_FLASHINFER_AUTOTUNE:-1}"
       VLLM_MARLIN_USE_ATOMIC_ADD: "${VLLM_MARLIN_USE_ATOMIC_ADD:-0}"
@@ -159,8 +159,9 @@ services:
         [ -f "$$M/config.json" ] || { echo "FATAL: $$M/config.json missing — run prepare-model.sh on this node (see README)" >&2; exit 2; }
         grep -q '"quant_method": "gptq"' "$$M/config.json" || { echo "FATAL: $$M/config.json is not the GPTQ-surgery config (run prepare-model.sh)" >&2; exit 2; }
         # ---- APC patch: hybrid prefix-cache hits (fail-closed) ----
-        # (dflash2 lane only — the mtp3-pmu128 image bakes the #53388/#53906
-        # coordinator patches instead; the anchors here would not match.)
+        # (plain dflash2 lane only — the mtp3-pmu128 / dflash2-pmu128 images
+        # bake the #53388/#53906 + fine-hit patch series instead; the anchors
+        # here would not match.)
         if [ "$${LANE:-dflash2}" = "dflash2" ]; then
           python3 /patches/patch_hybrid_prefix_hit.py
         fi
@@ -197,10 +198,17 @@ services:
         # other count wedges the boot). mtp3 = native MTP k=3 with
         # disable_eagle_block_drop=true (upstream PR #53388, baked into the
         # mtp3-pmu128 image) + PMU128 prefix matching + prompt-token details
-        # (florianbrede's validated profile, forum 382632 / mtp3-pmu128/README).
         if [ "$${LANE:-dflash2}" = "mtp3" ]; then
           ARGS+=(--speculative-config "{\"method\":\"mtp\",\"num_speculative_tokens\":3,\"disable_eagle_block_drop\":true}")
           [ "$${PMU:-0}" != "0" ] && ARGS+=(--prefix-match-unit 128 --enable-prompt-tokens-details)
+        elif [ "$${LANE:-dflash2}" = "dflash2pmu" ]; then
+          # DFlash2 k=7 + PMU128 (florianbrede's external-drafter profile,
+          # vendored in dflash2-pmu128/; baked patches add fine-grained SWA
+          # hits + scheduler LCM block alignment, so the boot-time hybrid-APC
+          # patch is NOT applied in this lane).
+          ARGS+=(--speculative-config "{\"method\":\"dflash\",\"model\":\"$$DFLASH_MODEL_DIR\",\"num_speculative_tokens\":$${DFLASH_TOKENS:-7},\"disable_eagle_block_drop\":true}")
+          [ "$${PMU:-0}" != "0" ] && ARGS+=(--prefix-match-unit 128 --enable-prompt-tokens-details)
+          [ "$${PMU:-0}" != "0" ] && ARGS+=(--prefix-cache-retention-interval 0)
         else
           ARGS+=(--speculative-config "{\"method\":\"dflash\",\"model\":\"$$DFLASH_MODEL_DIR\",\"num_speculative_tokens\":$${DFLASH_TOKENS:-7}}")
         fi

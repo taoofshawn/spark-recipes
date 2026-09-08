@@ -82,8 +82,36 @@ it on BOTH nodes with the local `hf` CLI (`~/.local/bin/hf`):
 `~/.local/bin/hf download <owner>/<model> --revision <rev>`.
 
 BLOCK if the checkpoint is absent — serving is offline; it will not download at
-runtime. State exactly which revision is missing and that it must be cached on both
-nodes.
+runtime. State exactly which revision is missing and that it must be cached on both nodes.
+
+### 3b. Verify the model-name proxy matches the backend (leader only)
+
+Every recipe serves on :8000; clients talk to the `model-name-proxy` on :4000
+with model `spark-model` (see `model-name-proxy/README.md`). The proxy rewrites
+`"model"` in request bodies to `BACKEND_MODEL` — if it doesn't match the recipe
+you just brought up, chat requests fail with vLLM's model-not-found error while
+`/health` and `/v1/models` still return 200.
+
+```bash
+# The recipe's real served name:
+grep SERVED_MODEL_NAME ~/code/spark-recipes/<recipe>/.env   # or its compose default
+
+# What the proxy currently targets:
+ssh spark-0f0b.shawndo.intra 'grep ^BACKEND_MODEL ~/code/spark-recipes/model-name-proxy/.env'
+
+# Mismatch? Update it on the leader and restart (spoofed client name unchanged):
+ssh spark-0f0b.shawndo.intra "sed -i 's/^BACKEND_MODEL=.*/BACKEND_MODEL=<real-served-name>/' ~/code/spark-recipes/model-name-proxy/.env"
+ssh spark-0f0b.shawndo.intra 'cd ~/code/spark-recipes/model-name-proxy && docker compose --env-file .env up -d'
+
+# End-to-end check through the proxy (leader or from eve):
+curl -s http://spark.shawndo.intra:4000/v1/models | jq -r .data[].id   # -> spark-model
+curl -s http://spark.shawndo.intra:4000/v1/chat/completions -H 'Content-Type: application/json' \
+  -d '{"model":"spark-model","messages":[{"role":"user","content":"Say hi in one word"}],"max_tokens":5}' \
+  | jq -r '.model, .choices[0].message.content'
+# In mode A (SPOOF_RESPONSES=0) .model shows the REAL backend name — that is the
+# definitive "which model is actually serving" check. Mode B hides it; the chat
+# reply itself (vs 404 model-not-found) proves BACKEND_MODEL matched.
+```
 
 ### 4. Set the target config in the recipe's `.env`
 

@@ -56,8 +56,10 @@ sync; echo 3 | sudo tee /proc/sys/vm/drop_caches
 python3 -m venv /tmp/hfvenv && /tmp/hfvenv/bin/pip install -q -U huggingface_hub
 /tmp/hfvenv/bin/hf download nvidia/Qwen3.8-Flash-Next-NVFP4 \
     --revision fc694b54fb0174e0913e6adf86691ef85a4ead47
-# Then point .env MODEL_HOST_PATH at the snapshot dir, e.g.
-#   MODEL_HOST_PATH=/home/sdrew/.cache/huggingface/hub/models--nvidia--Qwen3.8-Flash-Next-NVFP4/snapshots/fc694b54fb0174e0913e6adf86691ef85a4ead47
+# Then set .env HF_CACHE to your default HF cache location (already the
+# default in the shipped .env); the boot block resolves
+#   hub/models--nvidia--Qwen3.8-Flash-Next-NVFP4/snapshots/<rev>
+# inside the container at the default cache location.
 
 # 1) worker (rank 1) FIRST, leader ~30 s later:
 docker compose --env-file .env --env-file .env.node1 up -d
@@ -99,11 +101,11 @@ docker logs qwen38fn-nvfp4 2>&1 | grep -F "speculative_config"
   enabled (TTFT 3–4 s @ ~200K input) — flip `PREFIX_CACHE=1` to test, at your
   own crash risk.
 - **MTP head load needs the modelopt.py overlay** (draft-local layer index +
-  FP8_BLOCK_SCALES branch). Community reports an additional `FP8_PB_WO`
-  quant_algo case (m0l0 post 17 patched it locally for MTP on the 09-07
-  nightly); the vendored modelopt.py carries the two original fixes — if MTP
-  load fails with `w2_weight_scale_inv`, check upstream for an updated
-  overlay before debugging locally.
+  FP8_BLOCK_SCALES branch + `FP8_PB_WO` alias). The pinned checkpoint stores
+  exactly one MTP expert layer with `quant_algo=FP8_PB_WO`
+  (`mtp.layers.0.mlp.experts`, group 128; vLLM-side `mtp.layers.48.*`); that
+  branch routes it to the generic block-FP8 MoE method. Vendored 2026-09-08
+  (forum 382476 posts 15/17/22; same fix as MiaAI-Lab #39).
 - **Rejected-at-TP2 knobs** (measured worse upstream, kept off): expert
   parallel (-4%), `index_share_for_mtp_iteration` (+3% median, prose -6%),
   `--async-scheduling` (-3%), NCCL 8 channels (-3%).

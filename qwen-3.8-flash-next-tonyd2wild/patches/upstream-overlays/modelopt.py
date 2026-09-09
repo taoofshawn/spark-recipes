@@ -1777,7 +1777,13 @@ class ModelOptMixedPrecisionConfig(ModelOptQuantConfigBase):
                     quant_config=self.w4a16_nvfp4_config,
                     moe_config=layer.moe_config,
                 )
-            if quant_algo in ("FP8_BLOCK_SCALES", "FP8_BLOCK"):
+            # FP8_PB_WO: the pinned checkpoint (fc694b54) stores the MTP routed
+            # experts with this algo (config.json line ~750; only FP8_PB_WO layer
+            # in the checkpoint). Without it the branch falls through and the
+            # load dies with "Layer mtp.layers.48.mlp.experts has no parameter
+            # 'w2_weight_scale_inv'" (forum 382476 posts 15/17/22; same fix as
+            # MiaAI-Lab #39 / andrei.gnezdilov's patch, 2026-09-07/08).
+            if quant_algo in ("FP8_BLOCK_SCALES", "FP8_BLOCK", "FP8_PB_WO"):
                 # Kai/2Wild 2026-09-05: NVIDIA's Qwen3.8-Flash-Next-NVFP4 stores the MTP
                 # routed experts as 128x128 block-scaled FP8 (weight_scale_inv). The mixed
                 # config had no branch for it; route to vLLM's generic block-FP8 MoE method.

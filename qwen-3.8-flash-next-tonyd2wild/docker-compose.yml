@@ -26,8 +26,12 @@ services:
       start_period: 900s
     volumes:
       # NVFP4 checkpoint (byte-for-byte; no requantizing). EACH rank needs a
-      # readable local copy.
-      - ${MODEL_HOST_PATH}:/models/qwen38fn:ro
+      # readable local copy: provision with a plain
+      #   hf download nvidia/Qwen3.8-Flash-Next-NVFP4 --revision <rev>
+      # on each node (default HF cache location), set HF_CACHE in .env to that
+      # same path, and the command block resolves the snapshot inside the
+      # container at the default cache location (/root/.cache/huggingface).
+      - ${HF_CACHE}:/root/.cache/huggingface:ro
       # Cache root -> /root/.cache (torch/inductor caches; node-local disk)
       - ${CACHE_HOST_PATH}:/root/.cache
       # ---- overlays (upstream OVERLAYS=1 mechanism; paths inside the stock
@@ -67,9 +71,11 @@ services:
       GMU: "${GMU:-0.70}"
       MAX_LEN: "${MAX_LEN:-262144}"
       MAX_SEQS: "${MAX_SEQS:-6}"
+      MTP: "${MTP:-3}"
       MNBT: "${MNBT:-4096}"
       KV_DTYPE: "${KV_DTYPE:-fp8_e4m3}"
-      MTP: "${MTP:-3}"
+      MODEL: "${MODEL:-nvidia/Qwen3.8-Flash-Next-NVFP4}"
+      MODEL_REVISION: "${MODEL_REVISION:-}"
       GRAPHS: "${GRAPHS:-nocompile}"
       PREFIX_CACHE: "${PREFIX_CACHE:-0}"
       PLE_MODE: "${PLE_MODE:-none}"
@@ -146,9 +152,25 @@ services:
           export NCCL_IB_GID_INDEX
         fi
 
-        # ---- preflight: checkpoint present (offline serving) ----
-        M=/models/qwen38fn
-        [ -f "$$M/config.json" ] || { echo "FATAL: $$M/config.json missing — download nvidia/Qwen3.8-Flash-Next-NVFP4 (see .env) on this node" >&2; exit 2; }
+        # ---- preflight: resolve the checkpoint inside the default HF cache
+        # (offline). The plain `hf download` location is the contract: the
+        # snapshot must exist under the hub cache mounted at
+        # /root/.cache/huggingface, preferring the pinned MODEL_REVISION, else
+        # any snapshot with a config.json.
+        resolve_snapshot() {
+          local dir="/root/.cache/huggingface/hub/models--$$(echo "$${MODEL}" | sed 's|/|--|g')"
+          if [ -n "$${MODEL_REVISION:-}" ] && [ -d "$$dir/snapshots/$$MODEL_REVISION" ]; then echo "$$dir/snapshots/$$MODEL_REVISION"; return 0; fi
+          local snap; for snap in "$$dir"/snapshots/*/; do
+            [ -f "$$snap/config.json" ] || continue
+            echo "$$snap"; return 0
+          done
+          echo ""
+        }
+        M="$$(resolve_snapshot)"
+        # HF_CACHE is a compose-side variable (host path for the volume); it is
+        # NOT in the container env — reference the in-container mount path here.
+        [ -f "$$M/config.json" ] || { echo "FATAL: checkpoint not found under /root/.cache/huggingface (the HF_CACHE mount). Run 'hf download $${MODEL} --revision $${MODEL_REVISION:-<rev>}' on this node and set HF_CACHE in .env." >&2; exit 2; }
+        echo "[qwen38fn] weights=$$M"
 
         ARGS=(serve "$$M"
           --served-model-name "$${SERVED_MODEL_NAME:-qwen3.8-flash-next}"

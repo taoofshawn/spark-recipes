@@ -20,9 +20,9 @@ MODEL=models--Intel--GLM-5.3-Flash-W4A16-AutoRound
 # rclone for fast data transfer (use cx7 link for transfer)
 rclone sync  ~/.cache/huggingface/hub/$MODEL/ spark-6d14:.cache/huggingface/hub/$MODEL/ \
   --copy-links \
-  --multi-thread-streams=32 \
-  --transfers=16 \
-  --checkers=16 \
+  --multi-thread-streams=64 \
+  --transfers=32 \
+  --checkers=32 \
   --progress \
   --exclude "*.incomplete"
 

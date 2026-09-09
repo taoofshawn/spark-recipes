@@ -99,9 +99,11 @@ grep SERVED_MODEL_NAME ~/code/spark-recipes/<recipe>/.env   # or its compose def
 # What the proxy currently targets:
 ssh spark-0f0b.shawndo.intra 'grep ^BACKEND_MODEL ~/code/spark-recipes/model-name-proxy/.env'
 
-# Mismatch? Update it on the leader and restart (spoofed client name unchanged):
-ssh spark-0f0b.shawndo.intra "sed -i 's/^BACKEND_MODEL=.*/BACKEND_MODEL=<real-served-name>/' ~/code/spark-recipes/model-name-proxy/.env"
-ssh spark-0f0b.shawndo.intra 'cd ~/code/spark-recipes/model-name-proxy && docker compose --env-file .env up -d'
+# Mismatch? Update it via the repo and restart (spoofed client name unchanged):
+#   1) Edit model-name-proxy/.env BACKEND_MODEL on the WORKSTATION repo.
+#   2) Land it: topic branch -> PR -> main (branch protection).
+#   3) Pull on the leader, then recreate the proxy:
+ssh spark-0f0b.shawndo.intra 'cd ~/code/spark-recipes && git pull origin main && cd model-name-proxy && docker compose --env-file .env up -d'
 
 # End-to-end check through the proxy (leader or from eve):
 curl -s http://spark.shawndo.intra:4000/v1/models | jq -r .data[].id   # -> spark-model
@@ -125,8 +127,9 @@ SPEC_TOKENS=7        # DFlash2 block size 8 - 1; the compose FATAL-errors otherw
 ```
 
 The compose `command` block hard-enforces these invariants and FATAL-exits with a
-clear message if violated — treat those messages as authoritative. Sync the edited
-`.env` to BOTH nodes with `scp`.
+clear message if violated — treat those messages as authoritative. Land the `.env`
+change via the repo (topic branch -> PR -> `main`, then `git pull origin main` on
+BOTH nodes) — never edit or `scp` files directly onto the nodes.
 
 ### 5. Cache ritual (both nodes, before every launch)
 

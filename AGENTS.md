@@ -374,3 +374,7 @@ states what changed, the measured before/after, and any gotchas hit.
 - **Don't** edit `upstream/` vendored files; recipe-level files are the customization layer.
 - **Don't** change `gpu_memory_utilization`, `max_num_seqs`, KV dtype, or backend names across
   recipes as if they were shared knobs — each was tuned for its image.
+- **Don't** edit files directly on the nodes over SSH (`sed -i`, `scp`, heredocs, scripted
+  writes). All recipe/config changes are made in the workstation repo and reach the nodes
+  through the normal git flow: topic branch → PR → `main`, then `git pull origin main` on both
+  nodes. The node working trees must stay pristine (a dirty node tree is a deployment hazard).

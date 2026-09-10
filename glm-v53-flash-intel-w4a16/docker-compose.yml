@@ -211,10 +211,13 @@ services:
           # DFlash2 k=7 + PMU128 (florianbrede's external-drafter profile,
           # vendored in dflash2-pmu128/; baked patches add fine-grained SWA
           # hits + scheduler LCM block alignment, so the boot-time hybrid-APC
-          # patch is NOT applied in this lane).
+          # patch is NOT applied in this lane). Retention-0 is an ENV VAR in
+          # this vLLM build (florianbrede's launch.sh sets
+          # VLLM_PREFIX_CACHE_RETENTION_INTERVAL=0) — there is no
+          # --prefix-cache-retention-interval CLI flag (argparse rejects it).
           ARGS+=(--speculative-config "{\"method\":\"dflash\",\"model\":\"$$DFLASH_MODEL_DIR\",\"num_speculative_tokens\":$${DFLASH_TOKENS:-7},\"disable_eagle_block_drop\":true}")
-          [ "$${PMU:-0}" != "0" ] && ARGS+=(--prefix-match-unit 128 --enable-prompt-tokens-details)
-          [ "$${PMU:-0}" != "0" ] && ARGS+=(--prefix-cache-retention-interval 0)
+          [ "$${PMU:-0}" != "0" ] && ARGS+=(--enable-prefix-caching --prefix-match-unit 128 --enable-prompt-tokens-details)
+          [ "$${PMU:-0}" != "0" ] && export VLLM_PREFIX_CACHE_RETENTION_INTERVAL=0
         else
           ARGS+=(--speculative-config "{\"method\":\"dflash\",\"model\":\"$$DFLASH_MODEL_DIR\",\"num_speculative_tokens\":$${DFLASH_TOKENS:-7}}")
         fi

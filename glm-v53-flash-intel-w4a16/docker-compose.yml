@@ -172,10 +172,11 @@ services:
           python3 /patches/patch_hybrid_prefix_hit.py
         fi
 
-        # ---- dflash2 lane: resolve the DFlash2 drafter to its HF snapshot dir
-        # (offline). mtp3 lane needs no drafter checkpoint. ----
+        # ---- dflash2 / dflash2pmu lanes: resolve the DFlash2 drafter to its HF
+        # snapshot dir (offline). mtp3 lane needs no drafter checkpoint, so it
+        # is the only lane that skips this. ----
         DFLASH_MODEL_DIR=""
-        if [ "$${LANE:-dflash2}" = "dflash2" ]; then
+        if [ "$${LANE:-dflash2}" != "mtp3" ]; then
           resolve_snapshot() {
             local hub="$1" rev="$2"
             local dir="/cache/huggingface/hub/models--$$(echo "$$hub" | sed 's|/|--|g')"

@@ -8,6 +8,12 @@ is a **from-scratch vLLM build on the PilcoTHINK Dockerfile lane** with native
 DSV4 vision + native DSpark + B12X baked in — no monkey-patch mods, no
 encoder-file copies, no runtime hotfix chain (unlike `vision-miaai`).
 
+The image is **Dickson's build of that lane** (`dicksondickson/vllm_spark_dsv4`
+@ `38db013b`), which additionally bakes in the upstream **DeepSeek V4 tool-call
+parser fix** (`vllm/parser/deepseek_v4.py` from vLLM `d98c8c03`, #55954) — the
+measured delta behind Dickson's 93/100 vs the earlier 0rand image's 86/100
+tool-eval-bench score (see changelog).
+
 ## What it serves
 
 - **Model:** `deepseek-ai/DeepSeek-V4-Flash-Vision-Exp` (revision
@@ -21,7 +27,7 @@ encoder-file copies, no runtime hotfix chain (unlike `vision-miaai`).
 
 | Component | Pin |
 |---|---|
-| Image | `0rand/vllm_spark_dsv4-0.29-b12x:latest@sha256:85eb91ee…` (digest-pinned, pushed 2026-09-08) — tag says 0.29, actual vLLM is `0.28.1rc1.dev475+g6fbb00b18` (`6fbb00b1`, native DSV4 vision + DSpark upstream) |
+| Image | `dicksondickson/vllm_spark_dsv4:0.29-b12x@sha256:899d174e…` (digest-pinned, pushed 2026-09-10) — Dickson's build of the PilcoTHINK `38db013b` lane; tag says 0.29, actual vLLM is `0.28.1rc1.dev475+g6fbb00b18` (`6fbb00b1`, native DSV4 vision + DSpark upstream) + the upstream `d98c8c03` tool-call parser fix baked in |
 | vLLM | `6fbb00b1` (0.28.1rc1.dev475 + `.d20260907`) |
 | PyTorch | 2.13.0+cu130 (CUDA 13.0.2 base) |
 | FlashInfer | 0.6.18 @ `27d5b029` (DSV4 dual-cache dispatch C4+C128) |
@@ -151,9 +157,14 @@ warm one; upstream reports ~10 min).
   list; mirror that if upstream updates.
 - Image build lane: [gpdev-Pilcothink/DGX_Spark_vllm_Dockerfile](https://github.com/gpdev-Pilcothink/DGX_Spark_vllm_Dockerfile)
   (0.28/DSV4F-Vision-exp; PILCOTHINK's tool-parser patch included, forum #180/#185).
+- Image build (Dickson): [dicksondickson/vllm_spark_dsv4](https://hub.docker.com/r/dicksondickson/vllm_spark_dsv4)
+  — Dickson's build of the `38db013b` lane, bakes in the upstream `d98c8c03`
+  tool-call parser fix (forum #194).
 - Forum: [DeepSeek v4 Flash Vision Exp is Released as Open Weights](https://forums.developer.nvidia.com/t/deepseek-v4-flash-vision-exp-is-released-as-open-weights/381911)
   — 0rand's posts from 09-08/09-09: image push (#151), k=3 thinking regression
-  (#171), k=6 + 93/100 receipt (#173/#176), tool-result image re-homing (#177).
+  (#171), k=6 + 93/100 receipt (#173/#176), tool-result image re-homing (#177);
+  parser-fix provenance (#185), Dickson image switch (#194/#214), locked
+  benchmark comparison (#212).
 - Sibling recipe: [`../deepseek-v4-flash-vision-miaai`](../deepseek-v4-flash-vision-miaai)
   (Anemll 0.1.1 + NVFP4-MLA + hotfix chain — the quality-reference lane;
   this 0rand lane is the speed/context lane with identical weights).
@@ -165,3 +176,31 @@ warm one; upstream reports ~10 min).
 
 Serves on all 2 GPUs per node. Tear down any other model container before
 starting. One recipe at a time.
+
+## Changelog
+
+### 2026-09-10 — switch to Dickson image (upstream tool-call parser fix)
+
+**What changed:** the image pin moved from `0rand/vllm_spark_dsv4-0.29-b12x`
+@ `85eb91ee` (PilcoTHINK `9df77f2e` lane) to `dicksondickson/vllm_spark_dsv4`
+@ `899d174e` (Dickson's build of the PilcoTHINK `38db013b` lane). Same vLLM
+base `6fbb00b1`, same model pin, same `o_proj` donor — the only functional
+delta is that `38db013b` **bakes in the upstream DeepSeek V4 tool-call parser
+fix** (`vllm/parser/deepseek_v4.py` from vLLM `d98c8c03`, "[Bugfix] Parse DSML
+tool calls when the model omits the tool_calls wrapper" #55954). The earlier
+0rand image predates that commit.
+
+**Why:** the parser fix is the measured delta behind the higher tool-call
+quality on this image. stu.miller's locked v1.8.0 comparison (forum #212):
+**pilco/0rand 86 vs Dickson 93** tool-eval-bench (Dickson 93/100 post #176,
+92/100 post #194). 0rand himself switched to the same image (forum #214) but
+has not yet pushed his own hub tag.
+
+**Not adopted:** `--async-scheduling` (Dickson's only other change, post #194,
+paired with `MAX_NUM_SEQS=4`, post #200). No measured claim at our seqs=8 /
+batch-4096 profile, and it wasn't shipped in 0rand's `.env.sample` — left off
+to avoid an un-validated knob on a fragile cross-recipe dimension.
+
+**Gotchas:** image is arm64 (GB10-correct), ~24.2 GiB pulled; cold-boot JIT is
+unchanged. No flag/env changes — kv-cache-dtype fp8, FLASHINFER_MLA_SPARSE_DSV4,
+AOT=0/BREAKABLE=1, GMU 0.87, k=6, port 8000, worker-first all preserved.

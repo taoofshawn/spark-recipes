@@ -2,8 +2,10 @@
 # Adoption of 0rand/DeepSeek-v4-flash-ver-2sparks-vllm-029-0rand (upstream @ 74e9f11,
 # 2026-09-09) into this repo's docker-compose conventions: shared .env +
 # per-node .env.node0/.env.node1, GID auto-detect, worker-first start.
-# The image is a from-scratch build (PilcoTHINK Dockerfile lane) with native
-# vision + DSpark + B12X baked in — no runtime hotfix chain, no patch mounts.
+# The image is a from-scratch build (Dickson's build of the PilcoTHINK Dockerfile
+# lane @ 38db013b) with native vision + DSpark + B12X baked in — no runtime hotfix
+# chain, no patch mounts. It additionally bakes in the upstream DeepSeek V4
+# tool-call parser fix (vLLM d98c8c03), which the earlier 0rand image lacks.
 # Upstream's deliberate serving choices are preserved; deviations are
 # documented in README.md ("Cluster deviations").
 services:

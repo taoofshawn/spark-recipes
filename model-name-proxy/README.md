@@ -1,16 +1,16 @@
 # model-name-proxy
 
 Generic-name front for the vLLM recipes: clients always talk to
-`http://spark.shawndo.intra:4000` with model **`spark-model`**, while the
+`http://spark.shawndo.intra:4000` with model **`spark-llm`**, while the
 actual backend recipe serves on **:8000** under its own name. Switching
 backends is a one-line `.env` change — no client updates.
 
 ```mermaid
 flowchart LR
-    C["clients<br/>model=spark-model"] -->|:4000| P["model-name-proxy<br/>(nginx, host net)"]
+    C["clients<br/>model=spark-llm"] -->|:4000| P["model-name-proxy<br/>(nginx, host net)"]
     P -->|:8000, model rewritten to real name| V["vLLM recipe<br/>(active backend)"]
     V -->|"streaming SSE, /metrics, /health"| P
-    P -->|"model=id spoofed to spark-model"| C
+    P -->|"model=id spoofed to spark-llm"| C
 ```
 
 ## Why this exists
@@ -18,7 +18,7 @@ flowchart LR
 1. **Model-name churn.** Every recipe serves a different model name
    (`deepseek-v4-flash`, `glm-5.3-flash`, ...). Pointing clients directly at
    vLLM means updating every client whenever the backend recipe changes. With
-   the proxy, `spark-model` never changes.
+   the proxy, `spark-llm` never changes.
 2. **Transparent metrics.** The earlier SparkRun proxy hid URLs (spec-decode
    metrics) from benchmark runs. This proxy is a *transparent* pass-through:
    `/metrics` (including the DSpark
@@ -47,10 +47,10 @@ advertising the stable generic name); request normalization is also always on.
 
 | mode | `SPOOF_RESPONSES` | `/v1/models` says | chat/completions responses say | use |
 |---|---|---|---|---|
-| A — real name in completions | `0` | `spark-model` | real backend name (`deepseek-v4-flash`, …) | default; model list generic, completion responses reveal the active model |
-| B — full spoof | `1` | `spark-model` | `spark-model` | real name must never leak anywhere |
+| A — real name in completions | `0` | `spark-llm` | real backend name (`deepseek-v4-flash`, …) | default; model list generic, completion responses reveal the active model |
+| B — full spoof | `1` | `spark-llm` | `spark-llm` | real name must never leak anywhere |
 
-Request normalization (client sends `spark-model` → backend hears its real
+Request normalization (client sends `spark-llm` → backend hears its real
 served name) is ALWAYS on in both modes — no client reconfiguration is ever
 needed to switch models or modes.
 
@@ -98,7 +98,7 @@ docker compose --env-file .env up -d --build
 Verify:
 
 ```bash
-curl -s http://spark.shawndo.intra:4000/v1/models | jq -r .data[].id   # -> spark-model
+curl -s http://spark.shawndo.intra:4000/v1/models | jq -r .data[].id   # -> spark-llm
 curl -s -o /dev/null -w '%{http_code}\n' http://spark.shawndo.intra:4000/health   # 200
 curl -s http://spark.shawndo.intra:4000/metrics | grep spec_decode     # raw passthrough
 ```
@@ -116,10 +116,10 @@ curl -s http://spark.shawndo.intra:4000/metrics | grep spec_decode     # raw pas
 
 | var | default | meaning |
 |---|---|---|
-| `SPOOF_MODEL` | `spark-model` | the name clients see |
+| `SPOOF_MODEL` | `spark-llm` | the name clients see |
 | `BACKEND_MODEL` | `deepseek-v4-flash` | the ACTIVE recipe's real served name; request rewrites target it |
 | `SPOOF_FROM` | all known recipe names | real names rewritten in responses |
-| `SPOOF_RESPONSES` | `0` | response spoofing toggle: `0` = mode A (real names visible), `1` = mode B (everything says `spark-model`) |
+| `SPOOF_RESPONSES` | `0` | response spoofing toggle: `0` = mode A (real names visible), `1` = mode B (everything says `spark-llm`) |
 | `UPSTREAM` | `127.0.0.1:8000` | vLLM backend address |
 
 - **`BACKEND_MODEL` must match the running recipe's `--served-model-name`.**

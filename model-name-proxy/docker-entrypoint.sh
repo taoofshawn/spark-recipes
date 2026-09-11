@@ -7,13 +7,13 @@
 #   2. injects BACKEND_MODEL and expands $SPOOF_MODEL / $UPSTREAM with envsubst
 #
 # Env:
-#   SPOOF_MODEL    name clients see                    (default: spark-model)
+#   SPOOF_MODEL    name clients see                    (default: spark-llm)
 #   BACKEND_MODEL  ACTIVE recipe's real served name    (default: deepseek-v4-flash)
 #   SPOOF_RESPONSES  "1" = rewrite response model names too (JSON + SSE);
 #                    "0" = responses untouched (mode A: see the real model)
 #                    (default: 1)
 set -euo pipefail
-SPOOF_MODEL="${SPOOF_MODEL:-spark-model}"
+SPOOF_MODEL="${SPOOF_MODEL:-spark-llm}"
 BACKEND_MODEL="${BACKEND_MODEL:-deepseek-v4-flash}"
 UPSTREAM="${UPSTREAM:-127.0.0.1:8000}"
 SPOOF_FROM="${SPOOF_FROM:-deepseek-v4-flash,glm-5.3-flash}"

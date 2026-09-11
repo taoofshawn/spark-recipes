@@ -3,7 +3,59 @@
 Working notes for future update/maintenance sessions on this recipe. The
 README is the deploy doc; this file is the memory.
 
-## Current state (2026-09-08)
+## Lane receipts (author-reported, different images/protocols — do not mix)
+
+| | dflash2pmu (default) | legacy dflash2 | mtp3 |
+|---|---|---|---|
+| spec decoding | DFlash2 k=7 + `disable_eagle_block_drop` | DFlash2 k=7 | native MTP3 |
+| prefix matching | `--prefix-match-unit 128`, patches baked | block 2304 + boot-time hybrid APC patch | `--prefix-match-unit 128`, patches baked |
+| drafter rev | `bf582e4e…` (08-31) | `dc77ff1c…` (08-28) | none |
+| KV pin / pool | 13.5 GB → ~1.81–1.87M tokens | 12.52 GB → 1.75M tokens | 13.5 GB → 1.92M tokens |
+| seqs | 6 | 8 | 6 |
+| receipts | florianbrede: TEB **90** (158/176), PP 1,679, TG 33.1/54.7 @C1/C4, ~82-token recompute | miken: TEB 90, code accept 0.68–0.71 | florianbrede: TEB 91, 108 tok/s @ C6 |
+
+## On-cluster verification (2026-09-11, this cluster)
+
+Brought up from `main` on both nodes; both containers healthy on
+`glm53-intel-dflash2-pmu128:20260908`:
+
+- Boot markers: `Resolved architecture: DFlash2DraftModel`,
+  `speculative_config=SpeculativeConfig(method='dflash', …
+  num_speculative_tokens': 7 …)`, `Using Eagle3 auxiliary layers from
+  config: (6,15,25,34,43)`, `Setting attention block size to 4608`,
+  `GPU KV cache size: 1,867,536 tokens`, rejection-sampler warmup, Model
+  loading 84.68 GiB / 302.6 s.
+- Acceptance **0.28–0.32** overall, per-position deltas
+  `[35,21,13,5,4,3,3]` — monotonic decay, consistent with florianbrede's
+  0.34/0.37 (his were long concurrent benchmarks; these are short
+  single-prompt reads, so the lower overall figure is expected).
+- PMU128 replay: 171-token prompt →
+  `usage.prompt_tokens_details.cached_tokens=128` on first and repeat (one
+  128-block hit + 43-token residue — matches the lane's documented residue
+  behavior). Sub-128-token prompts report `cached_tokens=0` — expected,
+  they never fill a PMU unit.
+- Response `usage` in this build: non-stream chat responses omit `usage`;
+  stream with `"stream_options": {"include_usage": true}` to get
+  `prompt_tokens_details.cached_tokens` / `created_cache_tokens`.
+- This build's `/metrics` spec-decode counters:
+  `vllm:spec_decode_num_draft_tokens_total`,
+  `vllm:spec_decode_num_accepted_tokens_total`,
+  `vllm:spec_decode_num_accepted_tokens_per_pos_total` (with
+  `position="N"` label), plus `_created` variants.
+- The model-name proxy flapped "unhealthy" while :8000 was down mid-switch
+  (its healthcheck targets the backend) and recovered automatically once
+  serving resumed.
+
+## Current state (2026-09-11)
+
+- **`dflash2pmu` is now the DEFAULT lane** (`.env` ships `LANE=dflash2pmu`
+  + `IMAGE=glm53-intel-dflash2-pmu128:20260908`); on-cluster verification
+  above. The README has been reorganized as a fresh-runner deploy doc:
+  lane feature comparison + deploy steps up front, historical material
+  (receipts, A/B history, update passes) lives here in `research.md`.
+  Legacy lanes (dflash2 / mtp3) remain opt-in alternatives documented in
+  the README's "Switching lanes".
+
 - Model pinned `5eee1846…` (Intel HEAD, 2026-09-01 upload; re-verified
   2026-09-07 via HF API — UNCHANGED, no new revisions), image digest
   `4def0ef6…` (sm121-v11-dflash2, single-arm64 manifest, verified via

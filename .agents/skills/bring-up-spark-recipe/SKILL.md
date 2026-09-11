@@ -87,7 +87,7 @@ runtime. State exactly which revision is missing and that it must be cached on b
 ### 3b. Verify the model-name proxy matches the backend (leader only)
 
 Every recipe serves on :8000; clients talk to the `model-name-proxy` on :4000
-with model `spark-model` (see `model-name-proxy/README.md`). The proxy rewrites
+with model `spark-llm` (see `model-name-proxy/README.md`). The proxy rewrites
 `"model"` in request bodies to `BACKEND_MODEL` — if it doesn't match the recipe
 you just brought up, chat requests fail with vLLM's model-not-found error while
 `/health` and `/v1/models` still return 200.
@@ -106,9 +106,9 @@ ssh spark-0f0b.shawndo.intra 'grep ^BACKEND_MODEL ~/code/spark-recipes/model-nam
 ssh spark-0f0b.shawndo.intra 'cd ~/code/spark-recipes && git pull origin main && cd model-name-proxy && docker compose --env-file .env up -d'
 
 # End-to-end check through the proxy (leader or from eve):
-curl -s http://spark.shawndo.intra:4000/v1/models | jq -r .data[].id   # -> spark-model
+curl -s http://spark.shawndo.intra:4000/v1/models | jq -r .data[].id   # -> spark-llm
 curl -s http://spark.shawndo.intra:4000/v1/chat/completions -H 'Content-Type: application/json' \
-  -d '{"model":"spark-model","messages":[{"role":"user","content":"Say hi in one word"}],"max_tokens":5}' \
+  -d '{"model":"spark-llm","messages":[{"role":"user","content":"Say hi in one word"}],"max_tokens":5}' \
   | jq -r '.model, .choices[0].message.content'
 # In mode A (SPOOF_RESPONSES=0) .model shows the REAL backend name — that is the
 # definitive "which model is actually serving" check. Mode B hides it; the chat

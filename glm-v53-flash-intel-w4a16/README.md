@@ -11,7 +11,7 @@ speculative decoding and fine-grained prefix caching, at 1M-token context.
   + **PMU128** prefix matching (`--prefix-match-unit 128`), patches baked into
   the serving image. KV pool ~1.87M tokens at 1M context (13.5 GB pin, fp8 KV).
 - **Port** 8000 (repo convention); served name `glm-5.3-flash`; the
-  model-name proxy serves clients `spark-model` on :4000.
+  model-name proxy serves clients `spark-llm` on :4000.
 - **Modalities**: text, images/video, tool calling (`glm47` parser), thinking
   ON at effort `high` (explicit server-side pins: temp 1.0 / top_p 0.95 /
   thinking true / reasoning_effort high via `--generation-config vllm` +
@@ -132,10 +132,10 @@ curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8000/health   # 200 â€
 curl -s http://127.0.0.1:8000/v1/models        # "id":"glm-5.3-flash", max_model_len 1048576
 ```
 
-End-to-end through the model-name proxy (clients use `spark-model`):
+End-to-end through the model-name proxy (clients use `spark-llm`):
 ```bash
 curl -s http://spark.shawndo.intra:4000/v1/chat/completions -H 'Content-Type: application/json' \
-  -d '{"model":"spark-model","messages":[{"role":"user","content":"Say hi in one word"}],"max_tokens":32}' | jq -r '.choices[0].message.content'
+  -d '{"model":"spark-llm","messages":[{"role":"user","content":"Say hi in one word"}],"max_tokens":32}' | jq -r '.choices[0].message.content'
 ```
 
 ## Boot markers (leader log)

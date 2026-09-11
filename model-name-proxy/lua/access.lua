@@ -1,7 +1,7 @@
 -- access-phase hook for model-name-proxy (OpenResty).
 --
 -- Rewrites the `"model"` field of JSON request bodies to the backend's real
--- served name (BACKEND_MODEL env), so clients can always send "spark-model"
+-- served name (BACKEND_MODEL env), so clients can always send "spark-llm"
 -- while vLLM hears a name it actually serves.
 --
 -- Only POST/PUT bodies are touched; bodies without a "model" key pass through

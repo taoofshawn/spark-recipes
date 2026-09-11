@@ -33,6 +33,12 @@ http {
         listen 4000;
         server_name _;
 
+        # Compaction requests can carry multi-MB JSON bodies: omp compacts a
+        # ~1M-token window and snapcompact includes archived image frames.
+        # nginx's default is 1m -> 413 on big bodies. 64m is ample, and with
+        # proxy_request_buffering off it is a limit, not a buffer.
+        client_max_body_size 64m;
+
         # ---- streaming passthrough (SSE-safe): the whole point vs the old
         # SparkRun proxy that hid spec-decode metrics. Nothing is buffered
         # except tiny request bodies during the model-name rewrite.

@@ -122,8 +122,10 @@ branches; the remote keeps merged feature branches (e.g. `glm-v53-flash`).
   `aiden-aug15-updates`, `tonyd2wild-upstream-update`).
 - Commit with a descriptive one-liner and a `(#N)` PR number when it exists, matching
   repo history style. For notable tuning work, add a dated changelog block to the
-  recipe README (the tonyd2wild "audit trail" section is the template): what changed,
-  measured before/after, gotchas hit.
+  recipe's `research.md` (the glm-v53-flash-intel-w4a16 audit-trail pattern): what
+  changed, measured before/after, gotchas hit. The recipe README is updated ONLY for
+  active-running content (pins/deploy steps/invariants/ops notes) — historical
+  changelog and TODO/watch items belong in `research.md` (AGENTS.md rule).
 - Push: `git push -u origin <branch>`.
 - Report the branch name + digest of what was adopted and why. Stop there — do NOT
   launch the recipe.

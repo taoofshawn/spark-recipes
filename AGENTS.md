@@ -192,9 +192,13 @@ This directory is a **full, unmodified copy** of tonyd2wild's upstream repo, pin
   therefore belong on their own branch (e.g. `reorg-*`), not committed directly on `main`.
 - Commit messages are descriptive one-liners; PRs merge topic branches into `main` (see git
   log history: `Deepseek v4 flash tonyd2wild (#3)`, `... aiden sparkrun (#9)`, etc.).
-- Recipe directories document their own changelog inline (the tonyd2wild README has a
-  dated "audit trail" section; aiden README has an "upgrading to production-3.8" revert
-  write-up). Keep that pattern — it is how regressions get explained later.
+- Recipe history lives in each recipe's `research.md` (e.g.
+  `glm-v53-flash-intel-w4a16/research.md`, `deepseek-v4-flash-vision-0rand/research.md`):
+  dated changelog/audit-trail entries, update-pass findings, and TODO/watch items go
+  there — it is how regressions get explained later.
+  **`README.md` is the active-running doc only:** update it only for content related to
+  actively running the recipe (pins, deploy steps, invariants, ops notes) — never for
+  historical changelog or TODO/watch material.
 - `.gitignore` ignores `.worktrees/`, `__pycache__`, `*.pyc`. No CI, no tests, no tooling in the
   repo. The "tests" are curl health checks and boot-log markers documented in each README.
 - The 2026-09 reorg moved the three superseded recipes (`deepseek-v4-flash-tonyd2wild`,
@@ -343,8 +347,8 @@ flags or config patterns to adopt there.
 
 Follow the repo's existing style when you make changes: terse PR/commit titles with a `(#N)`
 PR number (`... sparkrun (#9)`), and for notable tuning work add a dated changelog block in the
-recipe README (the tonyd2wild "2026-08 improvements — audit trail" section is the template) that
-states what changed, the measured before/after, and any gotchas hit.
+recipe's `research.md` (see "Git / workflow conventions": the README is the active-running doc
+only) that states what changed, the measured before/after, and any gotchas hit.
 
 ## Common failure modes (from real deployments; all in READMEs)
 

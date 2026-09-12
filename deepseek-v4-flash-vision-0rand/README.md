@@ -177,30 +177,21 @@ warm one; upstream reports ~10 min).
 Serves on all 2 GPUs per node. Tear down any other model container before
 starting. One recipe at a time.
 
-## Changelog
+## Ops notes (running hazards — forum receipts)
 
-### 2026-09-10 — switch to Dickson image (upstream tool-call parser fix)
+- **Prefill headroom:** this image is stable to ~850k-token prefill
+  (forum 381911 #246/#250, 2026-09-11). The historical >65k-prefill OOM
+  was load-time RAM (tensor unpack + cudagraph profiling, #249) — if a
+  boot OOMs, prefer safe-tensors weights before blaming GMU.
+- **Client max-output-tokens footgun (reproduced, #234):** a client env
+  `COPILOT_PROVIDER_MAX_OUTPUT_TOKENS=131072` causes thinking loops on
+  DS4-Vision-Exp specifically; 32768 clears it.
+- **GB10 clock latch (thread 382897):** decode collapsing to a few tok/s
+  after days of uptime can be GPUs latched <1 GHz; recovery requires
+  UNPLUGGING the Spark — a reboot does not clear it.
+- **GB10 UMA has no cgroup accounting/PSI/OOM events (thread 383003):**
+  memory death can present as a silent freeze/power-off; `blackbox` /
+  `sparkview` exist for post-mortems.
 
-**What changed:** the image pin moved from `0rand/vllm_spark_dsv4-0.29-b12x`
-@ `85eb91ee` (PilcoTHINK `9df77f2e` lane) to `dicksondickson/vllm_spark_dsv4`
-@ `899d174e` (Dickson's build of the PilcoTHINK `38db013b` lane). Same vLLM
-base `6fbb00b1`, same model pin, same `o_proj` donor — the only functional
-delta is that `38db013b` **bakes in the upstream DeepSeek V4 tool-call parser
-fix** (`vllm/parser/deepseek_v4.py` from vLLM `d98c8c03`, "[Bugfix] Parse DSML
-tool calls when the model omits the tool_calls wrapper" #55954). The earlier
-0rand image predates that commit.
-
-**Why:** the parser fix is the measured delta behind the higher tool-call
-quality on this image. stu.miller's locked v1.8.0 comparison (forum #212):
-**pilco/0rand 86 vs Dickson 93** tool-eval-bench (Dickson 93/100 post #176,
-92/100 post #194). 0rand himself switched to the same image (forum #214) but
-has not yet pushed his own hub tag.
-
-**Not adopted:** `--async-scheduling` (Dickson's only other change, post #194,
-paired with `MAX_NUM_SEQS=4`, post #200). No measured claim at our seqs=8 /
-batch-4096 profile, and it wasn't shipped in 0rand's `.env.sample` — left off
-to avoid an un-validated knob on a fragile cross-recipe dimension.
-
-**Gotchas:** image is arm64 (GB10-correct), ~24.2 GiB pulled; cold-boot JIT is
-unchanged. No flag/env changes — kv-cache-dtype fp8, FLASHINFER_MLA_SPARSE_DSV4,
-AOT=0/BREAKABLE=1, GMU 0.87, k=6, port 8000, worker-first all preserved.
+Dated changelog and update-pass findings live in [`research.md`](research.md)
+(AGENTS.md convention: the README is the active-running doc only).

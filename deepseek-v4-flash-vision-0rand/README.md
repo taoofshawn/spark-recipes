@@ -150,6 +150,23 @@ The image is ~10.8 GiB and pulls from Docker Hub; first boot JITs B12X/CUTLASS
 kernels into the node-local `/vllm-cache` volume (cold boot slower than the
 warm one; upstream reports ~10 min).
 
+## Optional: vision-grounding fix (`FIX_MM_PREFIX_SPAN`)
+
+Upstream PR #1 (merged 2026-09-12) fixes a V2-model-runner bug where DSV4
+vision mm-prefix bidirectional attention spans were derived from the
+IMAGE-embed runs instead of the full sentinel block — a measured y-axis
+grounding bias (ball-sweep y 416/501/501 → 250/350/750). The fix is vendored
+verbatim under `mods/fix-dsv4-mm-prefix-span/` (Python-only patch of
+`attn_utils.py` + `model_states/default.py`; idempotent, dry-run guarded) and
+applied at container boot when enabled. **Default OFF** (upstream default
+too):
+
+1. set `FIX_MM_PREFIX_SPAN=1` in `.env`
+2. recreate the container on BOTH nodes — worker first (start order)
+
+If the patch cannot apply to a future image (context drift), boot fails
+loudly rather than serving silently unpatched.
+
 ## References
 
 - Upstream repo: [0rand/DeepSeek-v4-flash-ver-2sparks-vllm-029-0rand](https://github.com/0rand/DeepSeek-v4-flash-ver-2sparks-vllm-029-0rand)

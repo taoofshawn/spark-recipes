@@ -37,6 +37,9 @@ services:
       # JIT/compile caches (node-local only; this image JITs B12X/CUTLASS
       # kernels and both ranks write concurrently).
       - ${JIT_CACHE_DIR:-/home/sdrew/.cache/vllm-dspark-0rand}:/vllm-cache
+      # Vendored upstream mods (read-only). run.sh patches container
+      # site-packages at boot when FIX_MM_PREFIX_SPAN=1 (see research.md).
+      - ./mods:/mods:ro
     environment:
       # ---- GPU (one per node; TP=2 across the pair) ----
       CUDA_VISIBLE_DEVICES: "0"
@@ -97,6 +100,10 @@ services:
       THINKING: "${THINKING:-true}"
       REASONING_EFFORT: "${REASONING_EFFORT:-high}"
       LIMIT_MM_PER_PROMPT: "${LIMIT_MM_PER_PROMPT:-image=10}"
+      # Opt-in V2-runner vision-grounding fix (upstream PR #1, merged
+      # d0c8584 2026-09-12): applies the vendored mm-prefix span mod at
+      # boot. Default OFF (upstream default too) — see README + research.md.
+      FIX_MM_PREFIX_SPAN: "${FIX_MM_PREFIX_SPAN:-0}"
       # ---- multi-node ----
       NODE_RANK: "${NODE_RANK}"
       HEADLESS: "${HEADLESS}"
@@ -151,6 +158,17 @@ services:
         REVISION_ARGS="";
         if [ -n "$${DSPARK_REVISION:-}" ]; then REVISION_ARGS="--revision $${DSPARK_REVISION}"; fi;
         LIMIT_MM_RAW='${LIMIT_MM_PER_PROMPT:-image=10}'; case "$${LIMIT_MM_RAW}" in image=*) _lim_n="$${LIMIT_MM_RAW#image=}"; case "$${_lim_n}" in ''|*[!0-9]*) echo "error: LIMIT_MM_PER_PROMPT image=N needs an integer" >&2; exit 2 ;; esac; LIMIT_MM_JSON="{\"image\":$${_lim_n}}" ;; *) LIMIT_MM_JSON="$${LIMIT_MM_RAW}" ;; esac; LIMIT_MM_ARGS=(--limit-mm-per-prompt "$${LIMIT_MM_JSON}");
+
+        # Opt-in vision-grounding fix (upstream PR #1, merged d0c8584):
+        # Python-only patch of the V2 runner's mm-prefix span derivation
+        # (attn_utils.py + model_states/default.py). Idempotent, dry-run
+        # guarded; failure is fatal by design (an explicitly requested fix
+        # must not be silently missing).
+        if [ "$${FIX_MM_PREFIX_SPAN:-0}" = "1" ]; then
+          # via bash: upstream stores run.sh non-executable (100644) and the
+          # mount is read-only, so direct exec would fail on the nodes.
+          bash /mods/fix-dsv4-mm-prefix-span/run.sh
+        fi
 
         exec vllm serve "$${DSPARK_MODEL:-deepseek-ai/DeepSeek-V4-Flash-Vision-Exp}" \
           $${REVISION_ARGS} \

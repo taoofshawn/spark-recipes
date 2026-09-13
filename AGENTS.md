@@ -57,15 +57,15 @@ This repo is deployed on a specific pair of nodes. Do not invent other hardware 
 ```
 README.md                       # short index; stable recipes in main, in-progress on branches
 glm-v53-flash-intel-w4a16/                  # docker-compose recipe (Intel W4A16 AutoRound, DFlash2)
-glm-v53-flash-entrpi/                       # docker-compose recipe (EXL3 lane)
-deepseek-v4-flash-vision-miaai/             # docker-compose recipe (DSv4 vision)
 .archived/                                  # archived recipes (kept for reference, not maintained)
   ├── deepseek-v4-flash-aiden/              #   docker-compose recipe (the "reference" compose)
   ├── deepseek-v4-flash-aiden-sparkrun/     #   sparkrun port of aiden (no rebuild, docker-pull)
   ├── deepseek-v4-flash-tonyd2wild/         #   NVFP4 DS-MLA KV stack (vendored upstream/)
   ├── glm-v53-flash/                        #   NVFP4 reference vLLM patch stack
   ├── glm-v53-flash-miaai/                  #   EXL3 1M-native hotfix lane (entrpi supersedes)
+  ├── glm-v53-flash-entrpi/                 #   EXL3 lane (moved from top level)
   ├── mimo-v25-dflash-tonyd2wild/           #   docker-compose recipe (MiMo-V2.5 + DFlash)
+  ├── qwen-3.8-flash-next-tonyd2wild/       #   docker-compose recipe (Qwen3.8-Flash-Next + DFlash)
   └── deepseek-v4-flash-vision-miaai/       #   DSv4 vision lane (moved from top level)
 ```
 
@@ -207,6 +207,9 @@ This directory is a **full, unmodified copy** of tonyd2wild's upstream repo, pin
   repo. The "tests" are curl health checks and boot-log markers documented in each README.
 - The 2026-09 reorg moved the three superseded recipes (`deepseek-v4-flash-tonyd2wild`,
   `glm-v53-flash`, `glm-v53-flash-miaai`) to `.archived/` (branch `reorg-archived-2026-09`).
+  A later reorg (branch `reorg-archived-dsv4-vision-miaai`) also moved
+  `deepseek-v4-flash-vision-miaai`, `glm-v53-flash-entrpi`, and
+  `qwen-3.8-flash-next-tonyd2wild` to `.archived/`.
 - One inconsistency to know about: some READMEs still say `git checkout <recipe-branch>` (e.g.
   `deepseek-v4-flash-aiden-sparkrun`, `deepseek-v4-flash-tonyd2wild`), but those branches were
   merged into `main` and deleted. **Everything lives on `main` now** (plus

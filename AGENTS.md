@@ -190,6 +190,10 @@ This directory is a **full, unmodified copy** of tonyd2wild's upstream repo, pin
 - **Branch protection on `main`:** direct pushes to `main` are blocked on the remote — all
   changes must land via PR from a topic branch. Reorg/archival moves and other housekeeping
   therefore belong on their own branch (e.g. `reorg-*`), not committed directly on `main`.
+- **Never merge PRs yourself.** Creating the PR and posting its URL is the stopping point —
+  an agent does NOT merge to `main` (or delete the topic branch remotely) unless the user
+  explicitly asked for the merge in that session. Wait for the user to merge, then pull on
+  the nodes. This applies to git commands, `gh pr merge`, and API merges alike.
 - Commit messages are descriptive one-liners; PRs merge topic branches into `main` (see git
   log history: `Deepseek v4 flash tonyd2wild (#3)`, `... aiden sparkrun (#9)`, etc.).
 - Recipe history lives in each recipe's `research.md` (e.g.

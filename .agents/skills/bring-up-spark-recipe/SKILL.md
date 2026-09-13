@@ -101,7 +101,8 @@ ssh spark-0f0b.shawndo.intra 'grep ^BACKEND_MODEL ~/code/spark-recipes/model-nam
 
 # Mismatch? Update it via the repo and restart (spoofed client name unchanged):
 #   1) Edit model-name-proxy/.env BACKEND_MODEL on the WORKSTATION repo.
-#   2) Land it: topic branch -> PR -> main (branch protection).
+#   2) Land it: topic branch -> PR -> main (branch protection). Open the PR,
+#      do NOT merge it — merging is the user's call unless explicitly asked.
 #   3) Pull on the leader, then recreate the proxy:
 ssh spark-0f0b.shawndo.intra 'cd ~/code/spark-recipes && git pull origin main && cd model-name-proxy && docker compose --env-file .env up -d'
 
@@ -130,6 +131,9 @@ The compose `command` block hard-enforces these invariants and FATAL-exits with 
 clear message if violated — treat those messages as authoritative. Land the `.env`
 change via the repo (topic branch -> PR -> `main`, then `git pull origin main` on
 BOTH nodes) — never edit or `scp` files directly onto the nodes.
+**Open the PR but do NOT merge it** — post the PR URL and stop there. Merging to
+`main` is the user's call unless they explicitly asked you to merge in that session;
+continue with the pull-on-nodes step only after the user merges (or says to).
 
 ### 5. Cache ritual (both nodes, before every launch)
 

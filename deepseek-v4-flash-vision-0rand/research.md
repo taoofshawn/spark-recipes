@@ -7,6 +7,42 @@ items live here (AGENTS.md convention).
 
 ## Changelog
 
+### 2026-09-12 — adopt upstream PR #1 mm-prefix span fix (opt-in mod)
+
+Upstream merged oselivanov's PR #1 (`d0c8584`, 2026-09-12T16:13Z): the V2
+model runner derived DSV4 vision mm-prefix bidirectional ranges from
+`PlaceholderRange.extract_embeds_range()` (per-row-pair IMAGE-embed runs of
+the N-layout) instead of the full sentinel block `[pad + IMAGE_START …
+IMAGE_END]` — with the N-layout interleaving rows, y leaked into the causal
+128-token window → y-only grounding bias ("center collapse"). Measured on
+our exact image/rev: ball-sweep y 416/501/501 → 250/350/750, interior
+errors ≤0.006 (PR #1 comments + INVESTIGATION-vision-grounding-bias.md
+§12.7).
+
+Adopted as an OPT-IN knob mirroring upstream (`FIX_MM_PREFIX_SPAN`, default
+0 — upstream's default too):
+
+- vendored `mods/fix-dsv4-mm-prefix-span/` verbatim from upstream @
+  `d0c8584` (`dsv4-mm-prefix-span.patch` + `run.sh`, SHA256SUMS recorded).
+  Python-only patch of `vllm/v1/worker/gpu/attn_utils.py`
+  (`compute_mm_prefix_ranges`) + `vllm/v1/worker/gpu/model_states/default.py`
+  (`DefaultModelState.prepare_attn`); idempotent `patch -p1 -N` with dry-run
+  guards; applied on BOTH nodes at boot (compose mounts `./mods:/mods:ro`
+  and runs the mod via `bash` — upstream stores `run.sh` non-executable,
+  100644 — before `exec vllm serve` when `FIX_MM_PREFIX_SPAN=1`).
+- patch failure is fatal by design: an explicitly requested fix must not be
+  silently missing. If a future image changes the two files' context, boot
+  stops loudly — re-vendor from upstream or flip the flag off.
+- `.env` ships `FIX_MM_PREFIX_SPAN=0`; README documents the flip + both-node
+  recreate requirement.
+
+Caveat carried from the PR review (unanswered before merge): the V2 port
+reads `mm_prefix_clamp_sliding_window` only from `hf_text_config` (V1 also
+reads the module — "so it can't silently no-op later"). Harmless at our
+pinned rev (attributes exist; the V1 path proves the mechanism); re-verify
+on any image rev bump. Watch-list entry for PR #1 closed; vLLM #56141
+(parser follow-up) remains the top image-refresh watch item.
+
 ### 2026-09-11 — upstream review: no runtime changes adopted
 
 Sources swept (window 2026-09-10 → 09-11): NVIDIA forum thread 381911
@@ -55,12 +91,12 @@ numbers land at a comparable profile.
   `9e25706`; do NOT hand-backport the multi-file parser change into the
   digest-pinned image (untestable without a boot; outside the update
   skill's no-launch scope).
-- **0rand PR #1** (oselivanov, OPEN, mid-review 2026-09-11) — DSV4 vision
-  mm-prefix span fix in the V2 model runner (bidirectional range derived
-  from the full sentinel block, not just the IMAGE-embed runs); measured
-  grounding repair (ball-sweep y 416/501/501 → 250/350/750, interior
-  error ≤0.006), delivered as `--apply-mod` gated by
-  `FIX_MM_PREFIX_SPAN=1`. Revisit when merged.
+- **0rand PR #1** (oselivanov) — DSV4 vision mm-prefix span fix in the V2
+  model runner (bidirectional range derived from the full sentinel block,
+  not just the IMAGE-embed runs); measured grounding repair (ball-sweep y
+  416/501/501 → 250/350/750, interior error ≤0.006), gated by
+  `FIX_MM_PREFIX_SPAN=1`. **MERGED 2026-09-12 (`d0c8584`) — adopted here as
+  the opt-in `FIX_MM_PREFIX_SPAN` knob; see the 2026-09-12 entry.**
 - **vLLM #52865** (open) — DSv4/V3.2 tool-argument streaming: long string
   args buffered until `</parameter>` instead of streaming incrementally;
   touches our pinned parser file.

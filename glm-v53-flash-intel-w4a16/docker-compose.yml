@@ -41,9 +41,6 @@ services:
       # injected file does not exist — the mount is per-file so a missing host
       # file makes the mount fail loudly, which is what we want).
       - ./patches/sparse_attn_indexer_kpool.py:/usr/local/lib/python3.12/dist-packages/vllm/model_executor/layers/sparse_attn_indexer_kpool.py:ro
-      # Hybrid prefix-cache (APC) patch script — applied at boot before vllm
-      # serve (idempotent + fail-closed: anchors drift -> boot aborts).
-      - ./patches/patch_hybrid_prefix_hit.py:/patches/patch_hybrid_prefix_hit.py:ro
       # Fixed chat template (enable_thinking + reasoning_effort + image/video
       # macros; rodman80's copy, validated on this image). The Intel repo ships
       # a complete template but it ignores enable_thinking — this file makes
@@ -64,24 +61,24 @@ services:
       # ---- serving profile (command block reads these shell-side) ----
       GMU: "${GMU:-0.85}"
       MAX_LEN: "${MAX_LEN:-1048576}"
-      MAX_SEQS: "${MAX_SEQS:-8}"
+      MAX_SEQS: "${MAX_SEQS:-6}"
       MNBT: "${MNBT:-8192}"
       BLOCK_SIZE: "${BLOCK_SIZE:-2304}"
       KV_DTYPE: "${KV_DTYPE:-fp8_e4m3}"
       KV_CACHE_MEMORY: "${KV_CACHE_MEMORY:-}"
-      # Drafter lane: "dflash2" (default, miken's validated row), "dflash2pmu"
-      # (dflash2 + PMU128 — needs an image built from dflash2-pmu128/Dockerfile),
-      # or "mtp3" (vendored florianbrede lane — see mtp3-pmu128/README.md; also
-      # needs its own image). See .env for the exact build/run rows.
+      # Drafter lane: "dflash2pmu" (default, external DFlash2 k=7 + PMU128 —
+      # needs an image built from dflash2-pmu128/Dockerfile) or "mtp3"
+      # (vendored florianbrede lane — see mtp3-pmu128/README.md; also needs its
+      # own image). See .env for the exact build/run rows.
       # Lane selector — MUST be in the container env: the command block
-      # branches on it (dflash2 / dflash2pmu / mtp3). Without this entry the
-      # container env LANE is empty and the block defaults to dflash2, so the
-      # dflash2pmu/mtp3 lane args (PMU128 flags, disable_eagle_block_drop) and
-      # the APC-patch skip would silently never apply.
-      LANE: "${LANE:-dflash2}"
-      # DFlash2 drafter (dflash2 lane; resolved from the HF cache snapshot at boot)
+      # branches on it (dflash2pmu / mtp3). Without this entry the container
+      # env LANE is empty and the block defaults to dflash2pmu, so the lane
+      # args (PMU128 flags, disable_eagle_block_drop) would silently never
+      # apply.
+      LANE: "${LANE:-dflash2pmu}"
+      # DFlash2 drafter (dflash2pmu lane; resolved from the HF cache snapshot at boot)
       DFLASH_MODEL: "${DFLASH_MODEL:-incoai/GLM-5.3-Flash-DFlash2}"
-      DFLASH_REVISION: "${DFLASH_REVISION:-dc77ff1c99eeb2df044ee3d4f0094eb033fee410}"
+      DFLASH_REVISION: "${DFLASH_REVISION:-bf582e4eacc1810f76656d1811693ff6c6737d2a}"
       DFLASH_TOKENS: "${DFLASH_TOKENS:-7}"
       # PMU128 prefix matching (mtp3/dflash2pmu lanes; needs a patch-baked image)
       PMU: "${PMU:-0}"
@@ -164,19 +161,12 @@ services:
         M=/models/intel-gptq-surgery
         [ -f "$$M/config.json" ] || { echo "FATAL: $$M/config.json missing — run prepare-model.sh on this node (see README)" >&2; exit 2; }
         grep -q '"quant_method": "gptq"' "$$M/config.json" || { echo "FATAL: $$M/config.json is not the GPTQ-surgery config (run prepare-model.sh)" >&2; exit 2; }
-        # ---- APC patch: hybrid prefix-cache hits (fail-closed) ----
-        # (plain dflash2 lane only — the mtp3-pmu128 / dflash2-pmu128 images
-        # bake the #53388/#53906 + fine-hit patch series instead; the anchors
-        # here would not match.)
-        if [ "$${LANE:-dflash2}" = "dflash2" ]; then
-          python3 /patches/patch_hybrid_prefix_hit.py
-        fi
 
-        # ---- dflash2 / dflash2pmu lanes: resolve the DFlash2 drafter to its HF
-        # snapshot dir (offline). mtp3 lane needs no drafter checkpoint, so it
-        # is the only lane that skips this. ----
+        # ---- dflash2pmu lane: resolve the DFlash2 drafter to its HF snapshot
+        # dir (offline). mtp3 lane needs no drafter checkpoint, so it is the
+        # only lane that skips this. ----
         DFLASH_MODEL_DIR=""
-        if [ "$${LANE:-dflash2}" != "mtp3" ]; then
+        if [ "$${LANE:-dflash2pmu}" = "dflash2pmu" ]; then
           resolve_snapshot() {
             local hub="$1" rev="$2"
             local dir="/cache/huggingface/hub/models--$$(echo "$$hub" | sed 's|/|--|g')"
@@ -197,30 +187,28 @@ services:
           --tensor-parallel-size 2
           --gpu-memory-utilization "$${GMU:-0.85}"
           --max-model-len "$${MAX_LEN:-1048576}"
-          --max-num-seqs "$${MAX_SEQS:-8}"
+          --max-num-seqs "$${MAX_SEQS:-6}"
           --block-size "$${BLOCK_SIZE:-2304}"
           --kv-cache-dtype "$${KV_DTYPE:-fp8_e4m3}"
         )
-        # Speculative: lane-conditional. dflash2 = DFlash2 k=7 (fixed — any
-        # other count wedges the boot). mtp3 = native MTP k=3 with
-        # disable_eagle_block_drop=true (upstream PR #53388, baked into the
-        # mtp3-pmu128 image) + PMU128 prefix matching + prompt-token details
-        if [ "$${LANE:-dflash2}" = "mtp3" ]; then
+        # Speculative: lane-conditional. dflash2pmu = external DFlash2 k=7
+        # (fixed — any other count wedges the boot) + PMU128. mtp3 = native
+        # MTP k=3 with disable_eagle_block_drop=true (upstream PR #53388,
+        # baked into the mtp3-pmu128 image) + PMU128 prefix matching +
+        # prompt-token details.
+        if [ "$${LANE:-dflash2pmu}" = "mtp3" ]; then
           ARGS+=(--speculative-config "{\"method\":\"mtp\",\"num_speculative_tokens\":3,\"disable_eagle_block_drop\":true}")
           [ "$${PMU:-0}" != "0" ] && ARGS+=(--prefix-match-unit 128 --enable-prompt-tokens-details)
-        elif [ "$${LANE:-dflash2}" = "dflash2pmu" ]; then
+        else
           # DFlash2 k=7 + PMU128 (florianbrede's external-drafter profile,
           # vendored in dflash2-pmu128/; baked patches add fine-grained SWA
-          # hits + scheduler LCM block alignment, so the boot-time hybrid-APC
-          # patch is NOT applied in this lane). Retention-0 is an ENV VAR in
-          # this vLLM build (florianbrede's launch.sh sets
+          # hits + scheduler LCM block alignment). Retention-0 is an ENV VAR
+          # in this vLLM build (florianbrede's launch.sh sets
           # VLLM_PREFIX_CACHE_RETENTION_INTERVAL=0) — there is no
           # --prefix-cache-retention-interval CLI flag (argparse rejects it).
           ARGS+=(--speculative-config "{\"method\":\"dflash\",\"model\":\"$$DFLASH_MODEL_DIR\",\"num_speculative_tokens\":$${DFLASH_TOKENS:-7},\"disable_eagle_block_drop\":true}")
           [ "$${PMU:-0}" != "0" ] && ARGS+=(--enable-prefix-caching --prefix-match-unit 128 --enable-prompt-tokens-details)
           [ "$${PMU:-0}" != "0" ] && export VLLM_PREFIX_CACHE_RETENTION_INTERVAL=0
-        else
-          ARGS+=(--speculative-config "{\"method\":\"dflash\",\"model\":\"$$DFLASH_MODEL_DIR\",\"num_speculative_tokens\":$${DFLASH_TOKENS:-7}}")
         fi
         [ -n "$${MNBT:-}" ] && ARGS+=(--max-num-batched-tokens "$${MNBT}")
         _kvmem="$${KV_CACHE_MEMORY:-}"
@@ -253,6 +241,6 @@ services:
           --master-addr "$${MASTER_ADDR}" --master-port "$${MPORT:-29521}")
         [ -n "$${HEADLESS:-}" ] && ARGS+=(--headless)
 
-        echo "launched image=$IMAGE rank=$${NODE_RANK:-0} host=$${ROCE_IP} gid=$${NCCL_IB_GID_INDEX} lane=$${LANE:-dflash2} kv=$${_kvmem:-profiler}/$${KV_DTYPE} max_len=$${MAX_LEN:-1048576} seqs=$${MAX_SEQS:-8} moe=$${MOE_BACKEND:-marlin}"
+        echo "launched image=$IMAGE rank=$${NODE_RANK:-0} host=$${ROCE_IP} gid=$${NCCL_IB_GID_INDEX} lane=$${LANE:-dflash2pmu} kv=$${_kvmem:-profiler}/$${KV_DTYPE} max_len=$${MAX_LEN:-1048576} seqs=$${MAX_SEQS:-6} moe=$${MOE_BACKEND:-marlin}"
 
         exec vllm "$${ARGS[@]}"

@@ -136,6 +136,18 @@ the vLLM arg list, appends `--distributed-executor-backend mp --nnodes 2
 --node-rank … --master-addr … --master-port …` (+ `--headless` on the worker),
 and `exec vllm "$${ARGS[@]}"`.
 
+**HF-cache invariant (never adopt upstream's cache/model paths):** the
+host-side HF cache source MUST stay the spark user's default HF cache —
+`HF_CACHE=/home/sdrew/.cache/huggingface`, the same location every other
+recipe downloads into — regardless of how upstream lays out its model paths
+(per-recipe model dirs, `DRAFT_MOUNT_DIR`, a relocated in-image `HF_HOME`,
+etc.). Map upstream's model/drafter layout INTO that shared cache: download
+with pinned revisions on BOTH nodes and resolve snapshot dirs at boot; do NOT
+mount a separate per-recipe cache or repoint the host side of `HF_HOME`.
+`HF_HUB_OFFLINE=1` + `TRANSFORMERS_OFFLINE=1` are mandatory in every recipe's
+compose env — serving is offline by convention, and an upstream config that
+expects runtime downloads is wrong for this cluster, not a knob to adopt.
+
 If the checkpoint needs a surgery/adaptation step (quant-config rewrite,
 drafter wiring), vendor it as an idempotent, fail-closed script in the recipe
 dir and document it as README step 0.
@@ -183,4 +195,8 @@ or launch.
 - Serving on any port other than 8000, or drifting `SERVED_MODEL_NAME` from
   the parent-model convention — both break the model-name proxy contract.
 - Adopting a measured claim without a receipt (post number / commit / log line).
+- Repointing the HF cache away from the spark user's default
+  `/home/sdrew/.cache/huggingface` (upstream model-dir/`HF_HOME` layouts), or
+  dropping `HF_HUB_OFFLINE=1`/`TRANSFORMERS_OFFLINE=1` — all recipes share ONE
+  host cache and serve offline (HF-cache invariant, step 5).
 - Inventing hardware or a third node. Two fixed nodes; values in AGENTS.md.

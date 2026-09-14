@@ -20,34 +20,31 @@ speculative decoding and fine-grained prefix caching, at 1M-token context.
 
 ## Serving profiles
 
-The recipe ships one **default serving profile** plus two alternatives. All
+The recipe ships one **default serving profile** plus one alternative. Both
 serve the same model on the same port; a profile = spec-decoding method +
 prefix-matching granularity + the image that carries the matching patches.
 Switch profiles by setting `LANE` + `IMAGE` (+ the profile's tuning rows)
 in `.env`.
 
-| | **dflash2pmu (default)** | dflash2 | mtp3 |
-|---|---|---|---|
-| Spec decoding | external DFlash2 k=7 drafter, `disable_eagle_block_drop=true` | external DFlash2 k=7 drafter | native MTP3 (`num_speculative_tokens=3`, `disable_eagle_block_drop=true`) — no drafter checkpoint |
-| Prefix matching | PMU128: `--prefix-match-unit 128`, retention 0, coordinator/SWA patches baked into the image | block granularity 2304 + a boot-time hybrid-APC patch | PMU128 (same baked-patch family, without the SWA fine-hits patch) |
-| Drafter checkpoint | `incoai/GLM-5.3-Flash-DFlash2` @ `bf582e4e…` (CC BY-NC-ND-4.0) | same drafter @ `dc77ff1c…` | none |
-| KV pin → pool | 13.5 GB → ~1.81–1.87M tokens | 12.52 GB → 1.75M tokens | 13.5 GB → 1.92M tokens |
-| Max seqs | 6 | 8 | 6 |
-| Image to build | `dflash2-pmu128/Dockerfile` → `glm53-intel-dflash2-pmu128:20260908` | none (uses the digest-pinned base image directly) | `mtp3-pmu128/Dockerfile` → `glm53-intel-mtp3-pmu128:20260907` |
-| When to pick it | agent-style workloads: fine-grained prefix reuse across long repeated instruction blocks + strong draft acceptance | matching upstream measurements made on the block-2304 stack | no drafter download wanted; reasoning-heavy serving |
+| | **dflash2pmu (default)** | mtp3 |
+|---|---|---|
+| Spec decoding | external DFlash2 k=7 drafter, `disable_eagle_block_drop=true` | native MTP3 (`num_speculative_tokens=3`, `disable_eagle_block_drop=true`) — no drafter checkpoint |
+| Prefix matching | PMU128: `--prefix-match-unit 128`, retention 0, coordinator/SWA patches baked into the image | PMU128 (same baked-patch family, without the SWA fine-hits patch) |
+| Drafter checkpoint | `incoai/GLM-5.3-Flash-DFlash2` @ `bf582e4e…` (CC BY-NC-ND-4.0) | none |
+| KV pin → pool | 13.5 GB → ~1.81–1.87M tokens | 13.5 GB → 1.92M tokens |
+| Max seqs | 6 | 6 |
+| Image to build | `dflash2-pmu128/Dockerfile` → `glm53-intel-dflash2-pmu128:20260908` | `mtp3-pmu128/Dockerfile` → `glm53-intel-mtp3-pmu128:20260907` |
+| When to pick it | agent-style workloads: fine-grained prefix reuse across long repeated instruction blocks + strong draft acceptance | no drafter download wanted; reasoning-heavy serving |
 
 Why the default profile exists: on the base image, `dflash` spec decoding
 plus block-2304 prefix caching loses prefix hits (the drafter's SWA group
-zeroes the hybrid min) and only a boot-time patch fixes it. The dflash2pmu
-profile bakes a patch series into the image instead (#53388 block-drop,
-#53906 coordinator partial hits, scheduler LCM/mamba block alignment, and an
-SWA fine-hits patch derived from draft PR #54397), which both fixes the
-hybrid min and drops prefix granularity from 2304 tokens to 128 — so
-repeated agent prefixes replay at ~128-token precision instead of ~2304.
-Because the patches are baked in, the boot-time hybrid-APC patch is skipped
-in this profile (the compose command block gates on `LANE`); the SM121
-indexer overlay is still mounted in every profile. `prepare-model.sh`
-surgery is identical across profiles.
+zeroes the hybrid min). The dflash2pmu profile bakes a patch series into
+the image instead (#53388 block-drop, #53906 coordinator partial hits,
+scheduler LCM/mamba block alignment, and an SWA fine-hits patch derived from
+draft PR #54397), which fixes the hybrid min and drops prefix granularity
+from 2304 tokens to 128 — so repeated agent prefixes replay at ~128-token
+precision instead of ~2304. The SM121 indexer overlay is still mounted in
+every profile. `prepare-model.sh` surgery is identical across profiles.
 
 The mtp3 profile replaces the drafter with native MTP3 (built into this
 vLLM via the same #53388 patch series): no drafter checkpoint to download,
@@ -146,7 +143,7 @@ docker logs glm53-intel-w4a16 2>&1 | grep -F "GID auto-detect"
 docker logs glm53-intel-w4a16 2>&1 | grep -F "DFlash2DraftModel"
 #   -> "Resolved architecture: DFlash2DraftModel" = drafter wired (dflash2pmu profile)
 docker logs glm53-intel-w4a16 2>&1 | grep -F "GPU KV cache size"
-#   -> ~1.87M tokens @ 1M ctx (13.5 GB pin); the 12.52 GB row gives ~1.75M
+#   -> ~1.87M tokens @ 1M ctx (13.5 GB pin)
 docker logs glm53-intel-w4a16 2>&1 | grep -F "Setting attention block size"
 #   -> 4608 (fp8 KV auto-bump from block-size 2304) — expected, NOT 2304
 docker logs glm53-intel-w4a16 2>&1 | grep -F "Model loading took"
@@ -174,13 +171,6 @@ IMAGE=glm53-intel-mtp3-pmu128:20260907     # built from mtp3-pmu128/Dockerfile
 KV_CACHE_MEMORY=13500000000
 MAX_SEQS=6
 PMU=1
-
-# legacy dflash2 profile (uses the base image directly, no profile-image build):
-LANE=dflash2
-IMAGE=ghcr.io/tonyd2wild/vllm-glm53-flash:sm121-v11-dflash2@sha256:4def0ef6…
-DFLASH_REVISION=dc77ff1c99eeb2df044ee3d4f0094eb033fee410
-KV_CACHE_MEMORY=12520000000
-MAX_SEQS=8
 ```
 
 Tuning rows that apply on any profile (each is one `.env` line):
@@ -198,17 +188,17 @@ Tuning rows that apply on any profile (each is one `.env` line):
   too high = the first long prompt kills the engine; a fat boot also let
   `CUDA graph pool memory: -2.73 GiB` credit graph memory straight to KV and
   push the host into swap (−20–40% timing). The 13.5 GB default (dflash2pmu,
-  with `MAX_SEQS=6`) and the 12.52 GB row are the validated values — don't
-  raise either without re-measuring host headroom through a ~950K prefill.
+  with `MAX_SEQS=6`) is the validated value — don't raise it without
+  re-measuring host headroom through a ~950K prefill.
 - **DFlash2 needs exactly `num_speculative_tokens=7`** — any other count
   wedges the boot.
 - **`--moe-backend marlin` mandatory.** `flashinfer_cutlass` does not boot
   W4A16 (`ValueError ... WNA16 MoE`); `triton` boots but loses ~2× everywhere.
   `humming`/`flashinfer_trtllm` are incompatible with this checkpoint/image.
-- **block-size 2304 (legacy dflash2 profile)**: 4608 or 1152 break prefix
-  hits; the engine's internal attention block auto-bumps to 4608 with fp8 KV
-  — that `Setting attention block size to 4608` line is healthy. The pmu128
-  profiles replace block granularity with `--prefix-match-unit 128`.
+- **block-size 2304**: 4608 or 1152 break prefix hits; the engine's internal
+  attention block auto-bumps to 4608 with fp8 KV — that `Setting attention
+  block size to 4608` line is healthy. The pmu128 profiles replace block
+  granularity with `--prefix-match-unit 128`.
 - **SM121 indexer overlay stays mounted in every profile**: the image has
   the indexer top-k fix baked, but the full-file overlay
   (`patches/sparse_attn_indexer_kpool.py`) is the runtime crash fix for
@@ -269,9 +259,6 @@ Maintenance history and provenance notes live in `research.md`.
   (`docker/dflash2-overlay` build; `ghcr.io/tonyd2wild/vllm-glm53-flash:sm121-v11-dflash2`)
 - Drafter: [incoai/GLM-5.3-Flash-DFlash2](https://huggingface.co/incoai/GLM-5.3-Flash-DFlash2)
   (CC BY-NC-ND 4.0 — research/eval)
-- Legacy APC patch source (dflash2 profile only): [MiaAI-Lab/GLM-5.3-Flash-EXL3-2x-DGX-Sparks](https://github.com/MiaAI-Lab/GLM-5.3-Flash-EXL3-2x-DGX-Sparks)
-  (`overlay/patch_hybrid_prefix_hit.py`; ported by rodman80, anchors verified
-  against this image)
 - Sym-qzeros fix (newer vLLM only): [eugr/spark-vllm-docker](https://github.com/eugr/spark-vllm-docker)
   `docker/patch_vllm_autogptq_symmetric_moe_qzeros.py`
 - `research.md` in this directory — provenance, maintenance history, surgery

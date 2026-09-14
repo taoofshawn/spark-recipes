@@ -5,14 +5,49 @@ README is the deploy doc; this file is the memory.
 
 ## Lane receipts (author-reported, different images/protocols — do not mix)
 
-| | dflash2pmu (default) | legacy dflash2 | mtp3 |
-|---|---|---|---|
-| spec decoding | DFlash2 k=7 + `disable_eagle_block_drop` | DFlash2 k=7 | native MTP3 |
-| prefix matching | `--prefix-match-unit 128`, patches baked | block 2304 + boot-time hybrid APC patch | `--prefix-match-unit 128`, patches baked |
-| drafter rev | `bf582e4e…` (08-31) | `dc77ff1c…` (08-28) | none |
-| KV pin / pool | 13.5 GB → ~1.81–1.87M tokens | 12.52 GB → 1.75M tokens | 13.5 GB → 1.92M tokens |
-| seqs | 6 | 8 | 6 |
-| receipts | florianbrede: TEB **90** (158/176), PP 1,679, TG 33.1/54.7 @C1/C4, ~82-token recompute | miken: TEB 90, code accept 0.68–0.71 | florianbrede: TEB 91, 108 tok/s @ C6 |
+> The legacy `dflash2` lane was **removed 2026-09-11** (see "Cleanup: drop the
+> dflash2 lane" below); its receipts are retained below for reference only.
+
+| | dflash2pmu (default) | mtp3 |
+|---|---|---|
+| spec decoding | DFlash2 k=7 + `disable_eagle_block_drop` | native MTP3 |
+| prefix matching | `--prefix-match-unit 128`, patches baked | `--prefix-match-unit 128`, patches baked |
+| drafter rev | `bf582e4e…` (08-31) | none |
+| KV pin / pool | 13.5 GB → ~1.81–1.87M tokens | 13.5 GB → 1.92M tokens |
+| seqs | 6 | 6 |
+| receipts | florianbrede: TEB **90** (158/176), PP 1,679, TG 33.1/54.7 @C1/C4, ~82-token recompute | florianbrede: TEB 91, 108 tok/s @ C6 |
+
+**Removed lane (reference only):** legacy `dflash2` — DFlash2 k=7 (no
+`disable_eagle_block_drop`), block-2304 prefix matching + a boot-time
+hybrid-APC patch, drafter `dc77ff1c…` (08-28), 12.52 GB → 1.75M pool,
+maxseq 8. Receipts: miken TEB 90, code accept 0.68–0.71. It was the original
+miken reference row and the only lane that ran the base image with no build,
+but it lost prefix hits under DFlash2 spec decoding (the drafter's SWA group
+zeroed the hybrid min), which is exactly the problem the dflash2pmu default
+was created to fix. Dropped to reduce the lane surface.
+
+## Cleanup: drop the dflash2 lane (2026-09-11)
+
+Branch `cleanup-glm53-drop-dflash2` (uncommitted). The legacy `dflash2` lane
+was removed from `.env`, `docker-compose.yml`, and `README.md`; only this
+`research.md` retains a reference. Specifics:
+
+- **`.env`**: dropped the `LANE=dflash2` alternative block (and its
+  `dc77ff1c…` drafter pin / 12.52 GB / maxseq-8 row).
+- **`docker-compose.yml`**: removed the boot-time hybrid-APC patch
+  (`patch_hybrid_prefix_hit.py`) mount + its `LANE=dflash2` gate, removed the
+  `else` dflash2 spec-config branch (the one without
+  `disable_eagle_block_drop`), and pointed the compose defaults at the
+  dflash2pmu values (`LANE=:dflash2pmu`, `MAX_SEQS=6`,
+  `DFLASH_REVISION=bf582e4e…`) so an unset var can't silently fall back to
+  the legacy row.
+- **`patches/patch_hybrid_prefix_hit.py`**: deleted — dead (only dflash2 used
+  it). The remaining lanes bake their patch series into the image.
+- **`README.md`**: profile table reduced to dflash2pmu + mtp3; removed the
+  dflash2 switch block, the "legacy dflash2 profile" block-size note, the
+  12.52 GB KV references, and the Legacy-APC reference.
+- `prepare-model.sh` surgery and the `prepare-model.sh`-produced config are
+  identical across the two remaining lanes.
 
 ## On-cluster verification (2026-09-11, this cluster)
 
@@ -53,8 +88,9 @@ Brought up from `main` on both nodes; both containers healthy on
   above. The README has been reorganized as a fresh-runner deploy doc:
   lane feature comparison + deploy steps up front, historical material
   (receipts, A/B history, update passes) lives here in `research.md`.
-  Legacy lanes (dflash2 / mtp3) remain opt-in alternatives documented in
-  the README's "Switching lanes".
+  The legacy `dflash2` lane was removed (see the cleanup note above);
+  `mtp3` remains the opt-in alternative documented in the README's
+  "Switching profiles".
 
 - Model pinned `5eee1846…` (Intel HEAD, 2026-09-01 upload; re-verified
   2026-09-07 via HF API — UNCHANGED, no new revisions), image digest
@@ -200,8 +236,8 @@ pool (1.75M vs 1.34M); (3) MNBT: only rodman80's data, keep 8192; (4) does
 
 - **florianbrede-ayet/spark-recipes (mtp3-pmu128 lane)**: the vendored lane's
   upstream — watch for new patches to the #53388/#53906 series, PMU changes,
-  and fresh A/B numbers vs DFlash2. The A/B on THIS cluster (dflash2 k=7 vs
-  mtp3+PMU128, both on the same image/quant) is the standing open question;
+  and fresh A/B numbers vs DFlash2. The A/B on THIS cluster (dflash2pmu k=7
+  vs mtp3+PMU128, both on the same image/quant) is the standing open question;
   florianbrede claims MTP3 wins reasoning-heavy workloads (forum 382632).
 - **vLLM #53388 / #53906 upstreaming**: both patches in `mtp3-pmu128/patches/`
   are exact upstream hunks against `487ecf187`; when the image's vLLM picks
@@ -236,8 +272,8 @@ pool (1.75M vs 1.34M); (3) MNBT: only rodman80's data, keep 8192; (4) does
    `prepare-model.sh` on both nodes; diff the new `extra_config` count (679
    today) and the template.
 3. Drafter: only if a new `incoai/GLM-5.3-Flash-DFlash2` revision is blessed
-   upstream; the dflash2 overlay is sensitive (acceptance changes). Current
-   pin `dc77ff1c…` (HF HEAD is `bf582e4e…` — the miaai lane's pin; both
-   single-file; not A/B'd here).
+   upstream; the dflash2 overlay is sensitive (acceptance changes). The
+   dflash2pmu lane pins `bf582e4e…` (HF HEAD, 08-31). The dropped dflash2
+   lane's `dc77ff1c…` pin is retained here for reference only.
 4. `GLM53_INDEXER_WORKSPACE`/APC anchors: any vLLM-file drift breaks the
    fail-closed boot — by design; re-derive or retire then.

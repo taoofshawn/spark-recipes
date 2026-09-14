@@ -1,6 +1,7 @@
 ---
 name: recipe-update
-description: Use when reviewing a recipe in the spark-recipes repo against its upstream sources for updates, fixes, or improvements — checking the NVIDIA forum, the recipe's upstream GitHub repo(s) and sibling repos, HF model/image revisions, and other sources — then starting an update branch, committing, and pushing. Triggers: "review recipe <name> for updates", "check <recipe> upstream", "is there a new fix for <model>", "update <recipe> from upstream", "latest commits for <recipe>". Does NOT bring the recipe up on the sparks (that is bring-up-spark-recipe).
+description: >-
+  Use when reviewing a recipe in the spark-recipes repo against its upstream sources for updates, fixes, or improvements — checking the NVIDIA forum, the recipe's upstream GitHub repo(s) and sibling repos, HF model/image revisions, and other sources — then starting an update branch, committing, and pushing. Triggers: "review recipe <name> for updates", "check <recipe> upstream", "is there a new fix for <model>", "update <recipe> from upstream", "latest commits for <recipe>". Does NOT bring the recipe up on the sparks (that is bring-up-spark-recipe).
 ---
 
 # Recipe Update

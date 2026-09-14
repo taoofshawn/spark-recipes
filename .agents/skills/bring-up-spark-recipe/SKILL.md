@@ -1,6 +1,7 @@
 ---
 name: bring-up-spark-recipe
-description: Use when bringing a recipe in the spark-recipes repo up on the 2-node DGX Spark cluster — starting/staging a recipe directory, tearing down the currently-serving model, rebuilding the patched image, launching worker-then-head, and confirming health. Triggers: "bring up <recipe>", "start <recipe> on the sparks", "deploy the glm/qwen/deepseek recipe", "latest recipe not running", "fresh head/worker after a model change", DFlash2/DFlash enablement.
+description: >-
+  Use when bringing a recipe in the spark-recipes repo up on the 2-node DGX Spark cluster — starting/staging a recipe directory, tearing down the currently-serving model, rebuilding the patched image, launching worker-then-head, and confirming health. Triggers: "bring up <recipe>", "start <recipe> on the sparks", "deploy the glm/qwen/deepseek recipe", "latest recipe not running", "fresh head/worker after a model change", DFlash2/DFlash enablement.
 ---
 
 # Bring Up a Spark Recipe

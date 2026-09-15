@@ -7,6 +7,90 @@ items live here (AGENTS.md convention).
 
 ## Changelog
 
+### 2026-09-15 — update pass: adopt prefix-cache fixes as opt-in mods; hold PilcoTHINK 0.29 image
+
+Sources swept (window 2026-09-11 → 09-15): NVIDIA forum thread 381911 posts
+#251–#348 + board sweep (cats 721/723) + full-text searches; GitHub (0rand
+primary — zero commits since `d0c8584`; oselivanov/ollie-gb10-serving-stacks;
+gpdev-Pilcothink Dockerfile lane — new `0.29/DSV4F-Vision-exp` lane @
+`8bd44e88`/`bf701f7a`); Docker Hub (Dickson tag unmoved; **new**
+`pilcothink/vllm_spark_dsv4fv:0.29` @ `sha256:ac497c0a…`, pushed 2026-09-15);
+HF model (unchanged, pin still current).
+
+**Adopted — prefix-cache fixes as opt-in mods (default OFF):**
+
+- The shared 0.28.1 image has a measured **prefix-cache dead zone** (forum
+  #296/#302, co-le's cache-pressure tool): a prompt ending 1..64 tokens past
+  a 256-token boundary retains nothing reachable under sparse retention +
+  EAGLE drafting → exact replay AND follow-up turn get 0 cached tokens (~1 in
+  4 prompt lengths; stu.miller measured 0.82% retention under pressure).
+  Present in BOTH Dickson's and Ollie's builds → in the shared engine, i.e.
+  our image. Plus a same-content duplicate-block leak in `block_pool`.
+- Vendored verbatim from oselivanov/ollie-gb10-serving-stacks into
+  `mods/fix-dsv4-prefix-replay-tail/` (stu.miller's fix: retain the tail at
+  the last reachable boundary `num_prompt - 1 - slack`; offline-verified
+  zero-hit cases 192/768 → 0 across all 256 prompt-end offsets @ 8K/65K/262K,
+  MNBT 4096 and 2048) and `mods/fix-vllm-prefix-cache-dedupe/` (port of
+  co-l/ds4-prefix-cache-fixes 03-dedupe). Patches target
+  `vllm/v1/core/single_type_kv_cache_manager.py`, `kv_cache_coordinator.py`,
+  `block_pool.py` — our exact engine rev `0.28.1rc1.dev475+g6fbb00b18`
+  (Ollie's fork is the same base). SHA256SUMS recorded. Wired as
+  `FIX_DSV4_PREFIX_REPLAY_TAIL=0` / `FIX_PREFIX_CACHE_DEDUPE=0`
+  (compose env + boot hooks, same fail-loud pattern as
+  `FIX_MM_PREFIX_SPAN`); README section added.
+- Receipts behind "on by default" in Ollie's stack: #312 (stu.miller, 553
+  requests all OK, heavy agentic to 500K), #313 (co-le, "everything is
+  perfect cache-wise", decode 45 t/s stable). Not enabled here yet — the
+  2026-09-13 `FIX_MM_PREFIX_SPAN` bring-up precedent applies: enable +
+  validate (cache-pressure tool) in a bring-up pass, not this one.
+
+**Not adopted — `pilcothink/vllm_spark_dsv4fv:0.29` image (held):**
+
+- PilcoTHINK shipped his own DSv4-vision lane today (forum #334): official
+  vLLM **v0.29.0** + vision backports, DSML wrapper/streaming parser fixes,
+  SM121 o_proj, packed FP8 linear (`VLLM_SPARK_PACKED_FP8_LINEAR=1` default),
+  `FULL_AND_PIECEWISE` graphs ≤48 (our compose already matches), MNBT 8192,
+  seqs 10, GMU 0.85, **k=3**, effort max. Measured: pp2048 ~1857 t/s (vs
+  1577 on his 09-13 build), tg128 ~45 @0ctx, tg1024 ~44-46 @d1K-d4K,
+  **TEB hardmode 91/100** (161/176, engine `0.29.1.dev0+g98dff2a81`).
+- Why held: (a) quality receipt 91 < our image's 93/100; (b) k=3 default is
+  the value upstream measured as thinking-damaging (#171) — our k=6 receipt
+  config contradicts it; (c) provenance: vLLM v0.29.0 tagged 2026-09-09,
+  BEFORE `9e257065` (#56141, 09-10) — GitHub compare
+  `9e257065...98dff2a81` shows the engine does NOT descend from main's
+  parser fix (diverged; 14 commits = upstream pre-09-10 cherry-picks), so
+  the "parser fixes" are lane patches of unclear rev content; (d) the flag
+  set diverges from our validated invariants (MNBT/seqs/GMU/k). Re-adoption
+  trigger: a TEB ≥93 receipt on the lane at our shape, or prefill need
+  (pp2048 2× our stack), with parser-fix provenance confirmed.
+
+**Watchlist updates:**
+
+- **vLLM #56141 (`9e25706`)** — still not confirmed in ANY consumable image:
+  Dickson's is pre-09-10; Pilco's 0.29 lane likely backported it ("DSML
+  wrapper … fixes") but unverifiable without a boot. Watch stays open;
+  hand-backport into the digest-pinned image remains out of scope.
+- **oselivanov/ollie-gb10-serving-stacks** — competing stack on the SAME
+  engine base (`0.28.1rc1.dev475+g6fbb00b18.d20260907`): stability fixes
+  (b12x MoE kernels blamed for the multi-stream degradation/corruption
+  reports #259/#262 — #336 "DON'T recommend using it for Vision Exp"),
+  dedup + replay-tail fixes on by default, TEB 93/100 (#308), 91 avg over 6
+  runs (#335). The two prefix fixes are adopted above; his b12x warning and
+  stability work are the reason corruption reports exist — if we ever see
+  the #259 pattern, drop the moe backend first.
+- **Kernel 7.0.0-1019 (DGX OS 7.5.0 OTA)** — NCCL/RoCE
+  `ibv_reg_mr_iova2` ENOMEM → OOM deadlocks, no stack change needed to
+  trigger (#315/#316; giles8's dedicated regression thread). Corroborates
+  the repo-wide OTA watch; recorded in README ops notes. Stay on 6.17.x.
+- **`index_topk` 512→1024 in the checkpoint's config.json** (#328,
+  andriizahorui) — single unverified report of improved coherence; HF-
+  config surgery, no second receipt. Watch only.
+- **Mid-decode stall → EngineDead** (elvisnwh #307, #323) — unresolved;
+  0rand's SHM-reduction tip (#325) recorded in README ops notes.
+- Unchanged holds: async-scheduling + seqs=4 (#256 re-raises the perf
+  question; still no measured claim at our seqs=8/batch-4096 profile);
+  K=5 DSpark; DSv4.1 successor lane.
+
 ### 2026-09-12 — adopt upstream PR #1 mm-prefix span fix (opt-in mod)
 
 Upstream merged oselivanov's PR #1 (`d0c8584`, 2026-09-12T16:13Z): the V2

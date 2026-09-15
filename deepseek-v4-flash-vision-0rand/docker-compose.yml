@@ -37,8 +37,9 @@ services:
       # JIT/compile caches (node-local only; this image JITs B12X/CUTLASS
       # kernels and both ranks write concurrently).
       - ${JIT_CACHE_DIR:-/home/sdrew/.cache/vllm-dspark-0rand}:/vllm-cache
-      # Vendored upstream mods (read-only). run.sh patches container
-      # site-packages at boot when FIX_MM_PREFIX_SPAN=1 (see research.md).
+      # Vendored mods (read-only). run.sh scripts patch container
+      # site-packages at boot when their FIX_* env flag is 1 (see README +
+      # research.md).
       - ./mods:/mods:ro
     environment:
       # ---- GPU (one per node; TP=2 across the pair) ----
@@ -104,6 +105,10 @@ services:
       # d0c8584 2026-09-12): applies the vendored mm-prefix span mod at
       # boot. Default OFF (upstream default too) — see README + research.md.
       FIX_MM_PREFIX_SPAN: "${FIX_MM_PREFIX_SPAN:-0}"
+      # Opt-in prefix-cache fixes (oselivanov/ollie-gb10-serving-stacks;
+      # measured on this exact engine rev — see research.md 2026-09-15).
+      FIX_DSV4_PREFIX_REPLAY_TAIL: "${FIX_DSV4_PREFIX_REPLAY_TAIL:-0}"
+      FIX_PREFIX_CACHE_DEDUPE: "${FIX_PREFIX_CACHE_DEDUPE:-0}"
       # ---- multi-node ----
       NODE_RANK: "${NODE_RANK}"
       HEADLESS: "${HEADLESS}"
@@ -168,6 +173,21 @@ services:
           # via bash: upstream stores run.sh non-executable (100644) and the
           # mount is read-only, so direct exec would fail on the nodes.
           bash /mods/fix-dsv4-mm-prefix-span/run.sh
+        fi
+
+        # Opt-in prefix-cache fixes (forum 381911 #296/#302, vendored from
+        # oselivanov/ollie-gb10-serving-stacks): replay-tail = the measured
+        # 1-in-4 prompt-length zero-hit dead zone under sparse retention +
+        # EAGLE-style drafting; dedupe = same-content duplicate block guard
+        # in block_pool. Both Python-only, idempotent, dry-run guarded;
+        # failure is fatal by design (an explicitly requested fix must not
+        # be silently missing). Default OFF — verify with co-le's
+        # cache-pressure tool after enabling.
+        if [ "$${FIX_DSV4_PREFIX_REPLAY_TAIL:-0}" = "1" ]; then
+          bash /mods/fix-dsv4-prefix-replay-tail/run.sh
+        fi
+        if [ "$${FIX_PREFIX_CACHE_DEDUPE:-0}" = "1" ]; then
+          bash /mods/fix-vllm-prefix-cache-dedupe/run.sh
         fi
 
         exec vllm serve "$${DSPARK_MODEL:-deepseek-ai/DeepSeek-V4-Flash-Vision-Exp}" \

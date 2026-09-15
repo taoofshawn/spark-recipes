@@ -167,6 +167,30 @@ too):
 If the patch cannot apply to a future image (context drift), boot fails
 loudly rather than serving silently unpatched.
 
+## Optional: prefix-cache fixes (`FIX_DSV4_PREFIX_REPLAY_TAIL` / `FIX_PREFIX_CACHE_DEDUPE`)
+
+The shared 0.28.1 image carries a **measured prefix-cache dead zone** (forum
+381911 #296/#302): a prompt ending 1..64 tokens past a 256-token boundary
+leaves nothing reusable under sparse retention + EAGLE-style drafting — its
+exact replay and follow-up turn get **zero cached tokens** (full cold
+prefill), ~1 in 4 prompt lengths. Independently, every request leaks
+same-content duplicate blocks in `block_pool` (re-computed positions insert a
+second block with the same hash; the older copy is never touched again).
+
+Vendored verbatim from [oselivanov/ollie-gb10-serving-stacks](https://github.com/oselivanov/ollie-gb10-serving-stacks)
+(Ollie's stack runs both on by default; measured on our exact engine rev
+`0.28.1rc1.dev475+g6fbb00b18`: zero-hit cases 192/768 → 0 across all 256
+prompt-end offsets at 8K/65K/262K; co-le/stu.miller validation runs green —
+#312/#313). To enable:
+
+1. set `FIX_DSV4_PREFIX_REPLAY_TAIL=1` and/or `FIX_PREFIX_CACHE_DEDUPE=1` in `.env`
+2. recreate the container on BOTH nodes — worker first (start order)
+
+Python-only, idempotent, dry-run guarded; patch failure is fatal by design.
+Verify with [co-le's cache-pressure tool](https://github.com/co-l/cache-pressure).
+A third candidate (`boundfix`) ships in Ollie's repo explicitly marked NOT
+READY — not vendored here.
+
 ## References
 
 - Upstream repo: [0rand/DeepSeek-v4-flash-ver-2sparks-vllm-029-0rand](https://github.com/0rand/DeepSeek-v4-flash-ver-2sparks-vllm-029-0rand)
@@ -209,6 +233,24 @@ starting. One recipe at a time.
 - **GB10 UMA has no cgroup accounting/PSI/OOM events (thread 383003):**
   memory death can present as a silent freeze/power-off; `blackbox` /
   `sparkview` exist for post-mortems.
+- **Kernel 7.0.0-1019 (DGX OS 7.5.0 OTA) NCCL/RoCE OOM deadlocks
+  (forum 381911 #315/#316, 2026-09-14):** the v7 kernel causes
+  `ibv_reg_mr_iova2` ENOMEM → OOM with no stack changes, nodes deadlock
+  (manual shutdown required). Stay on / revert to kernel 6.17.0-1032 —
+  do NOT take the 7.5.0 OTA on this cluster (same repo-wide watch as the
+  GLM recipe).
+- **Mid-decode stall → EngineDead (elvisnwh #307/#323, unresolved):** after
+  hours of serving, a streaming request stalls, `No available shared memory
+  broadcast block` repeats, then `RPC call to sample_tokens timed out` kills
+  the engine. 0rand's mitigation (#325): reduce SHM (e.g. 4G — some recipes
+  ship 32G and it can get stuck). Keep logs; jwarner suggests field
+  diagnostics (#331) — a similar pattern failed them once.
+- **b12x MoE + concurrency caveat (OllieO #336):** "—moe-backend b12x …
+  DON'T recommend using it for Vision Exp. It was the whole reason of
+  multi stream degradation" — his stack traced the garbled-output/looping
+  reports (#259/#262) to b12x MoE kernels and rebuilt without them. Our
+  recipe runs b12x on the Dickson image with no observed degradation; if
+  corruption-under-concurrency appears, drop the moe backend first.
 
 Dated changelog and update-pass findings live in [`research.md`](research.md)
 (AGENTS.md convention: the README is the active-running doc only).

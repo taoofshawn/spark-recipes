@@ -161,6 +161,10 @@ a safe start) and re-measure. `--kv-cache-memory` does **not** bypass this gate.
 - **Driver generation (repo-wide watch).** NVIDIA 610.43.02 costs ~4 GiB more
   unified memory and is boot-nondeterministic; this cluster is on 580.173.02 —
   don't upgrade blindly.
+- **DGX OS 7.5.0 OTA (repo-wide watch).** Boots with ~7.2 GiB less RAM (forum
+  383222: 119.5 → 112.3 GiB kernel-available). The GMU 0.88 gate is a fatal
+  whole-system-RAM check — do not take this OTA without lowering GMU and
+  re-measuring on the cluster.
 - **GPU contention.** Serves on all 2 GPUs per node. Tear down any other model
   container on BOTH nodes before starting; one recipe at a time.
 

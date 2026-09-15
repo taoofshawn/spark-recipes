@@ -54,6 +54,13 @@ Every non-cluster value traces to a reviewed source:
   94 (within test noise); k=4 ≈ 20% faster decode than k=7.
 - **pilcothink** (post 44): 1M context running on this stack, "currently
   delivers the fastest speed" — no config receipts attached.
+- **paxren2020** (post 45, 2026-09-14): agent-serving impressions at 900K —
+  GLM ~2× slower than DeepSeek, only 4 concurrent agents vs 8; **2 of 4 agents
+  dropped out mid-task** (6 h run). Real-world confirmation of the concurrency
+  ceiling on this stack.
+- **jetspark** (post 53, 2026-09-15): **98/100** on the nvidia NVFP4 quant with
+  his customized TEB (system-prompt tweak only) — the result that convinced him
+  off EXL3. Same model, yet another bench build — quote the evaluator (§6).
 
 ## Memory model on GB10 (from FINDINGS — applies to the pilcothink build)
 
@@ -97,6 +104,12 @@ Every non-cluster value traces to a reviewed source:
 - **tonyd2wild `GLM53_INDEXER_WORKSPACE` / SM121 indexer overlay**: NOT used
   here — that is the other image lineage's crash fix. Do not copy it onto this
   stack without evidence.
+- **DGX OS 7.5.0 OTA (forum 383222)**: boots with **~7.2 GiB less RAM**
+  (119.5 → 112.3 GiB kernel-available; UEFI 5.36_0ACUM027 + kernel
+  7.0.0-1019-nvidia). The pilcothink GMU gate is a **fatal** check against
+  whole-system RAM — post 36 shows free-at-startup ≈108.2 GiB passing 0.85 but
+  failing 0.9; a −7.2 GiB drop would fail the shipped GMU 0.88 (107.1 GiB).
+  Do NOT take this OTA on the cluster without lowering GMU and re-measuring.
 
 ## Changelog
 
@@ -109,3 +122,15 @@ Every non-cluster value traces to a reviewed source:
   uncommitted by design. Skill-default overrides applied: port 8000, served
   name `glm-5.3-flash`, temp/top_p/thinking/effort pins; drafter revision
   pinned where upstream left it unpinned.
+- **2026-09-15** — first update pass (recipe-update skill, branch
+  `adopt-glm-v53-flash-nvfp4-0rand`). Upstream repo: one new commit `e1de4ab`
+  (README-only: drops the "no hardmode on 900K yet" caveat — the 95/100 is post
+  41's replication; fixes ZMQ bind-address prose). `start.sh`, `.env.sample`,
+  `docs/FINDINGS.md` byte-identical to the pinned `start.sh` blob `0227b8df`.
+  Image `pilcothink/vllm_spark_glm53`: still only tag `0.28`. HF: weights
+  `09b04e5e` and drafter `bf582e4e` unchanged. Forum 382939 posts 45–55: no new
+  flags; adopted as receipts — post 45 (2 of 4 concurrent agents dropped at
+  900K) and post 53 (jetspark 98/100 on the NVFP4 quant). General sweep of cats
+  721/723 since 09-14: no recipe-relevant config; new repo-wide watch item —
+  DGX OS 7.5.0 OTA −7.2 GiB boot RAM vs the fatal GMU gate (forum 383222).
+  No config changes required.

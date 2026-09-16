@@ -1,0 +1,226 @@
+services:
+  vllm-dspark:
+    image: ${IMAGE}
+    # Clear the image's ENTRYPOINT — the command block below is the actual
+    # entry; without this the bash script is appended to `vllm serve` as args
+    # and the container dies at argparse (parity with glm-v53-flash-intel-w4a16).
+    entrypoint: []
+    container_name: glm53-nvfp4-0rand
+    restart: "no"
+    network_mode: host
+    ipc: host
+    shm_size: 32g
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    cap_add:
+      - IPC_LOCK
+    gpus: all
+    devices:
+      - /dev/infiniband:/dev/infiniband
+    healthcheck:
+      test: ["CMD-SHELL", "if [ -n \"$$HEADLESS\" ]; then exit 0; fi; curl -fsS http://127.0.0.1:${PORT:-8000}/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      # upstream boot ~980 s to serving (0rand README); generous headroom
+      start_period: 1500s
+    volumes:
+      # HF hub cache (NVFP4 checkpoint + DFlash2 drafter; downloaded on both
+      # nodes). Both are resolved to their snapshot dirs at boot — the NVFP4
+      # checkpoint loads natively on the pilcothink image, no surgery step.
+      - ${HF_CACHE}:/cache/huggingface
+      # Cache root -> /cache (JIT caches; node-local disk only) + a /root/.cache
+      # catch-all for anything that ignores the env overrides below.
+      - ${CACHE_HOST_PATH}:/cache
+      - ${CACHE_HOST_PATH}/root-cache:/root/.cache
+    environment:
+      # ---- GPU ----
+      CUDA_VISIBLE_DEVICES: "0"
+      CUDA_DEVICE_ORDER: PCI_BUS_ID
+      # ---- node identity (rank / headless) ----
+      NODE_RANK: "${NODE_RANK:-0}"
+      HEADLESS: "${HEADLESS:-}"
+      ROCE_IP: "${ROCE_IP:-}"
+      # Multi-node rendezvous + serve port (read by the command block)
+      MASTER_ADDR: "${MASTER_ADDR}"
+      PORT: "${PORT:-8000}"
+      MPORT: "${MPORT:-29521}"
+      # ---- model + drafter (resolved from the HF cache at boot) ----
+      MODEL: "${MODEL}"
+      MODEL_REVISION: "${MODEL_REVISION:-}"
+      DFLASH_MODEL: "${DFLASH_MODEL:-incoai/GLM-5.3-Flash-DFlash2}"
+      DFLASH_REVISION: "${DFLASH_REVISION:-}"
+      DFLASH_TOKENS: "${DFLASH_TOKENS:-5}"
+      SPEC_EXTRAS: "${SPEC_EXTRAS:-1}"
+      # ---- serving profile (command block reads these shell-side) ----
+      GMU: "${GMU:-0.88}"
+      MAX_LEN: "${MAX_LEN:-900096}"
+      MAX_SEQS: "${MAX_SEQS:-4}"
+      MNBT: "${MNBT:-1024}"
+      BLOCK_SIZE: "${BLOCK_SIZE:-256}"
+      KV_DTYPE: "${KV_DTYPE:-fp8}"
+      KV_CACHE_MEMORY: "${KV_CACHE_MEMORY:-}"
+      CAPTURE_SIZE: "${CAPTURE_SIZE:-16}"
+      ASYNC: "${ASYNC:-1}"
+      EAGER: "${EAGER:-0}"
+      MOE_BACKEND: "${MOE_BACKEND:-b12x}"
+      LINEAR_BACKEND: "${LINEAR_BACKEND:-b12x}"
+      ATTN_BACKEND: "${ATTN_BACKEND:-}"
+      DISABLE_FLASHINFER_AUTOTUNE: "${DISABLE_FLASHINFER_AUTOTUNE:-1}"
+      SERVED_MODEL_NAME: "${SERVED_MODEL_NAME:-glm-5.3-flash}"
+      # ---- sampling / thinking defaults (repo-standard pins; server-side so
+      # checkpoint/template defaults can't silently drift them) ----
+      THINKING: "${THINKING:-true}"
+      REASONING_EFFORT: "${REASONING_EFFORT:-high}"
+      TEMPERATURE: "${TEMPERATURE:-1.0}"
+      TOP_P: "${TOP_P:-0.95}"
+      # ---- RoCE networking (this cluster's NICs) ----
+      # NCCL_SOCKET_IFNAME / NCCL_IB_HCA / NCCL_IB_GID_INDEX /
+      # NCCL_IGNORE_CPU_AFFINITY / GLOO_SOCKET_IFNAME are what 0rand's
+      # start.sh sets; the rest is this fabric's proven RoCE-v2 wiring from
+      # the reference recipe (cluster-level, image-independent).
+      NCCL_NET: IB
+      NCCL_IB_DISABLE: "0"
+      NCCL_NET_PLUGIN: none
+      NCCL_IB_HCA: "${IB_PORTS}"
+      NCCL_IB_GID_INDEX: "${NCCL_IB_GID_INDEX:-}"
+      NCCL_IB_ROCE_VERSION_NUM: "2"
+      NCCL_IB_ADDR_FAMILY: AF_INET
+      NCCL_IB_ADDR_RANGE: "${NCCL_SUBNET}"
+      NCCL_SOCKET_IFNAME: "${ETH_IF}"
+      GLOO_SOCKET_IFNAME: "${ETH_IF}"
+      TP_SOCKET_IFNAME: "${ETH_IF}"
+      MN_IF_NAME: "${ETH_IF}"
+      NCCL_NVLS_ENABLE: "0"
+      NCCL_CROSS_NIC: "0"
+      NCCL_IB_MERGE_NICS: "0"
+      NCCL_CUMEM_ENABLE: "0"
+      NCCL_IGNORE_CPU_AFFINITY: "1"
+      NCCL_DEBUG: WARN
+      TORCH_NCCL_ASYNC_ERROR_HANDLING: "1"
+      NCCL_MIN_NCHANNELS: "${NCCL_NCHANNELS:-8}"
+      NCCL_MAX_NCHANNELS: "${NCCL_NCHANNELS:-8}"
+      # ---- runtime (0rand start.sh env block; vLLM 0.28.1rc1.dev475) ----
+      VLLM_HOST_IP: "${ROCE_IP}"
+      HF_HOME: /cache/huggingface
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      CUTE_DSL_ARCH: sm_121a
+      TORCH_USE_RTLD_GLOBAL: "1"
+      TORCHINDUCTOR_COMPILE_THREADS: "1"
+      VLLM_ENGINE_READY_TIMEOUT_S: "3600"
+      VLLM_ALLOW_LONG_MAX_MODEL_LEN: "1"
+      VLLM_GLM53_SPLIT_TARGET_BLOCK_SIZE: auto
+      # vLLM >= v0.21: the graph-mode memory estimator reserves ~2.1 GiB of KV;
+      # 0 = estimator off (upstream default — the pool keeps the budget).
+      VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS: "${ESTIMATE_CUDAGRAPHS:-0}"
+      TORCHINDUCTOR_CACHE_DIR: /cache/torchinductor
+    command:
+      - /bin/bash
+      - -lc
+      - |
+        set -euo pipefail
+
+        # ---- GID auto-detect (sysfs; GID table renumbers across reboots and a
+        # wrong index dies ~60 s later in NCCL QP setup) ----
+        if [ -z "$${NCCL_IB_GID_INDEX:-}" ]; then
+          _want="$$(printf '0000:0000:0000:0000:0000:ffff:%02x%02x:%02x%02x' $$(echo "$${ROCE_IP}" | tr . ' '))"
+          for _g in /sys/class/infiniband/rocep1s0f0/ports/1/gids/*; do
+            [ "$$(cat "$$_g" 2>/dev/null)" = "$$_want" ] || continue
+            _idx="$${_g##*/}"
+            [[ "$$(cat "/sys/class/infiniband/rocep1s0f0/ports/1/gid_attrs/types/$$_idx" 2>/dev/null)" == *"v2"* ]] || continue
+            NCCL_IB_GID_INDEX="$$_idx"; break
+          done
+          if [ -z "$${NCCL_IB_GID_INDEX:-}" ]; then
+            echo "error: no RoCE v2 GID matching $$ROCE_IP on rocep1s0f0; table:" >&2
+            for _g in /sys/class/infiniband/rocep1s0f0/ports/1/gids/*; do
+              _idx="$${_g##*/}"
+              echo "  gid $$_idx: $$(cat "$$_g" 2>/dev/null) type=$$(cat "/sys/class/infiniband/rocep1s0f0/ports/1/gid_attrs/types/$$_idx" 2>/dev/null)" >&2
+            done
+            echo "override with NCCL_IB_GID_INDEX=<idx> if the table disagrees" >&2
+            exit 2
+          fi
+          echo "GID auto-detect: NCCL_IB_GID_INDEX=$${NCCL_IB_GID_INDEX}"
+          export NCCL_IB_GID_INDEX
+        fi
+
+        # ---- preflight: resolve the NVFP4 checkpoint + DFlash2 drafter from
+        # the HF cache (offline; fail-closed) ----
+        resolve_snapshot() {
+          local hub="$1" rev="$2"
+          local dir="/cache/huggingface/hub/models--$$(echo "$$hub" | sed 's|/|--|g')"
+          if [ -n "$$rev" ] && [ -d "$$dir/snapshots/$$rev" ]; then echo "$$dir/snapshots/$$rev"; return 0; fi
+          local snap; for snap in "$$dir"/snapshots/*/; do
+            if [ -f "$$snap/config.json" ]; then echo "$$snap"; return 0; fi
+          done
+          echo ""
+        }
+        M="$$(resolve_snapshot "$${MODEL:?MODEL must be set}" "$${MODEL_REVISION:-}")"
+        [ -n "$$M" ] || { echo "FATAL: $${MODEL} snapshot not found in the HF cache — download on BOTH nodes first (README step 0)" >&2; exit 2; }
+        DFLASH_MODEL_DIR="$$(resolve_snapshot "$${DFLASH_MODEL}" "$${DFLASH_REVISION:-}")"
+        [ -n "$$DFLASH_MODEL_DIR" ] || { echo "FATAL: DFlash2 drafter not found in HF cache for $$DFLASH_MODEL — download on BOTH nodes first (README step 0)" >&2; exit 2; }
+        echo "[glm53-nvfp4-0rand] model=$$M"
+        echo "[glm53-nvfp4-0rand] drafter=$$DFLASH_MODEL_DIR"
+
+        # ---- speculative config (0rand start.sh shape; attention_backend +
+        # kv_cache_dtype "auto" for the drafter; SPEC_EXTRAS adds the four
+        # sampling extras upstream ships) ----
+        SPEC="{\"method\":\"dflash\",\"model\":\"$$DFLASH_MODEL_DIR\",\"num_speculative_tokens\":$${DFLASH_TOKENS:-5},\"attention_backend\":\"TRITON_ATTN\",\"kv_cache_dtype\":\"auto\"}"
+        if [ "$${SPEC_EXTRAS:-1}" = "1" ]; then
+          SPEC="{\"method\":\"dflash\",\"model\":\"$$DFLASH_MODEL_DIR\",\"num_speculative_tokens\":$${DFLASH_TOKENS:-5},\"attention_backend\":\"TRITON_ATTN\",\"kv_cache_dtype\":\"auto\",\"draft_sample_method\":\"probabilistic\",\"rejection_sample_method\":\"standard\",\"enable_adaptive_verification\":false,\"disable_eagle_block_drop\":false}"
+        fi
+
+        ARGS=(serve "$$M"
+          --served-model-name "$${SERVED_MODEL_NAME:-glm-5.3-flash}"
+          --host 0.0.0.0 --port "$${PORT:-8000}"
+          --dtype bfloat16
+          --trust-remote-code
+          --tensor-parallel-size 2
+          --gpu-memory-utilization "$${GMU:-0.88}"
+          --max-model-len "$${MAX_LEN:-900096}"
+          --max-num-seqs "$${MAX_SEQS:-4}"
+          --max-num-batched-tokens "$${MNBT:-1024}"
+          --block-size "$${BLOCK_SIZE:-256}"
+          --mamba-cache-mode align
+          --enable-prefix-caching
+          --enable-chunked-prefill
+          --skip-mm-profiling
+          --reasoning-parser glm45
+          --tool-call-parser glm47
+          --enable-auto-tool-choice
+        )
+        [ -n "$${KV_DTYPE:-}" ] && ARGS+=(--kv-cache-dtype "$${KV_DTYPE}")
+        _kvmem="$${KV_CACHE_MEMORY:-}"
+        [ -n "$$_kvmem" ] && ARGS+=(--kv-cache-memory "$$_kvmem")
+        [ -n "$${MOE_BACKEND:-}" ] && ARGS+=(--moe-backend "$${MOE_BACKEND}")
+        [ -n "$${LINEAR_BACKEND:-}" ] && ARGS+=(--linear-backend "$${LINEAR_BACKEND}")
+        [ -n "$${ATTN_BACKEND:-}" ] && ARGS+=(--attention-backend "$${ATTN_BACKEND}")
+        [ "$${DISABLE_FLASHINFER_AUTOTUNE:-1}" != "0" ] && ARGS+=(--no-enable-flashinfer-autotune)
+        ARGS+=(--speculative-config "$$SPEC")
+        # Graphs vs eager — explicit 1/0 tests, NOT $${VAR:+...}: 0rand
+        # FINDINGS 5.3 (":+" expands for any set value, so EAGER=0 silently
+        # passed --enforce-eager and cancelled the graphs).
+        if [ "$${EAGER:-0}" = "1" ]; then
+          ARGS+=(--enforce-eager)
+        else
+          ARGS+=(--max-cudagraph-capture-size "$${CAPTURE_SIZE:-16}")
+        fi
+        [ "$${ASYNC:-1}" = "1" ] && ARGS+=(--async-scheduling)
+        # Sampling pins — repo-standard (temp 1.0 / top_p 0.95, thinking ON at
+        # REASONING_EFFORT). --generation-config vllm ignores the checkpoint's
+        # generation_config.json for SAMPLING only; clients override per
+        # request via chat_template_kwargs / the OpenAI reasoning_effort field.
+        GEN_CFG="{\"temperature\": $${TEMPERATURE:-1.0}, \"top_p\": $${TOP_P:-0.95}}"
+        ARGS+=(--generation-config vllm --override-generation-config "$$GEN_CFG")
+        ARGS+=(--default-chat-template-kwargs "{\"enable_thinking\": $${THINKING:-true}, \"reasoning_effort\": \"$${REASONING_EFFORT:-high}\"}")
+        # Multi-node TP=2
+        ARGS+=(--distributed-executor-backend mp
+          --nnodes 2 --node-rank "$${NODE_RANK:-0}"
+          --master-addr "$${MASTER_ADDR}" --master-port "$${MPORT:-29521}")
+        [ -n "$${HEADLESS:-}" ] && ARGS+=(--headless)
+
+        echo "launched image=$IMAGE rank=$${NODE_RANK:-0} host=$${ROCE_IP} gid=$${NCCL_IB_GID_INDEX:-auto} kv=$${_kvmem:-GMU-driven}/$${KV_DTYPE:-default} max_len=$${MAX_LEN:-900096} seqs=$${MAX_SEQS:-4} batch=$${MNBT:-1024} moe=$${MOE_BACKEND:-default} k=$${DFLASH_TOKENS:-5} graphs=$${CAPTURE_SIZE:-off} async=$${ASYNC:-0} gme=$${ESTIMATE_CUDAGRAPHS:-1}"
+
+        exec vllm "$${ARGS[@]}"

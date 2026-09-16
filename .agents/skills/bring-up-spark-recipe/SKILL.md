@@ -26,7 +26,7 @@ of `taoofshawn/spark-recipes`).
 This skill ONLY brings a recipe up and keeps it serving — it does NOT research,
 review, or update recipe source code, and it does NOT create branches, commit, or
 push changes to the repo. Updating a recipe against its upstream sources is the
-`recipe-update` skill's job; run that first if the recipe needs refreshing, then
+`update-recipe` skill's job; run that first if the recipe needs refreshing, then
 bring the refreshed recipe up here.
 
 ## When to use / not

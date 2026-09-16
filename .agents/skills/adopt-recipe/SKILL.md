@@ -6,7 +6,7 @@ description: >-
   a new docker-compose recipe directory on a fresh branch for review. Triggers:
   "adopt <link>", "create a recipe for <model>", "new recipe from <thread/repo>",
   "port <author>'s recipe", "add <model> to spark-recipes". Does NOT update an
-  existing recipe (recipe-update) and does NOT bring anything up on the sparks
+  existing recipe (update-recipe) and does NOT bring anything up on the sparks
   (bring-up-spark-recipe).
 ---
 
@@ -21,7 +21,7 @@ new branch, **left uncommitted** for the user to review.
 
 This skill CREATES a new recipe directory and stops there. It does NOT:
 
-- update an existing recipe against its upstreams — that is `recipe-update`;
+- update an existing recipe against its upstreams — that is `update-recipe`;
 - bring the recipe up on the sparks, build images, or verify a live endpoint —
   that is `bring-up-spark-recipe`, run AFTER the recipe lands;
 - commit, push, open a PR, or merge anything. The deliverable is an untracked
@@ -31,7 +31,7 @@ If the target looks like a variant of a recipe this repo already carries (same
 model + same quant, just newer pins), CHECK WITH THE USER before doing anything
 else — they may still want a separate recipe for the same model (different
 quant, different lane, or some other difference). Only fall back to
-`recipe-update` if the user says so.
+`update-recipe` if the user says so.
 
 ## Inputs
 

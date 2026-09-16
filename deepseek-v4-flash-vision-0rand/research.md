@@ -7,6 +7,46 @@ items live here (AGENTS.md convention).
 
 ## Changelog
 
+### 2026-09-16 — bring-up: fixes ON (left serving), async-scheduling A/B = no win, shm_size no-op confirmed
+
+Bring-up per the skill (branch `dsv4-vision-0rand-0915-updates` checked out on
+both nodes; GLM intel recipe torn down; checkpoint pin `86f746b3` verified
+cached on both). Warm boots ~6-11 min; all three mods applied on BOTH ranks
+at every boot (log lines `[fix-*] applying patch ... done`).
+
+- **Tier 1 (shm)**: `docker exec ... df -h /dev/shm` on both nodes shows
+  **61G tmpfs = the host's /dev/shm**, identical inside and outside the
+  container — the compose `shm_size: "64gb"` is a **no-op under `ipc: host`**
+  (Docker only sizes private /dev/shm). Effective ceiling is the host default
+  (~50% RAM). The #325 SHM-reduction mitigation cannot be applied via
+  compose; would need host remount or `ipc: private` + sized shm (own boot
+  test). Recipes repo-wide share this dead knob (aiden 32g, glm 32g, here
+  64g) — cleanup candidate, untouched in this branch.
+- **Tier 2 A/B** (same bench: c1 tg1024 ×2, c4 = 4 parallel tg512 ×2;
+  fixes ON in both boots; warm-up requests before measuring):
+
+  | config | c1 tok/s | c4 agg tok/s | KV pool | cache-pressure |
+  |---|---|---|---|---|
+  | boot 1: async OFF, seqs 8 | 32.3 / 28.2 | 59.4 / 68.3 | 2,982,037 | 100/100 replay HIT |
+  | boot 2: async ON, seqs 8 | 33.5 / 31.6 | 61.5 / 68.2 | 2,969,792 | 100/100 replay HIT |
+
+  Verdict: **within noise** — no measurable async-scheduling win at c1/c4,
+  and it costs ~12K tokens of KV pool. Final serving config = **async OFF**.
+  The two-knob upstream pairing (async + seqs=4) remains untested; seqs=4
+  contradicts the agent-serving profile and stays rejected. `ASYNC_SCHEDULING`
+  knob kept (default 0) for future one-knob retries.
+- **Prefix-cache fixes validated**: cache-pressure (`co-l/cache-pressure`,
+  100 × ~8K contexts, --kv-size = logged pool) shows **100/100 replay HITs,
+  ttft ~0.2 s, zero misses** on both boots — the 1-in-4 dead-zone signature
+  is absent with the mods on. Fix ON left serving.
+- Final boot markers: KV pool 2,902,514 (2.77× @1M ctx; pool varies
+  boot-to-boot with free RAM at profiling — 2.90-2.98M observed). Proxy
+  restarted on the leader with `BACKEND_MODEL=deepseek-v4-flash`; end-to-end
+  through :4000 returns the real backend name (mode A) + sane reply.
+- Watch for the soak: the #307 mid-decode stall → EngineDead pattern (SHM
+  topic) and #259/#262 corruption-under-concurrency (b12x MoE) only surface
+  under hours of real load — review after several days.
+
 ### 2026-09-15 — update pass: adopt prefix-cache fixes as opt-in mods; hold PilcoTHINK 0.29 image
 
 Sources swept (window 2026-09-11 → 09-15): NVIDIA forum thread 381911 posts

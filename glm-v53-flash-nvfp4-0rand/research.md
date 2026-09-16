@@ -134,3 +134,13 @@ Every non-cluster value traces to a reviewed source:
   721/723 since 09-14: no recipe-relevant config; new repo-wide watch item —
   DGX OS 7.5.0 OTA −7.2 GiB boot RAM vs the fatal GMU gate (forum 383222).
   No config changes required.
+- **2026-09-16** — TEMP direct-:4000 experiment ended; config reverted (branch
+  `revert-glm-nvfp4-temp-port-4000`, left uncommitted by request). Commit
+  `3fd441b` (merged via #61) had temporarily moved serving to `PORT=4000` with
+  `SERVED_MODEL_NAME=spark-llm` and the model-name proxy disabled (not
+  started), plus a middle-ground profile `MAX_LEN=700160` / `MNBT=2048`.
+  Reverted back to the cluster convention: `PORT=8000`, served name
+  `glm-5.3-flash`, proxy re-enabled for the next bring-up (the bring-up skill's
+  step 3b re-points proxy `BACKEND_MODEL` and restarts it on mismatch). The
+  middle-ground profile knobs are KEPT as-is — only the port/served-name part
+  of the experiment was rolled back.

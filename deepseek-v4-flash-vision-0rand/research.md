@@ -7,7 +7,131 @@ items live here (AGENTS.md convention).
 
 ## Changelog
 
-### 2026-09-16 — bring-up: fixes ON (left serving), async-scheduling A/B = no win, shm_size no-op confirmed
+### 2026-09-17 — incident: boot-3 pairing (async ON + seqs 4) collapses decode at batch 2 under real agent load; profile restored
+
+Troubleshoot-slowness pass on the live deployment (container up ~15 h = boot 3
+of the 09-16 bring-up session). User report: "active session is very slow"
+(~21:29 UTC). This is the missing receipt for boot-3 (6666086), which flipped
+to the exact upstream pairing after the 09-16 entry was written.
+
+**Root cause: concurrency-arrival decode collapse on `ASYNC_SCHEDULING=1` +
+`MAX_NUM_SEQS=4`.** Whenever ≥2 requests ran, aggregate decode fell to
+1.5-3 tok/s (~1 tok/s per stream vs 14-40 tok/s single-stream the same day).
+Hardware, host memory, KV capacity and spec acceptance all exonerated; JIT
+warm after the first batch-2 shape.
+
+Evidence (UTC, container logs + /metrics on the head):
+
+- 21:28:37 `_gumbel_sample_kernel` Triton JIT on BOTH TP workers — first
+  batch≥2 sampling shape of the boot (warmup gap, one-off; jit_monitor's
+  "extend warmup" advice is a cheap follow-up: warm a 2-seq shape).
+- 21:28:40 run=3→2; 21:28:50-21:29:50 tg aggregate 1.5-2.4 sustained at
+  run=2 (KV 16.6→18.7%, waiting=0). Snapped back to 16.7 tok/s at run=1
+  the moment the intruder requests completed (21:30:00).
+- Live probe (21:33-21:37, 96-token text completions, stream:false, ZERO
+  new JIT lines in the window): single co-running with the session's turn
+  53.0 s = 1.8 tok/s; concurrent pair 61.1/61.4 s = **1.6 tok/s per stream
+  at batch 2, warm**; single after = 14.7 s. ~20× per-stream loss at
+  batch 2, reproducible warm — not a warmup artifact.
+- 21:35:40 run=1 wait=2 at KV 17.4% (pool ~2.9M): admission deferral with
+  healthy capacity — off-profile behavior; mechanism not captured
+  (async-scheduler deferral vs chunked-prefill budget; by-reason gauge not
+  sampled in time). Second data point that the pairing misbehaves beyond
+  decode rate.
+- Host: si/so ≈ 0 (VmSwap 4.1 GiB = boot-time allocation), 6 GiB
+  available, CPU ~85% idle. GPU: P0, 2184 MHz, no throttle reasons — but
+  96% util at 1.7 tok/s = GPU spinning on per-step overhead, not stalled.
+- SpecDec acceptance: 5.2-6.2 at run=1, 3.0-4.8 at run=2 — inside the
+  normal content swing; not the driver.
+- Prefix cache (watch item, NOT diagnosed): long-run
+  700416/15303997 = **4.6% hit rate**; every agent turn re-prefills the
+  full 11-15K context (pp spikes 12-15K all day; KV residual ~2.6-3.0%
+  between turns) — vs 100/100 replay HITs in both 09-16 boots with
+  co-le's cache-pressure. All three mods ARE applied this boot (`[fix-*]`
+  done on head). Either the real agent prompt shape defeats replay
+  (unstable prefix head?) or the fixes don't cover this workload — needs
+  the cache-pressure tool against a captured agent prompt; no verdict.
+
+**Cap arithmetic (skill formula):** min(MAX_SEQS, KV pool ÷ per-session,
+spec-decoder efficient batch). One session turn allocates ~14% of the pool
+(measured all day) → ~7 sessions fit; MAX_SEQS 4; measured spec-efficient
+batch under the live pairing = **1** → interim client cap 1 (no restart).
+Restored profile (async OFF + seqs 8, twice measured 09-16): spec-efficient
+batch = 4 (c4 agg 59-68 tok/s, fixes ON) → cap 4.
+
+**Fix (branch `dsv4-vision-0rand-restore-validated-profile`):** `.env`
+ASYNC_SCHEDULING 1→0, MAX_NUM_SEQS 4→8 — the exact twice-measured config.
+Attribution is correlation + elimination, flagged [INFERENCE]: async alone
+is exonerated (boot-2 ran async ON at seqs 8, healthy at c4: 61.5/68.2);
+seqs 4 is the only config delta vs both healthy boots; the causal mechanism
+at seqs 4 is unproven. Deploy needs container recreate on BOTH nodes
+(worker first, ~6-11 min warm boot). Verify after restore: c4 96-token
+probe ≈ 55-70 tok/s aggregate, plus a cache-pressure pass.
+
+**Addendum — boot-4 (restored profile) deployed on this branch + validated
+(same day, per user call; node trees checked out on the recovery branch
+without merging — deliberate deviation, both trees otherwise pristine):**
+
+- Bring-up per the skill: teardown both nodes → worker first (GID=3
+  auto-detected) → head ~40 s later → warm boot ~6 min (22:25:5x start →
+  22:32:01 UTC /health 200). Markers green on BOTH ranks: three `[fix-*]`
+  mods applied, `B12X_MXFP4_MXFP8` MoE, DSpark drafter loaded (k=6,
+  probabilistic), no `--async-scheduling` in argv, `--max-num-seqs 8`,
+  **KV pool 2,919,967 tokens** (the ~12K async tax gone), zero
+  errors/tracebacks. model-name-proxy went transiently unhealthy during
+  the boot window and recovered to healthy once :8000 served (its
+  healthcheck probes the backend — expected, no action).
+- Validation (stream:false, warm-up request first, tg = completion
+  tokens actually generated; head, 22:33-22:36 UTC):
+
+  | probe | boot-4 (restored) | 09-16 A/B receipt | boot-3 (broken) |
+  |---|---|---|---|
+  | c1 tg1024 | **59.1 tok/s** (first run hit EOS at 167 tok → 34.4) | 32.3-33.5 | 14-40 bursty |
+  | c4 = 4× tg512 | **72.0 / 64.9 tok/s aggregate** (two rounds) | 59.4-68.3 | 1.6-3.1 aggregate |
+
+  The c4 rounds traverse batch 1→2→3→4 with no collapse at any size —
+  the exact shape that collapsed ~20× per-stream on boot-3 (1.6 tok/s
+  per stream there; 16-18 tok/s per stream here). Only first-touch JITs
+  fired this boot (`_topp_*`, one CuTeDSL gemm) with no sustained
+  impact. c1 59.1 vs the bench's 32-34 is content/acceptance variation
+  (different prompt class); not investigated further.
+- Watch item stays OPEN: prefix-cache hit rate under the real agent
+  workload (4.6% long-run observed on boot-3, full-context re-prefill
+  every turn). Needs co-le's cache-pressure against a captured agent
+  prompt — not tested in this boot.
+- Ops note: nodes are on the recovery branch, NOT main. After the PR
+  merges, `git checkout main && git pull origin main` on both nodes; the
+  running containers already match the merged config, so no recreate is
+  required at that point.
+
+**Addendum 2 — async A/B repeat at seqs 8 (2026-09-17, user-requested):**
+boot-4 async OFF (b9d20f8) vs boot-5 async ON (bafce55), one-knob flip,
+identical bench both sides (warm-up request, c1 tg1024 ×2, c4 = 4× tg512
+×2, stream:false, same prompts; both boots healthy, KV pool in band):
+
+| shape | A: async OFF (boot-4) | B: async ON (boot-5) | 09-16 receipts |
+|---|---|---|---|
+| c1 full-1024 | 70.4 / 59.1 tok/s | 32.0 / 33.7 tok/s | boot-1 OFF 32.3/28.2; boot-2 ON 33.5/31.6 |
+| c4 aggregate | 71.5 / 64.5 tok/s | 65.5 tok/s (round a adjusted: 2 streams hit EOS at 296/130 tok) | OFF 59.4-68.3; ON 61.5-68.2 |
+| TTFT, tiny streamed probe | 2-13 ms | 2-14 ms | n/a |
+| KV pool | 2,919,967 | 2,954,028 | 2,982,037 / 2,969,792 |
+
+Verdict: **no measurable async delta at seqs 8.** c4 rounds overlap within
+the ±7 tok/s same-boot round-to-round spread. The c1 gap (A 59-70 vs B
+32-34) is NOT attributable to async: boot-1 (async OFF, 09-16) measured
+32.3/28.2 on its own prompts, and temp-1.0 acceptance variance on
+essay-style content spans the entire range — same boot, same prompt
+sampled 29.9-70.4 tok/s today (short-EOS runs excluded), final sanity c1
+40.9. KV-pool ordering also flipped vs 09-16 (today's ON boot has the
+LARGER pool) — boot-to-boot profiling variance dominates; the "~12K async
+tax" does not reproduce. Final serving config unchanged: async OFF @ seqs
+8 (boot-6 @ 7fe38e5, KV 2,964,725; sanity c1 40.9, c4 60.1 agg, healthy,
+zero errors). Cumulative async scorecard: 3 OFF boots vs 2 ON boots, zero
+measured wins — stop A/B'ing this knob without a new hypothesis.
+
+
+
+
 
 Bring-up per the skill (branch `dsv4-vision-0rand-0915-updates` checked out on
 both nodes; GLM intel recipe torn down; checkpoint pin `86f746b3` verified

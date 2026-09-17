@@ -277,3 +277,54 @@ pool (1.75M vs 1.34M); (3) MNBT: only rodman80's data, keep 8192; (4) does
    lane's `dc77ff1c…` pin is retained here for reference only.
 4. `GLM53_INDEXER_WORKSPACE`/APC anchors: any vLLM-file drift breaks the
    fail-closed boot — by design; re-derive or retire then.
+
+## 2026-09-17 — production-night troubleshoot: "crawling" agent traffic (mtp3 lane, live container)
+
+**Deployment (live, not repo defaults):** `glm53-intel-w4a16` =
+`glm53-intel-mtp3-pmu128:20260907`, `LANE=mtp3`, `PMU=1`, started
+2026-09-17 02:19 UTC — first production night on the mtp3 lane.
+Report: agents capped at 4 concurrent, "performance crawling".
+
+**Method:** troubleshoot-slowness protocol (live env → metrics → engine
+timeline → host/GPU → spec-decoder). All timestamps UTC.
+
+**Evidence:**
+- Serial giant prefills: pp 5.2K→10.5K tok/s in single 10-s windows every
+  ~30–60 s, tg≈0–3 during them. Avg prompt = 3.74M/55 req ≈ 68K tok, avg
+  gen ≈ 200 tok — agent-style full-history turns.
+- Decode healthy when it runs: tg 20–35 tok/s at run=1 (02:49–02:52
+  sustained burst); MTP3 mean acceptance 2.4–3.9 (normal variation).
+- run ≤ 2, waiting=0 the whole hour → the client cap of 4 never bound;
+  traffic was effectively serial.
+- Prefix-cache cumulative hit rate collapsed 25.1% (02:36) → 3.5%
+  (03:22); live delta over 4 min = 532,273 queries / 13,824 hits = **2.6%**.
+- PMU128 retention proven live (same 655-tok prompt twice): shot 1
+  `cached_tokens=0` (16.7 s wall — queued behind an in-flight prefill),
+  shot 2 `cached_tokens=640/655` (128-token precision, 15-token residue).
+  **The lane does NOT lose prefix hits** — the dflash2-on-base-image
+  failure mode does not apply to native MTP3.
+- Host/GPU exonerated: P0, empty throttle counters on both nodes; head
+  118/121 GiB + 3 GiB swap allocated (calm si/so), worker 116/121 (calm);
+  JIT lines one-off (02:35 warmup, 03:21 new run=2 shape).
+
+**Root cause:** workload, not hardware/config — prefix-unique prompts
+(fresh subagent-style conversations per request). Every turn cold-prefills
+~68K tok ≈ 7 s TTFT at the ~9.5K tok/s W4A16-marlin prefill ceiling, and
+decode starves during those windows (MNBT 8192 chunked prefill). KV pool
+never above 7.8% → no eviction pressure; the low hit rate is prompt
+uniqueness, not cache loss.
+
+**Cap arithmetic:** min(MAX_SEQS=6, 1.92M ÷ 68K ≈ 28 sessions, MTP3
+efficient batch ≈ 6) = 6 — the client cap of 4 sits below cap; the cap was
+never the lever.
+
+**Fix applied:** none server-side (nothing broken). Client-side
+recommendation delivered: append-only conversation history + stable system
+prefix so PMU128 replays history at 128-token precision — turns become
+decode-bound at 25–35 tok/s.
+
+**Watch:** headroom 3–5 GiB/node at GMU 0.85 + 13.5 GB KV pin (DGX OS
+7.5.0 OTA boots with ~7.2 GiB less RAM) — do not raise GMU/KV pin without
+re-measuring host headroom through a ~950K prefill. The mtp3-vs-dflash2 A/B
+watcher above gains a production data point: PMU128 cache mechanics and
+acceptance validated live.

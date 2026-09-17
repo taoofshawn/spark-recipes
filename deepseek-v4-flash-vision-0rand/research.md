@@ -104,6 +104,32 @@ without merging — deliberate deviation, both trees otherwise pristine):**
   running containers already match the merged config, so no recreate is
   required at that point.
 
+**Addendum 2 — async A/B repeat at seqs 8 (2026-09-17, user-requested):**
+boot-4 async OFF (b9d20f8) vs boot-5 async ON (bafce55), one-knob flip,
+identical bench both sides (warm-up request, c1 tg1024 ×2, c4 = 4× tg512
+×2, stream:false, same prompts; both boots healthy, KV pool in band):
+
+| shape | A: async OFF (boot-4) | B: async ON (boot-5) | 09-16 receipts |
+|---|---|---|---|
+| c1 full-1024 | 70.4 / 59.1 tok/s | 32.0 / 33.7 tok/s | boot-1 OFF 32.3/28.2; boot-2 ON 33.5/31.6 |
+| c4 aggregate | 71.5 / 64.5 tok/s | 65.5 tok/s (round a adjusted: 2 streams hit EOS at 296/130 tok) | OFF 59.4-68.3; ON 61.5-68.2 |
+| TTFT, tiny streamed probe | 2-13 ms | 2-14 ms | n/a |
+| KV pool | 2,919,967 | 2,954,028 | 2,982,037 / 2,969,792 |
+
+Verdict: **no measurable async delta at seqs 8.** c4 rounds overlap within
+the ±7 tok/s same-boot round-to-round spread. The c1 gap (A 59-70 vs B
+32-34) is NOT attributable to async: boot-1 (async OFF, 09-16) measured
+32.3/28.2 on its own prompts, and temp-1.0 acceptance variance on
+essay-style content spans the entire range — same boot, same prompt
+sampled 29.9-70.4 tok/s today (short-EOS runs excluded), final sanity c1
+40.9. KV-pool ordering also flipped vs 09-16 (today's ON boot has the
+LARGER pool) — boot-to-boot profiling variance dominates; the "~12K async
+tax" does not reproduce. Final serving config unchanged: async OFF @ seqs
+8 (boot-6 @ 7fe38e5, KV 2,964,725; sanity c1 40.9, c4 60.1 agg, healthy,
+zero errors). Cumulative async scorecard: 3 OFF boots vs 2 ON boots, zero
+measured wins — stop A/B'ing this knob without a new hypothesis.
+
+
 
 
 

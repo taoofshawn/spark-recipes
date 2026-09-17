@@ -68,6 +68,43 @@ at seqs 4 is unproven. Deploy needs container recreate on BOTH nodes
 (worker first, ~6-11 min warm boot). Verify after restore: c4 96-token
 probe ≈ 55-70 tok/s aggregate, plus a cache-pressure pass.
 
+**Addendum — boot-4 (restored profile) deployed on this branch + validated
+(same day, per user call; node trees checked out on the recovery branch
+without merging — deliberate deviation, both trees otherwise pristine):**
+
+- Bring-up per the skill: teardown both nodes → worker first (GID=3
+  auto-detected) → head ~40 s later → warm boot ~6 min (22:25:5x start →
+  22:32:01 UTC /health 200). Markers green on BOTH ranks: three `[fix-*]`
+  mods applied, `B12X_MXFP4_MXFP8` MoE, DSpark drafter loaded (k=6,
+  probabilistic), no `--async-scheduling` in argv, `--max-num-seqs 8`,
+  **KV pool 2,919,967 tokens** (the ~12K async tax gone), zero
+  errors/tracebacks. model-name-proxy went transiently unhealthy during
+  the boot window and recovered to healthy once :8000 served (its
+  healthcheck probes the backend — expected, no action).
+- Validation (stream:false, warm-up request first, tg = completion
+  tokens actually generated; head, 22:33-22:36 UTC):
+
+  | probe | boot-4 (restored) | 09-16 A/B receipt | boot-3 (broken) |
+  |---|---|---|---|
+  | c1 tg1024 | **59.1 tok/s** (first run hit EOS at 167 tok → 34.4) | 32.3-33.5 | 14-40 bursty |
+  | c4 = 4× tg512 | **72.0 / 64.9 tok/s aggregate** (two rounds) | 59.4-68.3 | 1.6-3.1 aggregate |
+
+  The c4 rounds traverse batch 1→2→3→4 with no collapse at any size —
+  the exact shape that collapsed ~20× per-stream on boot-3 (1.6 tok/s
+  per stream there; 16-18 tok/s per stream here). Only first-touch JITs
+  fired this boot (`_topp_*`, one CuTeDSL gemm) with no sustained
+  impact. c1 59.1 vs the bench's 32-34 is content/acceptance variation
+  (different prompt class); not investigated further.
+- Watch item stays OPEN: prefix-cache hit rate under the real agent
+  workload (4.6% long-run observed on boot-3, full-context re-prefill
+  every turn). Needs co-le's cache-pressure against a captured agent
+  prompt — not tested in this boot.
+- Ops note: nodes are on the recovery branch, NOT main. After the PR
+  merges, `git checkout main && git pull origin main` on both nodes; the
+  running containers already match the merged config, so no recreate is
+  required at that point.
+
+
 
 
 Bring-up per the skill (branch `dsv4-vision-0rand-0915-updates` checked out on

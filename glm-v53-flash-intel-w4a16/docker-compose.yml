@@ -66,6 +66,11 @@ services:
       BLOCK_SIZE: "${BLOCK_SIZE:-2304}"
       KV_DTYPE: "${KV_DTYPE:-fp8_e4m3}"
       KV_CACHE_MEMORY: "${KV_CACHE_MEMORY:-}"
+      # Async scheduling — MUST be in the container env: the command block
+      # branches on it ([ "${ASYNC:-0}" != "0" ] → --async-scheduling).
+      # Without this entry the .env ASYNC knob was silently inert (flag
+      # never applied in any deployment — found by the 2026-09-18 A/B).
+      ASYNC: "${ASYNC:-0}"
       # Drafter lane: "dflash2pmu" (default, external DFlash2 k=7 + PMU128 —
       # needs an image built from dflash2-pmu128/Dockerfile) or "mtp3"
       # (vendored florianbrede lane — see mtp3-pmu128/README.md; also needs its

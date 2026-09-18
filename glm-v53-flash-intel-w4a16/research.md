@@ -371,3 +371,36 @@ its marginally-better setting; the currently-running boot IS the final
 config — no extra recreate). Branch also re-points proxy
 `BACKEND_MODEL=glm-5.3-flash` (both GLM recipes share the served name;
 proxy was still targeting deepseek-v4-flash).
+
+## 2026-09-18 — mtp3 made the DEFAULT lane (repo defaults/docs flip)
+
+Follow-up to the async A/B above (final serving state = mtp3 @ ASYNC=0):
+the recipe's shipped default lane is now mtp3, matching what production
+has been running since 09-17. dflash2pmu becomes the documented
+alternative. Uncommitted edits at flip time. Files touched:
+
+- **`docker-compose.yml`**: `LANE` compose default `dflash2pmu` → `mtp3`;
+  `PMU` default `0` → `1` (both shipped lanes are PMU128 lanes, so 1 is
+  correct for either); drafter-resolution and spec-config conditionals
+  re-pointed at the new default (`[ "${LANE:-mtp3}" = ... ]`); lane
+  comments + launch echo updated. No flag/logic change — with the current
+  `.env` (LANE=mtp3, PMU=1) the resolved argv is byte-identical to the
+  validated 09-17/09-18 production boots.
+- **`.env`**: IMAGE/LANE/PMU comment blocks re-labeled (mtp3 default,
+  dflash2pmu alternative); `LANE=mtp3`, `IMAGE=glm53-intel-mtp3-pmu128:
+  20260907`, `PMU=1` were already the live rows from the 09-18 final
+  state — no value changes. Fixed a truncated DFLASH_* comment in the
+  process.
+- **`README.md`**: default/alternative labels swapped everywhere (top
+  bullet, profile table, why-default paragraph now cites the 09-18 A/B
+  numbers, build step builds the mtp3 image with dflash2 commented as
+  alternative, drafter download marked dflash2pmu-only, mtp3 boot marker
+  `method='mtp'` added + DFlash2 marker relabeled, KV-pool line split per
+  lane, PMU check relabeled "both lanes", switch block now targets
+  dflash2pmu, references section labels).
+- **`mtp3-pmu128/README.md`**: the "kept as alternative until A/B'd here"
+  note replaced with the A/B outcome.
+
+No serving-profile values changed; this is a defaults/docs flip only. The
+"Lane receipts" table above keeps its historical (dflash2pmu-default-era)
+header for the record — the current default is mtp3.

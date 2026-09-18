@@ -59,9 +59,10 @@ tok/s; 200K-context exact replay 199,936 cached / 64 computed; **PMU128 cuts
 average prompt reprocessing to 82 tokens/turn** (vs ~2,304 at 4,608-token
 granularity); >1B input / ~5M output tokens multi-day soak with zero errors.
 Upstream claims MTP3 "performs significantly better than DFlash2 for
-reasoning-heavy workloads" — the parent recipe keeps DFlash2 k=7 as the
-default lane until this is A/B'd here, and this directory is the machine to
-run that A/B against.
+reasoning-heavy workloads" — the 2026-09-18 on-cluster A/B (parent recipe
+`research.md`) measured mtp3 ≥ dflash2pmu at c4 aggregate in every round,
+and mtp3 is now the parent recipe's DEFAULT lane (dflash2pmu is the
+documented alternative).
 
 ## Build + run
 

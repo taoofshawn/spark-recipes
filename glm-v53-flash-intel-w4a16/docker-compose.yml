@@ -71,22 +71,24 @@ services:
       # Without this entry the .env ASYNC knob was silently inert (flag
       # never applied in any deployment — found by the 2026-09-18 A/B).
       ASYNC: "${ASYNC:-0}"
-      # Drafter lane: "dflash2pmu" (default, external DFlash2 k=7 + PMU128 —
-      # needs an image built from dflash2-pmu128/Dockerfile) or "mtp3"
-      # (vendored florianbrede lane — see mtp3-pmu128/README.md; also needs its
-      # own image). See .env for the exact build/run rows.
       # Lane selector — MUST be in the container env: the command block
-      # branches on it (dflash2pmu / mtp3). Without this entry the container
-      # env LANE is empty and the block defaults to dflash2pmu, so the lane
-      # args (PMU128 flags, disable_eagle_block_drop) would silently never
-      # apply.
-      LANE: "${LANE:-dflash2pmu}"
+      # branches on it (mtp3 / dflash2pmu). "mtp3" is the DEFAULT (native MTP3
+      # + PMU128, image built from mtp3-pmu128/Dockerfile, no drafter
+      # checkpoint); "dflash2pmu" is the alternative (external DFlash2 k=7 +
+      # PMU128, image built from dflash2-pmu128/Dockerfile). Default flipped
+      # to mtp3 per the 2026-09-18 A/B (mtp3 >= dflash2pmu at c4 in every
+      # round, larger KV pool, no drafter download). Without this entry the
+      # container env LANE is empty and the block defaults to mtp3, so the
+      # lane args (PMU128 flags, disable_eagle_block_drop) would silently
+      # never apply. See .env for the exact build/run rows.
+      LANE: "${LANE:-mtp3}"
       # DFlash2 drafter (dflash2pmu lane; resolved from the HF cache snapshot at boot)
       DFLASH_MODEL: "${DFLASH_MODEL:-incoai/GLM-5.3-Flash-DFlash2}"
       DFLASH_REVISION: "${DFLASH_REVISION:-bf582e4eacc1810f76656d1811693ff6c6737d2a}"
       DFLASH_TOKENS: "${DFLASH_TOKENS:-7}"
-      # PMU128 prefix matching (mtp3/dflash2pmu lanes; needs a patch-baked image)
-      PMU: "${PMU:-0}"
+      # PMU128 prefix matching (mtp3/dflash2pmu lanes; needs a patch-baked
+      # image). Both shipped lanes are PMU128 lanes, so the default is 1.
+      PMU: "${PMU:-1}"
       DISABLE_FLASHINFER_AUTOTUNE: "${DISABLE_FLASHINFER_AUTOTUNE:-1}"
       VLLM_MARLIN_USE_ATOMIC_ADD: "${VLLM_MARLIN_USE_ATOMIC_ADD:-0}"
       VLLM_USE_FUSED_MOE_GROUPED_TOPK: "${VLLM_USE_FUSED_MOE_GROUPED_TOPK:-0}"
@@ -168,10 +170,10 @@ services:
         grep -q '"quant_method": "gptq"' "$$M/config.json" || { echo "FATAL: $$M/config.json is not the GPTQ-surgery config (run prepare-model.sh)" >&2; exit 2; }
 
         # ---- dflash2pmu lane: resolve the DFlash2 drafter to its HF snapshot
-        # dir (offline). mtp3 lane needs no drafter checkpoint, so it is the
-        # only lane that skips this. ----
+        # dir (offline). The default mtp3 lane needs no drafter checkpoint, so
+        # it is the only lane that skips this. ----
         DFLASH_MODEL_DIR=""
-        if [ "$${LANE:-dflash2pmu}" = "dflash2pmu" ]; then
+        if [ "$${LANE:-mtp3}" = "dflash2pmu" ]; then
           resolve_snapshot() {
             local hub="$1" rev="$2"
             local dir="/cache/huggingface/hub/models--$$(echo "$$hub" | sed 's|/|--|g')"
@@ -196,12 +198,12 @@ services:
           --block-size "$${BLOCK_SIZE:-2304}"
           --kv-cache-dtype "$${KV_DTYPE:-fp8_e4m3}"
         )
-        # Speculative: lane-conditional. dflash2pmu = external DFlash2 k=7
-        # (fixed — any other count wedges the boot) + PMU128. mtp3 = native
-        # MTP k=3 with disable_eagle_block_drop=true (upstream PR #53388,
-        # baked into the mtp3-pmu128 image) + PMU128 prefix matching +
-        # prompt-token details.
-        if [ "$${LANE:-dflash2pmu}" = "mtp3" ]; then
+        # Speculative: lane-conditional (default mtp3). mtp3 = native MTP k=3
+        # with disable_eagle_block_drop=true (upstream PR #53388, baked into
+        # the mtp3-pmu128 image) + PMU128 prefix matching + prompt-token
+        # details. dflash2pmu = external DFlash2 k=7 (fixed — any other count
+        # wedges the boot) + PMU128.
+        if [ "$${LANE:-mtp3}" = "mtp3" ]; then
           ARGS+=(--speculative-config "{\"method\":\"mtp\",\"num_speculative_tokens\":3,\"disable_eagle_block_drop\":true}")
           [ "$${PMU:-0}" != "0" ] && ARGS+=(--prefix-match-unit 128 --enable-prompt-tokens-details)
         else
@@ -246,6 +248,6 @@ services:
           --master-addr "$${MASTER_ADDR}" --master-port "$${MPORT:-29521}")
         [ -n "$${HEADLESS:-}" ] && ARGS+=(--headless)
 
-        echo "launched image=$IMAGE rank=$${NODE_RANK:-0} host=$${ROCE_IP} gid=$${NCCL_IB_GID_INDEX} lane=$${LANE:-dflash2pmu} kv=$${_kvmem:-profiler}/$${KV_DTYPE} max_len=$${MAX_LEN:-1048576} seqs=$${MAX_SEQS:-6} moe=$${MOE_BACKEND:-marlin}"
+        echo "launched image=$IMAGE rank=$${NODE_RANK:-0} host=$${ROCE_IP} gid=$${NCCL_IB_GID_INDEX} lane=$${LANE:-mtp3} kv=$${_kvmem:-profiler}/$${KV_DTYPE} max_len=$${MAX_LEN:-1048576} seqs=$${MAX_SEQS:-6} moe=$${MOE_BACKEND:-marlin}"
 
         exec vllm "$${ARGS[@]}"

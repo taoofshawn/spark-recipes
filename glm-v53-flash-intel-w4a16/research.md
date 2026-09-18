@@ -328,3 +328,46 @@ decode-bound at 25–35 tok/s.
 re-measuring host headroom through a ~950K prefill. The mtp3-vs-dflash2 A/B
 watcher above gains a production data point: PMU128 cache mechanics and
 acceptance validated live.
+
+## 2026-09-18 — async A/B × 2 lanes + compose ASYNC-wiring bugfix; final = mtp3 @ ASYNC=0
+
+User-requested one-knob async A/B on BOTH intel lanes (seqs 6 untouched),
+same bench as the 0rand/vision A/Bs (warm-up req; c1 tg1024 ×2; c4 = 4×
+tg512 ×2; stream:false, real completion-token counts; cold-cache boots,
+drop_caches ritual; identical prompts across all boots).
+
+**BUGFIX (blocking find): the compose `environment:` block never mapped
+`ASYNC` into the container** — `.env`'s `ASYNC=1` was inert in EVERY
+prior intel deployment (only the runtime check `[ "${ASYNC:-0}" ... ]`
+exists at the command block; with no env var it always evaluated 0). The
+dflash2pmu "ON" side below is the FIRST boot ever to run
+`--async-scheduling` on this recipe. Fix: `ASYNC: "${ASYNC:-0}"` added to
+the environment block (verified in argv + printenv). The OFF side was
+benched pre-fix (no flag — runtime-identical to ASYNC=0 post-fix).
+
+| lane | shape | async OFF | async ON |
+|---|---|---|---|
+| dflash2pmu (k=7) | c1 full-1024 | 23.0 / 17.4 tok/s | 32.4 / 20.9 tok/s |
+| dflash2pmu (k=7) | c4 aggregate | 44.4 / 39.8 tok/s | 43.5 / 45.6 tok/s |
+| mtp3 (native MTP) | c1 full-1024 | 21.9 / 22.3 tok/s | 24.8 / 21.7 tok/s |
+| mtp3 (native MTP) | c4 aggregate | 46.4 / 52.2 tok/s | 46.1 / 48.3 tok/s |
+
+KV pools: dflash2pmu 1,867,536 both sides; mtp3 1,920,956 both sides
+(pins unchanged; pools match the documented rows). All boots healthy,
+zero errors.
+
+**Verdicts:**
+- Async: **no significant delta on either lane** (c4 overlaps within the
+  ±4-7 tok/s round spread; c1 is acceptance-dominated — spread 17-32
+  tok/s across samples of the SAME config). Consistent with the 09-17
+  vision-0rand and 0rand A/Bs: async is a no-op knob on this stack. The
+  knob is now at least WIRED for future re-tests.
+- Lane: **mtp3 ≥ dflash2pmu at c4 in every round** (46.1-52.2 vs
+  39.8-45.6 agg, ~+8-17%) with a slightly larger KV pool; c1 too noisy
+  to rank. Matches last night's production choice of mtp3.
+
+**Final serving state (left up): mtp3 lane @ ASYNC=0** (winning lane at
+its marginally-better setting; the currently-running boot IS the final
+config — no extra recreate). Branch also re-points proxy
+`BACKEND_MODEL=glm-5.3-flash` (both GLM recipes share the served name;
+proxy was still targeting deepseek-v4-flash).

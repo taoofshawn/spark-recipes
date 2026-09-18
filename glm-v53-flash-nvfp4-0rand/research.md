@@ -144,3 +144,28 @@ Every non-cluster value traces to a reviewed source:
   step 3b re-points proxy `BACKEND_MODEL` and restarts it on mismatch). The
   middle-ground profile knobs are KEPT as-is — only the port/served-name part
   of the experiment was rolled back.
+
+## 2026-09-18 — async A/B (user-requested): no measurable delta at seqs 4; ASYNC=1 kept
+
+One-knob A/B, seqs 4 untouched, identical bench both sides (warm-up
+request; c1 tg1024 ×2; c2 = 2× tg512 ×2 — the lane's validated cap-2
+shape, since the DFlash2 ≥3 cliff would dominate a c4 bench;
+stream:false, real completion-token counts). Cold-cache boots
+(drop_caches ritual, ~26 min each). Both boots healthy, KV pool
+identical (1,027,894 tokens), zero errors.
+
+| shape | ASYNC=1 (boot-1) | ASYNC=0 (boot-2) |
+|---|---|---|
+| c1 full-1024 | 21.9 / 24.8 tok/s | 23.7 / 27.2 tok/s |
+| c2 aggregate (2 streams) | 35.6 / 36.8 tok/s | 34.5 / 32.4 tok/s |
+
+Verdict: **within noise** — c1 favors OFF by ~10% (inside the ±10%
+content-acceptance swing measured on the vision lane the same day), c2
+favors ON by ~8%, directions oppose between shapes. No reason to deviate
+from 0rand's upstream default (ASYNC=1). First measured async receipt
+for this recipe (the knob was upstream-inherited, previously untested).
+
+Ops note: boot-2's first attempt died `DistStoreError: 1/2 clients` —
+orchestration error (worker reached NCCL handshake while the head's old
+container was still tearing down), NOT config; retried clean with the
+down-both → up-worker → up-head order.

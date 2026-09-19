@@ -446,6 +446,14 @@ host headroom through a ~950K prefill at the next restart before trusting
 14.0 GB under load (KV-trap rule; the currently-running 13.5 GB boot is
 unaffected until the next coordinated restart).
 
+**REVERTED 2026-09-19 (post-bench):** the A/B below measured ~12% c4
+aggregate decode cost at the 14.0 GB pin (c1 unchanged; suspected
+CUDA-graph workspace squeeze) — the pin bump was withdrawn from this
+branch and `.env` ships `KV_CACHE_MEMORY=13500000000` again. The entry
+above is kept as the audit trail. Process lesson recorded: the upstream
+"validated live" claim covered capacity/stability, not decode-at-fixed-
+protocol; the bench-recipe-update skill exists to close exactly that gap.
+
 **Checked, NOT adopted (with reasons):**
 - tonyd2wild PR #18 (merged 09-16): `patch_prefix_cache_draft_group.py` —
   fixes the ZERO-HIT prefix-cache failure on the base image's block-2304

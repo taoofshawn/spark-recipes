@@ -10,9 +10,10 @@ speculative decoding and fine-grained prefix caching, at 1M-token context.
 - **Default serving profile**: `mtp3` — native **MTP3** speculative decoding
   (`num_speculative_tokens=3`, no drafter checkpoint) + **PMU128** prefix
   matching (`--prefix-match-unit 128`), patches baked into the serving image.
-  KV pool 1,994,013 tokens at 1M context (14.0 GB pin, fp8 KV) — note the
-  2026-09-19 bench measured the 14.0 pin at ~12% c4 cost vs 13.5 GB (see
-  `research.md`); `main` still ships 13.5 GB until that trade is accepted.
+  KV pool 1,920,956 tokens at 1M context (13.5 GB pin, fp8 KV). Upstream
+  ships 14.0 GB (pool 1,994,013) — a 2026-09-19 bench measured that pin at
+  ~12% c4 aggregate cost on this stack, so it is NOT adopted (see
+  `research.md`).
   The `dflash2pmu` lane (external DFlash2 k=7 drafter) remains available —
   see "Serving profiles".
 - **Port** 8000 (repo convention); served name `glm-5.3-flash`; the
@@ -36,7 +37,7 @@ in `.env`.
 | Spec decoding | native MTP3 (`num_speculative_tokens=3`, `disable_eagle_block_drop=true`) — no drafter checkpoint | external DFlash2 k=7 drafter, `disable_eagle_block_drop=true` |
 | Prefix matching | PMU128: `--prefix-match-unit 128` (same baked-patch family, without the SWA fine-hits patch) | PMU128: `--prefix-match-unit 128`, retention 0, coordinator/SWA patches baked into the image |
 | Drafter checkpoint | none | `incoai/GLM-5.3-Flash-DFlash2` @ `bf582e4e…` (CC BY-NC-ND-4.0) |
-| KV pin → pool | 14.0 GB → 1,994,013 tokens (upstream-validated 2026-09-17; 2026-09-19 bench: ~12% c4 cost vs 13.5 GB — see `research.md`) | 13.5 GB → ~1.81–1.87M tokens |
+| KV pin → pool | 13.5 GB → 1,920,956 tokens (upstream ships 14.0 GB → 1,994,013; bench 2026-09-19: 14.0 costs ~12% c4 aggregate on this stack — not adopted, see `research.md`) | 13.5 GB → ~1.81–1.87M tokens |
 | Max seqs | 6 | 6 |
 | Image to build | `mtp3-pmu128/Dockerfile` → `glm53-intel-mtp3-pmu128:20260907` | `dflash2-pmu128/Dockerfile` → `glm53-intel-dflash2-pmu128:20260908` |
 | When to pick it | reasoning-heavy serving; measured ≥ dflash2pmu at c4 aggregate on this cluster (2026-09-18 A/B); no drafter download wanted | agent-style workloads: fine-grained prefix reuse across long repeated instruction blocks + strong draft acceptance |
@@ -203,16 +204,14 @@ Tuning rows that apply on any profile (each is one `.env` line):
 - **KV pin trap.** `--kv-cache-memory` skips the profiler's activation check;
   too high = the first long prompt kills the engine; a fat boot also let
   `CUDA graph pool memory: -2.73 GiB` credit graph memory straight to KV and
-  push the host into swap (−20–40% timing). The shipped mtp3 default is
-  14.0 GB (`MAX_SEQS=6`) — upstream-validated live on the same image/quant
-  (florianbrede 2026-09-17: pool 1,994,013 tokens, 1.90× at 1M ctx); our
-  nodes measured 3–5 GiB headroom at the old 13.5 GB pin (2026-09-17 prod
-  night), so re-measure host headroom through a ~950K prefill at the next
-  bring-up before trusting 14.0 GB under load. dflash2pmu stays at its
-  validated 13.5 GB — don't raise either without re-measuring.
-  2026-09-19 bench: the 14.0 pin costs ~12% c4 aggregate vs 13.5 GB
-  (`research.md`) — `main` still ships 13.5 GB; adopt 14.0 only if the
-  +0.07× concurrency is worth that trade.
+  push the host into swap (−20–40% timing). The validated default for BOTH
+  lanes is 13.5 GB (`MAX_SEQS=6`). Upstream's 14.0 GB bump (florianbrede
+  `d528afe`, pool 1,994,013 tokens / 1.90× at 1M ctx) was benched here
+  2026-09-19 and **costs ~12% c4 aggregate decode vs 13.5 GB** — c1 unchanged,
+  c4 flat-warm, suspected CUDA-graph workspace squeeze from the smaller
+  post-KV envelope (full analysis + control-boot methodology in
+  `research.md`). Do NOT raise the pin without re-verifying CUDA-graph
+  capture sizes and host headroom through a ~950K prefill.
 - **DFlash2 needs exactly `num_speculative_tokens=7`** — any other count
   wedges the boot.
 - **`--moe-backend marlin` mandatory.** `flashinfer_cutlass` does not boot

@@ -504,6 +504,20 @@ under `~/benchmarks/20260919-*` on the head (also copied to the workstation
 | mtp3-after2 | same boot re-run, warm | 1,994,013 | 116.14 (113.1–116.8) | 0.9932 | 2.51 GiB |
 | dflash-before (context) | dflash2pmu @ 13.5 GB, fresh boot | 1,867,536 | 193.99 (193.5–202.6) | 0.9799 | 2.04 GiB |
 
+**Why five runs (methodology — for whoever picks this up):** the first pair
+was boot-state-mismatched and we did NOT trust its raw verdict in either
+direction. Sequence: (1) `mtp3-before` on the 32 h-warm production boot;
+(2) update branch on a fresh boot (`mtp3-after`) — c4 came in ~10% lower,
+but a fresh boot vs a 32 h-warm boot differ by more than the regression
+threshold, so that gap alone proves nothing; (3) `mtp3-after2` re-run on the
+same warm boot — c4 still 113–117, ruling out cold-boot warm-up as the
+cause; (4) control: tore the update down, rebooted the BEFORE config fresh
+(`mtp3-before2` on new main `81f6773`, byte-identical serving config) —
+stable rounds climbed back to ~132, so the drop is real and pinned to the
+KV pin, not boot state. Rule of thumb now baked into the bench skill
+(core rule 8): bench both sides on matched boot states, fresh+warm-up
+preferred; any warm/fresh mismatch needs a control boot before a verdict.
+
 **Reading (not the script's raw verdict):** the `compare` NOISE label comes
 from before-side round-0 cold cells (103.2 / 113.2) overlapping the after
 range. Excluding the warm-up round — the script's own doctrine — stable c4

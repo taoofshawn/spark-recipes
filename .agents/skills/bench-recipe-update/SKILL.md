@@ -49,6 +49,14 @@ the verdict is the stopping point.
    reads) — that cost is accepted for reproducibility.
 7. Worker (rank 1) starts FIRST, head ~30 s later; `docker compose down` on
    BOTH nodes between relaunches. (Full mechanics: `bring-up-spark-recipe`.)
+8. **Match boot states across sides.** A 32 h-warm boot and a fresh boot
+   differ by more than the regression threshold — in a real session a
+   genuine 12% c4 regression hid behind warm-state asymmetry until a third
+   control boot separated the two. Prefer benching BOTH sides on fresh
+   boots, each right after the mandatory warm-up stage. If one side must be
+   a long-warm boot, re-bench the other on a matched fresh boot as a
+   control. `compare` records boot age (`docker inspect` StartedAt) and
+   warns when the sides are mismatched.
 
 ## Procedure
 
@@ -68,14 +76,28 @@ git diff main...<update-branch> -- <recipe>/ | stat  # which knobs changed?
 
 Ensure the recipe is up from `main` on both nodes (bring-up flow; do NOT edit
 files on the nodes — land nothing, just checkout `main` + `git pull origin
-main` there; branch protection means `main` is already what's deployed).
-Then, from the head node:
+main` there; branch protection means `main` is already what's deployed). If
+the lane you need is not the shipped `.env` default (e.g. the dflash2pmu
+rows were replaced when mtp3 became the default), put ONLY the lane rows on
+a throwaway bench-config branch, push it, and pull it directly on the nodes —
+no PR, same as the update branch itself.
+
+The script is not on the nodes until the branch carrying this skill is
+merged and pulled there — deliver it to the head's `$HOME` (outside the
+repo tree) once per session:
 
 ```bash
-cd ~/code/spark-recipes/<recipe>
-python3 .agents/skills/bench-recipe-update/scripts/bench_recipe.py bench \
+scp .agents/skills/bench-recipe-update/scripts/bench_recipe.py <head>:~/bench_recipe.py
+```
+
+Then, from the head node (`--out` MUST be outside the repo checkout —
+`~/benchmarks/` — or results sit in the node's working tree; the script
+warns):
+
+```bash
+ssh <head> 'cd ~/code/spark-recipes/<recipe> && python3 ~/bench_recipe.py bench \
   --label before --model <served-name> --container <container-name> \
-  --lane <lane-or-defaults> --out benchmarks/<YYYYMMDD>-before
+  --lane <lane-or-defaults> --out ~/benchmarks/<YYYYMMDD>-before'
 ```
 
 Wait for `READY` + Tier-0 checks to pass (health 200, correct model id,
@@ -88,7 +110,8 @@ against a broken boot measures the break, not the update.
 Land the branch on the nodes via the normal git flow (PR merged OR user
 explicitly says to use the branch), `docker compose down` both nodes,
 `drop_caches` ritual, worker-first relaunch, then the same command with
-`--label after --out benchmarks/<YYYYMMDD>-after`.
+`--label after --out ~/benchmarks/<YYYYMMDD>-after` — and the SAME boot
+state as the before side (core rule 8).
 
 ### 3) Compare + report
 
@@ -96,10 +119,22 @@ explicitly says to use the branch), `docker compose down` both nodes,
 python3 .../bench_recipe.py compare benchmarks/<YYYYMMDD>-before benchmarks/<YYYYMMDD>-after
 ```
 
-Read the verdicts with the interpretation table below. Write the results table
+Read the verdicts with the interpretation table below. Verdicts use
+**post-warm-up rounds only** — `compare` excludes each cell's round 0 (a
+cold round 0 inside an otherwise-separated range once masked a real 12% c4
+regression as "NOISE"). Write the results table
 into the recipe's `research.md` as a dated changelog block (repo convention):
 what changed, the before/after medians, the verdict, and any gotchas hit.
 Post the comparison; do NOT merge.
+
+### 4) Leave the cluster serving the winner
+
+If the after side lost (any REGRESSION) and you tore down the before-side
+boot to bench it: `docker compose down` both nodes, check out the winning
+branch/config on both nodes, `drop_caches` ritual, worker-first relaunch,
+verify `/health` + boot markers. State the final serving config (branch +
+commit + lane + KV pin) in the report. If the after side won or tied, it is
+already serving — just record it.
 
 ## The cell matrix (Tier 1, ~15–20 min/boot)
 
@@ -134,7 +169,9 @@ any `REGRESSION` means: do NOT merge; investigate before proceeding.
 ## Time budget
 
 Scoped (one lane): 2 boots ≈ 60–90 min total. Both lanes: 4 boots ≈ 2–3 h.
-Boots dominate (GLM intel ≈ 8–10 min cold with the ritual; DSv4 warm ≈ 6 min).
+Boot-state-matched pairs need a third control boot when one side can only be
+benched long-warm (rule 8). Boots dominate (GLM intel ≈ 8–10 min cold with
+the ritual; DSv4 warm ≈ 6 min).
 
 ## Common mistakes
 
@@ -147,6 +184,11 @@ Boots dominate (GLM intel ≈ 8–10 min cold with the ritual; DSv4 warm ≈ 6 m
 - EOS truncation: rates must use actual `completion_tokens` (the script does);
   single short samples with early EOS are normal.
 - One-off JIT lines mid-bench are benign; sustained JIT during serving is not.
+- Comparing sides in different boot states (fresh vs long-warm) — rule 8;
+  the verdict is about the boot state, not the update.
+- Trusting a `NOISE` verdict when a cell's stable rounds clearly separate —
+  `compare` excludes round 0 for verdicts; read the stable medians, not the
+  full-range table.
 
 ## Supporting file
 

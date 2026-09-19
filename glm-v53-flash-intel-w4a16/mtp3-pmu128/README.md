@@ -2,7 +2,8 @@
 
 Verbatim copy of
 [`florianbrede-ayet/spark-recipes/tp2_glm53flash_autoround_mtp3_pmu128`](https://github.com/florianbrede-ayet/spark-recipes/tree/main/tp2_glm53flash_autoround_mtp3_pmu128)
-(tree pinned 2026-09-07; forum thread
+(tree pinned 2026-09-07, re-synced to upstream commit `d528afe` 2026-09-17 —
+the KV-pin bump; the dropped-files policy below is unchanged; forum thread
 [382632](https://forums.developer.nvidia.com/t/glm-5-3-flash-intel-autoquant-w4a16-tp2-mtp3-concurrent-agentic-use/382632)),
 with two files dropped because this recipe does not use them:
 
@@ -43,7 +44,13 @@ image the parent recipe runs) — but:
   tonyd2wild's latest and to this recipe's
   `../patches/sparse_attn_indexer_kpool.py` (bar our provenance header).
 - **Profile**: GMU 0.85, KV pin 13.5 GB/rank (fp8 e4m3) → **1,920,956-token
-  logical pool** @ 1M ctx; max_num_seqs **6**; MNBT 8192; block 2304 (resolved
+  logical pool** (1.83× at 1M ctx). Upstream raised the pin to 14.0 GB
+  (pool 1,994,013 tokens, 1.90×) in commit `d528afe` 2026-09-17, but the
+  parent recipe REJECTED that bump after a 2026-09-19 A/B measured ~12% c4
+  aggregate decode cost on this stack (suspected CUDA-graph workspace
+  squeeze — see parent `research.md`); `--enable-prompt-tokens-details`
+  active in upstream production since the same restart (cold 0/3060, warm
+  2944/3060 cached); max_num_seqs **6**; MNBT 8192; block 2304 (resolved
   scheduler block 4608, Mamba 2304); Marlin MoE; vision image 4 / video 0;
   port 8888 / head `10.0.7.1` / rendezvous 29531 in the upstream launcher —
   the parent compose maps these to the cluster's :8000 / 192.168.0.170 /

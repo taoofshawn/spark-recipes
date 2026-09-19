@@ -1,5 +1,8 @@
 .worktrees/
 
+# bench outputs (results live on the head node + research.md)
+benchmarks/
+
 # python
 __pycache__/
 *.pyc

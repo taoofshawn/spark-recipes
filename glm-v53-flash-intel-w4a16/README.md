@@ -7,9 +7,12 @@ speculative decoding and fine-grained prefix caching, at 1M-token context.
 - **Model**: GLM-5.3-Flash, 320B total / 18B active, INT4 W4A16 group-128 sym
   GPTQ (Intel AutoRound quant; attention/router/shared-expert/vision/norms
   stay BF16) — requires a one-time surgery step (below), ~82 GiB/rank served.
-- **Default serving profile**: `dflash2pmu` — external **DFlash2 k=7** drafter
+- **Default serving profile**: `mtp3` — native **MTP3** (`num_speculative_tokens=3`)
   + **PMU128** prefix matching (`--prefix-match-unit 128`), patches baked into
-  the serving image. KV pool ~1.87M tokens at 1M context (13.5 GB pin, fp8 KV).
+  the serving image. Shipped in `.env` per the 2026-09-18 lane A/B
+  (mtp3 ≥ dflash2pmu at c4; see `research.md`). KV pool 1,994,013 tokens at
+  1M context (14.0 GB pin, fp8 KV). The `dflash2pmu` lane (external DFlash2
+  k=7 drafter) remains available — see "Serving profiles".
 - **Port** 8000 (repo convention); served name `glm-5.3-flash`; the
   model-name proxy serves clients `spark-llm` on :4000.
 - **Modalities**: text, images/video, tool calling (`glm47` parser), thinking
@@ -26,12 +29,12 @@ prefix-matching granularity + the image that carries the matching patches.
 Switch profiles by setting `LANE` + `IMAGE` (+ the profile's tuning rows)
 in `.env`.
 
-| | **dflash2pmu (default)** | mtp3 |
+| | **dflash2pmu** | mtp3 (shipped default) |
 |---|---|---|
 | Spec decoding | external DFlash2 k=7 drafter, `disable_eagle_block_drop=true` | native MTP3 (`num_speculative_tokens=3`, `disable_eagle_block_drop=true`) — no drafter checkpoint |
 | Prefix matching | PMU128: `--prefix-match-unit 128`, retention 0, coordinator/SWA patches baked into the image | PMU128 (same baked-patch family, without the SWA fine-hits patch) |
 | Drafter checkpoint | `incoai/GLM-5.3-Flash-DFlash2` @ `bf582e4e…` (CC BY-NC-ND-4.0) | none |
-| KV pin → pool | 13.5 GB → ~1.81–1.87M tokens | 13.5 GB → 1.92M tokens |
+| KV pin → pool | 13.5 GB → ~1.81–1.87M tokens | 14.0 GB → 1,994,013 tokens (upstream-validated 2026-09-17; host-headroom re-check gate at next bring-up) |
 | Max seqs | 6 | 6 |
 | Image to build | `dflash2-pmu128/Dockerfile` → `glm53-intel-dflash2-pmu128:20260908` | `mtp3-pmu128/Dockerfile` → `glm53-intel-mtp3-pmu128:20260907` |
 | When to pick it | agent-style workloads: fine-grained prefix reuse across long repeated instruction blocks + strong draft acceptance | no drafter download wanted; reasoning-heavy serving |
@@ -162,15 +165,17 @@ upstream, by design.
 ## Switching profiles
 
 All profile switching is `.env` edits (then `docker compose down` both
-nodes, and `up` worker-first again). Default is dflash2pmu; to switch:
+nodes, and `up` worker-first again). The shipped `.env` default is **mtp3**
+(2026-09-18 lane A/B verdict); to switch to dflash2pmu:
 
 ```bash
-# mtp3 profile:
-LANE=mtp3
-IMAGE=glm53-intel-mtp3-pmu128:20260907     # built from mtp3-pmu128/Dockerfile
-KV_CACHE_MEMORY=13500000000
+# dflash2pmu profile:
+LANE=dflash2pmu
+IMAGE=glm53-intel-dflash2-pmu128:20260908  # built from dflash2-pmu128/Dockerfile
+KV_CACHE_MEMORY=13500000000                # dflash2pmu's validated pin (13.5 GB)
 MAX_SEQS=6
 PMU=1
+# DFLASH_REVISION=bf582e4e… is already pinned in .env for this lane
 ```
 
 Tuning rows that apply on any profile (each is one `.env` line):
@@ -187,9 +192,13 @@ Tuning rows that apply on any profile (each is one `.env` line):
 - **KV pin trap.** `--kv-cache-memory` skips the profiler's activation check;
   too high = the first long prompt kills the engine; a fat boot also let
   `CUDA graph pool memory: -2.73 GiB` credit graph memory straight to KV and
-  push the host into swap (−20–40% timing). The 13.5 GB default (dflash2pmu,
-  with `MAX_SEQS=6`) is the validated value — don't raise it without
-  re-measuring host headroom through a ~950K prefill.
+  push the host into swap (−20–40% timing). The shipped mtp3 default is
+  14.0 GB (`MAX_SEQS=6`) — upstream-validated live on the same image/quant
+  (florianbrede 2026-09-17: pool 1,994,013 tokens, 1.90× at 1M ctx); our
+  nodes measured 3–5 GiB headroom at the old 13.5 GB pin (2026-09-17 prod
+  night), so re-measure host headroom through a ~950K prefill at the next
+  bring-up before trusting 14.0 GB under load. dflash2pmu stays at its
+  validated 13.5 GB — don't raise either without re-measuring.
 - **DFlash2 needs exactly `num_speculative_tokens=7`** — any other count
   wedges the boot.
 - **`--moe-backend marlin` mandatory.** `flashinfer_cutlass` does not boot

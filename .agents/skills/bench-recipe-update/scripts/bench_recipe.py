@@ -180,29 +180,39 @@ def _mem_available_gib() -> float | None:
 
 
 def _docker_log_markers(container: str) -> dict:
-    """Boot-marker extraction from the head container's log (best effort)."""
+    """Boot-marker extraction from the head container's log (best effort).
+
+    Tries the last 3000 lines first; on a long-running boot the boot-time
+    markers (KV pool line, spec config) scroll out of the tail, so fall back
+    to the FULL log for those lines only. The traceback count stays
+    tail-scoped: the full log may hold tracebacks from an earlier failed
+    boot of the same container.
+    """
     try:
-        out = subprocess.run(
-            ["docker", "logs", "--tail", "3000", container],
-            capture_output=True, text=True, timeout=120,
-        ).stderr + subprocess.run(
-            ["docker", "logs", "--tail", "3000", container],
-            capture_output=True, text=True, timeout=120,
-        ).stdout
+        out = _docker_log_text(container, tail=3000)
     except Exception as exc:  # container name wrong / no docker — record, don't die
         return {"error": f"docker logs failed: {exc}"}
-    kv = ""
-    for line in out.splitlines():
-        if "GPU KV cache size" in line:
-            kv = line.strip()
-    spec = ""
-    for line in out.splitlines():
-        if "speculative_config" in line or "Resolved architecture" in line:
-            spec = line.strip()
-            break
+
+    def _find(text: str, *needles: str) -> str | None:
+        for line in text.splitlines():
+            if any(n in line for n in needles):
+                return line.strip()
+        return None
+
+    kv = _find(out, "GPU KV cache size")
+    spec = _find(out, "speculative_config", "Resolved architecture")
+    if kv is None or spec is None:
+        try:
+            full = _docker_log_text(container)
+            if kv is None:
+                kv = _find(full, "GPU KV cache size")
+            if spec is None:
+                spec = _find(full, "speculative_config", "Resolved architecture")
+        except Exception:
+            pass  # keep tail-scoped results
     return {
-        "kv_cache_line": kv or None,
-        "spec_line": spec or None,
+        "kv_cache_line": kv,
+        "spec_line": spec,
         "tracebacks": out.count("Traceback (most recent call last)"),
     }
 
@@ -218,6 +228,32 @@ def _argv_has(container: str, needle: str) -> bool:
         return needle in out
     except Exception:
         return False
+
+
+def _docker_log_text(container: str, tail: int | None = None) -> str:
+    cmd = ["docker", "logs"]
+    if tail is not None:
+        cmd += ["--tail", str(tail)]
+    cmd += [container]
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+    return r.stderr + r.stdout
+
+
+def _container_age_minutes(container: str) -> float | None:
+    """Boot age from docker inspect — the boot-state-matching check.
+
+    Fresh boot (<60 min) vs long-warm boot changes decode numbers by more
+    than the regression threshold; before/after sides must match.
+    """
+    try:
+        out = subprocess.run(
+            ["docker", "inspect", "-f", "{{.State.StartedAt}}", container],
+            capture_output=True, text=True, timeout=60,
+        ).stdout.strip()
+        started = datetime.fromisoformat(out.replace("Z", "+00:00"))
+        return round((datetime.now(timezone.utc) - started).total_seconds() / 60, 1)
+    except Exception:
+        return None
 
 
 # --------------------------------------------------------------------------
@@ -282,6 +318,17 @@ def _record(obj: dict, path: str) -> None:
 def cmd_bench(args) -> int:
     out = args.out or datetime.now(timezone.utc).strftime("benchmarks/%Y%m%d-%H%M-") + args.label
     os.makedirs(out, exist_ok=True)
+    # Node working trees must stay pristine — results belong OUTSIDE the repo
+    # checkout (e.g. ~/benchmarks/ on the head).
+    try:
+        _t = subprocess.run(["git", "-C", out, "rev-parse", "--show-toplevel"],
+                            capture_output=True, text=True, timeout=30)
+        if _t.returncode == 0:
+            print(f"WARN: --out is inside git repo {_t.stdout.strip()} — results will "
+                  f"sit in the checkout; prefer ~/benchmarks/ to keep node trees pristine",
+                  file=sys.stderr)
+    except Exception:
+        pass
     results_path = os.path.join(out, "results.jsonl")
     if os.path.exists(results_path):
         print(f"FATAL: {results_path} already exists — pick a new --out", file=sys.stderr)
@@ -292,6 +339,7 @@ def cmd_bench(args) -> int:
         "model": args.model, "url": args.url, "container": args.container,
         "lane": args.lane, "rounds": args.rounds, "max_conc": args.max_conc,
         "temperature": args.temperature,
+        "boot_age_minutes": _container_age_minutes(args.container) if args.container else None,
         "host": socket.gethostname(),
         "started_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
@@ -328,7 +376,7 @@ def cmd_bench(args) -> int:
             print(f"FATAL: {markers['tracebacks']} tracebacks in boot log — fix before benching", file=sys.stderr)
             return 2
         if markers.get("kv_cache_line") is None:
-            print("WARN: no 'GPU KV cache size' line in the last 3000 log lines", file=sys.stderr)
+            print("WARN: no 'GPU KV cache size' line found in tail OR full log", file=sys.stderr)
 
     # ---- warm-up (mandatory) ----
     print("[bench] warm-up (3 generations, temp 0)...")
@@ -400,12 +448,13 @@ def cmd_bench(args) -> int:
 # Compare
 # --------------------------------------------------------------------------
 def _load(outdir: str) -> dict:
-    cells, markers, metrics, pmu, mem = {}, None, None, None, None
+    cells, markers, metrics, pmu, mem, meta = {}, None, None, None, None, None
     with open(os.path.join(outdir, "results.jsonl")) as fh:
         for line in fh:
             obj = json.loads(line)
             if obj.get("type") == "cell":
-                cells.setdefault(obj["cell"], []).append(obj["aggregate_tok_s"])
+                cells.setdefault(obj["cell"], []).append(
+                    (obj.get("round", 0), obj["aggregate_tok_s"]))
             elif obj.get("type") == "marker":
                 markers = obj
             elif obj.get("type") == "metrics":
@@ -414,8 +463,22 @@ def _load(outdir: str) -> dict:
                 pmu = obj
             elif obj.get("type") == "meminfo":
                 mem = obj
+            elif obj.get("type") == "meta":
+                meta = obj
     return {"cells": cells, "markers": markers, "metrics": metrics,
-            "pmu": pmu, "mem": mem}
+            "pmu": pmu, "mem": mem, "meta": meta}
+
+
+def _stable_values(pairs: list) -> list:
+    """Post-warm-up rounds only (round 0 excluded when later rounds exist).
+
+    The warm-up stage clears the engine's cold path, but each cell's round 0
+    still runs colder than rounds 1+ (JIT batch shapes, PMU population). A
+    cold round 0 inside an otherwise-separated range once masked a real 12%
+    c4 regression — never let round 0 into a verdict.
+    """
+    vals = [v for r, v in pairs if r >= 1]
+    return vals if vals else [v for _, v in pairs]
 
 
 def cmd_compare(before_dir: str, after_dir: str) -> int:
@@ -423,7 +486,7 @@ def cmd_compare(before_dir: str, after_dir: str) -> int:
     names = [n for n in b["cells"] if n in a["cells"]]
     rows, regressions = [], []
     for name in names:
-        bv, av = sorted(b["cells"][name]), sorted(a["cells"][name])
+        bv, av = sorted(_stable_values(b["cells"][name])), sorted(_stable_values(a["cells"][name]))
         bmed = round(statistics.median(bv), 2)
         amed = round(statistics.median(av), 2)
         delta = round(amed - bmed, 2)
@@ -445,6 +508,7 @@ def cmd_compare(before_dir: str, after_dir: str) -> int:
         rows.append((name, bmed, bv, amed, av, delta, pct, verdict))
 
     print(f"### bench compare: {os.path.basename(before_dir)} -> {os.path.basename(after_dir)}\n")
+    print("(verdicts use post-warm-up rounds; round 0 of each cell is excluded)\n")
     print("| cell | before median (min–max) | after median (min–max) | delta | verdict |")
     print("|---|---|---|---|---|")
     for name, bmed, bv, amed, av, delta, pct, verdict in rows:
@@ -477,8 +541,24 @@ def cmd_compare(before_dir: str, after_dir: str) -> int:
         v = "WATCH (host headroom shrank >2 GiB)" if am < bm - 2.0 else "ok"
         print(f"- MemAvailable: {bm} GiB -> {am} GiB ({v})")
 
+    # boot-state matching: a fresh boot vs a long-warm boot shifts decode by
+    # more than the regression threshold — the bench is then invalid, not the
+    # update. (This session's 32h-warm 'before' vs fresh 'after' pair needed a
+    # third control boot to separate warm-up from a real regression.)
+    ba = (b["meta"] or {}).get("boot_age_minutes")
+    aa = (a["meta"] or {}).get("boot_age_minutes")
+    boot_mismatch = None
+    if ba is not None and aa is not None:
+        print(f"- boot age: before {ba} min, after {aa} min")
+        if (ba < 60) != (aa < 60):
+            boot_mismatch = f"before {ba} min vs after {aa} min"
+            print("  WARNING: boot states UNMATCHED (one side fresh, one long-warm) — "
+                  "verdicts unreliable; re-bench both sides on matched boot states")
+
     print("\nVERDICT: " + ("REGRESSION — do not merge; investigate: " + ", ".join(regressions)
                           if regressions else "no regression detected (medians within noise bands)"))
+    if boot_mismatch:
+        print("NOTE: boot-state mismatch reported — treat the verdicts above as unreliable.")
     return 1 if regressions else 0
 
 

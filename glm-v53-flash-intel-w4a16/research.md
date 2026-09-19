@@ -488,3 +488,47 @@ Watchlist additions: ghcr `sm121-v12`-lineage tag publication (would carry
 PR #18 — still redundant for our lanes, but signals an image bump to
 evaluate with the qzeros gate); tonyd2wild speed-night docs for a W4A16
 replication of the RoCE allreduce gain.
+
+## 2026-09-19 — before/after regression bench of the KV-pin bump (VERDICT: c4 REGRESSION — do not merge)
+
+`bench_recipe.py` (bench-recipe-update skill, Tier 1) on both sides; prompts
+byte-identical, temp 0, max_conc 4, rates from final-usage chunks. Raw runs
+under `~/benchmarks/20260919-*` on the head (also copied to the workstation
+`benchmarks/` dir, untracked).
+
+| run | branch/config | KV pool (boot marker) | c4 median (min–max) | acceptance | MemAvailable |
+|---|---|---|---|---|---|
+| mtp3-before | main `mtp3 @ 13.5 GB`, 32 h-warm boot | 1,920,956 | 129.29 (103.2–130.7) | 0.9968 | 3.28 GiB |
+| mtp3-before2 | new main `81f6773` (same serving config), FRESH boot | 1,920,956 | 131.78 (113.2–132.1) | 0.9976 | 3.00 GiB |
+| mtp3-after | this branch `@ 14.0 GB`, fresh boot | 1,994,013 | 116.46 (115.2–117.5) | 0.9947 | 2.50 GiB |
+| mtp3-after2 | same boot re-run, warm | 1,994,013 | 116.14 (113.1–116.8) | 0.9932 | 2.51 GiB |
+| dflash-before (context) | dflash2pmu @ 13.5 GB, fresh boot | 1,867,536 | 193.99 (193.5–202.6) | 0.9799 | 2.04 GiB |
+
+**Reading (not the script's raw verdict):** the `compare` NOISE label comes
+from before-side round-0 cold cells (103.2 / 113.2) overlapping the after
+range. Excluding the warm-up round — the script's own doctrine — stable c4
+samples are 129.3–132.1 (before, 2 boots) vs 113.1–117.5 (after, 2 runs):
+**no overlap ⇒ real ~11–12% c4 aggregate regression from the 13.5→14.0
+pin.** Acceptance Δ −0.004 (noise); PMU replay PASS both sides (cached 43904
+= expected floor); MemAvailable ok (2.5 GiB after-side, above the −2 GiB
+watch). c1 medium/long "+35–46%" columns are PMU warm-state asymmetry
+(after2 ran on prompts pre-cached by the after1 bench) — informational only.
+
+**Trade:** +3.8% KV capacity (1.92M→1.99M tokens, 1.83×→1.90× concurrency @
+1M ctx) for −12% c4 decode aggregate. The bring-up gate
+("re-measure host headroom through a ~950K prefill") was NOT satisfied — the
+bench only exercises 64K prefills. Upstream validated the pool size live
+(1,994,013 confirmed exactly on our nodes) but not the decode cost.
+
+**Decision:** keep mtp3 @ 13.5 GB as the serving default; do not merge this
+pin bump until the c4 cost is understood (suspect: 0.5 GB extra KV slab eats
+host page-cache headroom under GB10 unified memory — MemAvailable 3.0→2.5
+GiB) or shown acceptable against the capacity gain. Cluster left serving
+mtp3 @ 13.5 GB (branch `main` @ `81f6773`).
+
+**Cross-lane observation (single sample, fresh boot):** dflash2pmu measured
+~194 tok/s c4 / ~68 tok/s c1 on THIS bench's cells — well above mtp3. This
+contradicts the 2026-09-18 lane-A/B verdict (mtp3 ≥ dflash at c4), which used
+a different bench shape (c1 tg1024, c4 ~40–52 tok/s cells). Treat as a
+watch item, not a decision: re-run the 09-18 A/B bench and this script's
+cells on the same boot pair before flipping lanes.

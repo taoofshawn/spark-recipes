@@ -13,7 +13,7 @@ README is the deploy doc; this file is the memory.
 | spec decoding | DFlash2 k=7 + `disable_eagle_block_drop` | native MTP3 |
 | prefix matching | `--prefix-match-unit 128`, patches baked | `--prefix-match-unit 128`, patches baked |
 | drafter rev | `bf582e4e…` (08-31) | none |
-| KV pin / pool | 13.5 GB → ~1.81–1.87M tokens | 13.5 GB → 1.92M tokens |
+| KV pin / pool | 13.5 GB → ~1.81–1.87M tokens | 14.0 GB → 1,994,013 tokens (upstream 2026-09-17 bump, `d528afe`) |
 | seqs | 6 | 6 |
 | receipts | florianbrede: TEB **90** (158/176), PP 1,679, TG 33.1/54.7 @C1/C4, ~82-token recompute | florianbrede: TEB 91, 108 tok/s @ C6 |
 
@@ -404,3 +404,87 @@ alternative. Uncommitted edits at flip time. Files touched:
 No serving-profile values changed; this is a defaults/docs flip only. The
 "Lane receipts" table above keeps its historical (dflash2pmu-default-era)
 header for the record — the current default is mtp3.
+## 2026-09-19 — full update pass (forum + GitHub + HF + image sweep)
+
+Scope: threads 382041 (through post 10, last 09-18) and 382632 (unchanged,
+2 posts), 381350 delta posts 391→532, general 721/723 sweeps, `glm`/`W4A16`
+searches; GitHub: florianbrede-ayet/spark-recipes, tonyd2wild GLM NVFP4
+repo, rodman80 harness; HF: Intel W4A16 model, DFlash2 drafter; ghcr tags.
+
+**Pins re-verified UNCHANGED:**
+- Model `Intel/GLM-5.3-Flash-W4A16-AutoRound` `5eee1846…` (lastModified
+  2026-09-01 — same as the 09-08 check).
+- Drafter `incoai/GLM-5.3-Flash-DFlash2` `bf582e4e…` (lastModified 08-31).
+- Base image `ghcr.io/tonyd2wild/vllm-glm53-flash`: tags list is still only
+  `sm121-v8` + `sm121-v11-dflash2` (digest `4def0ef6…` pin current; a
+  `sm121-v12-dflash2` mentioned by jetspark on 381534 is NOT published on
+  ghcr). tonyd2wild's README now notes both published tags predate the
+  prefix-cache fix (below).
+
+**ADOPTED — mtp3 lane KV pin 13.5 → 14.0 GB** (florianbrede commit
+`d528afe`, 2026-09-17, "activate prompt-tokens-details, raise KV to 14.0
+GB/rank"): upstream deployed and validated live on the SAME digest-pinned
+base image + Intel quant — pool 1,920,956 → **1,994,013 tokens**, 1.90×
+concurrency at 1M ctx, 464 blocks. Note: `--enable-prompt-tokens-details`
+was ALREADY in the vendored launch.sh we carried; upstream's "activation"
+means they restarted production with it (cold 0/3060, warm 2944/3060
+cached) — our 09-11 note that non-stream chat responses omit `usage`
+stands as a build quirk, not a missing flag. Changes landed:
+- `.env`: `KV_CACHE_MEMORY=14000000000` (shipped default; LANE=mtp3).
+- README: profile-table KV row, "Switching profiles" (now documents
+  switching TO dflash2pmu @ 13.5 GB), KV-trap bullet.
+- `mtp3-pmu128/README.md`: pin note re-synced to `d528afe`; profile line
+  updated (14.0 GB / 1,994,013 / prompt-tokens-details active upstream).
+- No vendored-code change needed: our mtp3 vendoring drops upstream's
+  `launch.sh`/`validate.sh` (compose carries the flags) and its
+  `SHA256SUMS` never listed them; README.md is our provenance-headed copy.
+
+Headroom reasoning for adopting: our 09-17 prod night measured 3–5 GiB
+free per node at the 13.5 GB pin (upstream had ~2.5 GiB), so +0.5 GB pin
+leaves us ≥ upstream's validated envelope. **Bring-up gate:** re-measure
+host headroom through a ~950K prefill at the next restart before trusting
+14.0 GB under load (KV-trap rule; the currently-running 13.5 GB boot is
+unaffected until the next coordinated restart).
+
+**Checked, NOT adopted (with reasons):**
+- tonyd2wild PR #18 (merged 09-16): `patch_prefix_cache_draft_group.py` —
+  fixes the ZERO-HIT prefix-cache failure on the base image's block-2304
+  path (drafter SWA group flagged as EAGLE fallback shrinks every group's
+  hit to 0; 0.986 hit rate after). Redundant for both our lanes:
+  dflash2pmu already carries florianbrede's #53906-coordinator + SWA
+  fine-hits series + PMU128 (validated live 09-11/09-17), and mtp3 has no
+  drafter group at all. Only relevant if someone ran the base image
+  without our patch-baked profile images — we never do. No new image tag
+  published, so there is also nothing to bump to.
+- tonyd2wild "speed night" PR #22 (merged 09-18): RoCE all-reduce env
+  (`VLLM_ENABLE_ROCE_ALLREDUCE=1`, `VLLM_ROCE_ALLREDUCE_MAX_SIZE=2MB`) +
+  boot hardening on the NVFP4 lane — prefill +26–36%, aggregate +8–19%,
+  decode flat. Same vLLM lineage but measured on the NVFP4 model/launcher;
+  presence of these env vars in OUR image's vLLM build is unverified.
+  WATCH: at next bring-up, `grep -r VLLM_ENABLE_ROCE_ALLREDUCE` inside the
+  image; if recognized, A/B it — prefill is exactly our production
+  bottleneck (68K prefix-unique agent prefills).
+- Forum 381350 post 524 (jrsphd, 09-14): full W4A16 recipe on eugr's B12X
+  image (vllm-b12x:0.3) — "slight bump in parallel decode by increasing
+  batched tokens to 12K at the expense of prefill", MNBT 12K, KV 15.25 GB
+  @ GMU 0.8, pool 2,118,727 tokens. Different image/backend family
+  (B12X/instanttensor, block 256, native mtp3 with humming MoE-drafter) —
+  not transferable to the sm121-v11 marlin stack; recorded as a
+  cross-check point. His RoCE allreduce env matches tonyd2wild's speed
+  night (two independent images carrying the knob).
+- Forum 383023 (DGX Spark kernel regression): kernel 7.0.0-1019-nvidia
+  breaks NCCL/RoCE (`ibv_reg_mr_iova2` ENOMEM; 6.17.0-1032 fine) — folds
+  into the standing driver watch (stay on 580.173.02 / current kernel;
+  DGX OS OTA caution). Related: 383312 (kernel/driver mismatch after
+  update), 383362 (RoCE GID renumbering after update — our compose already
+  auto-detects GID at boot).
+- rodman80 harness: no commits since 09-07 (dual-fabric NCCL already a
+  watch item from the 09-08 pass).
+- 382041 posts 7–10: EXL3 PR77 prefill numbers (other lane), NVFP4
+  checkpoint memory spikes (other quants), chatter — nothing for this
+  recipe.
+
+Watchlist additions: ghcr `sm121-v12`-lineage tag publication (would carry
+PR #18 — still redundant for our lanes, but signals an image bump to
+evaluate with the qzeros gate); tonyd2wild speed-night docs for a W4A16
+replication of the RoCE allreduce gain.

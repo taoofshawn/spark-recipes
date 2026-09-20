@@ -27,11 +27,12 @@ services:
       retries: 3
       start_period: 900s
     volumes:
-      # Post-surgery weights (prepare-model.sh: hardlinks from the HF snapshot +
-      # rewritten config.json). DFlash2 drafter is resolved from HF_CACHE at
-      # boot — no separate volume mount needed.
-      - ${MODEL_HOST_PATH}:/models/intel-gptq-surgery:ro
-      # HF hub cache (Intel snapshot + DFlash2 drafter; downloaded on both nodes)
+      # Model weights are served as the HF repo ID + the synthetic
+      # "gptq-surgery" revision that prepare-model.sh writes INTO the HF cache
+      # entry below (hardlinked snapshot + GPTQ-adapted config.json + a refs
+      # file) — so /v1/models .root reports the HF id, not a local path
+      # (parity with deepseek-v4-flash-vision-0rand). DFlash2 drafter is
+      # resolved from HF_CACHE at boot — no separate volume mount needed.
       - ${HF_CACHE}:/cache/huggingface
       # Cache root -> /cache (JIT caches; node-local disk only) + a /root/.cache
       # catch-all for anything that ignores the env overrides below.
@@ -94,6 +95,12 @@ services:
       VLLM_USE_FUSED_MOE_GROUPED_TOPK: "${VLLM_USE_FUSED_MOE_GROUPED_TOPK:-0}"
       GLM53_INDEXER_WORKSPACE: "${GLM53_INDEXER_WORKSPACE:-rightsize}"
       SERVED_MODEL_NAME: "${SERVED_MODEL_NAME:-glm-5.3-flash}"
+      # Model identity — MUST be in the container env: the command block serves
+      # the HF repo ID + the synthetic surgery revision (prepare-model.sh
+      # writes it into the HF cache entry). Serving the HF ID keeps
+      # /v1/models .root == the HF id (tool-eval-bench banner parity).
+      MODEL: "${MODEL}"
+      SURGERY_REVISION: "${SURGERY_REVISION:-gptq-surgery}"
       # ---- sampling / thinking defaults (explicit, repo parity: thinking ON
       # at REASONING_EFFORT; temp 1.0 / top_p 0.95) ----
       THINKING: "${THINKING:-true}"
@@ -164,8 +171,11 @@ services:
           export NCCL_IB_GID_INDEX
         fi
 
-        # ---- preflight: post-surgery model dir (prepare-model.sh) ----
-        M=/models/intel-gptq-surgery
+        # ---- preflight: post-surgery model revision (prepare-model.sh writes
+        # the synthetic "$SURGERY_REVISION" snapshot into the model's HF cache
+        # entry; serving HF-ID + revision keeps /v1/models .root == HF id) ----
+        HUB=/cache/huggingface/hub/models--$$(printf '%s' "$${MODEL}" | sed 's|/|--|g')
+        M="$$HUB/snapshots/$${SURGERY_REVISION:-gptq-surgery}"
         [ -f "$$M/config.json" ] || { echo "FATAL: $$M/config.json missing — run prepare-model.sh on this node (see README)" >&2; exit 2; }
         grep -q '"quant_method": "gptq"' "$$M/config.json" || { echo "FATAL: $$M/config.json is not the GPTQ-surgery config (run prepare-model.sh)" >&2; exit 2; }
 
@@ -187,7 +197,7 @@ services:
           [ -n "$$DFLASH_MODEL_DIR" ] || { echo "FATAL: DFlash2 drafter not found in HF cache for $$DFLASH_MODEL. Download on both nodes first (see README)." >&2; exit 2; }
           echo "[glm53-intel-w4a16] drafter=$$DFLASH_MODEL_DIR"
         fi
-        ARGS=(serve "$$M"
+        ARGS=(serve "$$MODEL" --revision "$${SURGERY_REVISION:-gptq-surgery}"
           --served-model-name "$${SERVED_MODEL_NAME:-glm-5.3-flash}"
           --host 0.0.0.0 --port "$${PORT:-8000}"
           --trust-remote-code

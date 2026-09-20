@@ -554,3 +554,41 @@ contradicts the 2026-09-18 lane-A/B verdict (mtp3 ≥ dflash at c4), which used
 a different bench shape (c1 tg1024, c4 ~40–52 tok/s cells). Treat as a
 watch item, not a decision: re-run the 09-18 A/B bench and this script's
 cells on the same boot pair before flipping lanes.
+
+## 2026-09-19 — serve the HF repo ID instead of a local surgery path (prepare-model.sh v2)
+
+**Problem:** tool-eval-bench banners (and `/v1/models .data[].root`) reported
+`Model: /models/intel-gptq-surgery` — vLLM's `root` field is the literal
+model path argument, and we served the local surgery directory.
+`--served-model-name` only controls `id` (glm-5.3-flash); there is no flag
+that overrides `root`. The deepseek-v4-flash-vision-0rand recipe shows the
+exact HF ID because it serves `deepseek-ai/DeepSeek-V4-Flash-Vision-Exp`
+straight from the HF cache (offline) — `model_config.model` stays the
+repo-ID string.
+
+**Fix (prepare-model.sh v2 + compose):** the surgery now materializes a
+synthetic `gptq-surgery` revision INSIDE the model's own HF cache entry
+(`models--Intel--GLM-5.3-Flash-W4A16-AutoRound/snapshots/gptq-surgery/` =
+hardlinks from the pinned snapshot + the GPTQ config.json; plus a one-line
+`refs/gptq-surgery` file, which is exactly how huggingface_hub resolves a
+revision offline). Compose drops the `MODEL_HOST_PATH` volume and serves
+`vllm serve Intel/GLM-5.3-Flash-W4A16-AutoRound --revision gptq-surgery`
+with `HF_HUB_OFFLINE=1` (already set). `MODEL_HOST_PATH` is retired from
+`.env`; `SURGERY_REVISION=gptq-surgery` replaces it.
+
+- Result: `.data[].root` = `Intel/GLM-5.3-Flash-W4A16-AutoRound` exactly
+  (0rand parity); `id` unchanged (`glm-5.3-flash`); proxy untouched.
+- Rollout (existing nodes): `git pull` → re-run `./prepare-model.sh` on
+  BOTH nodes (idempotent, seconds, no downloads) → coordinated restart.
+  The boot preflight FATALs if the revision is missing — by design.
+- No image rebuild; surgery mechanics (679 dynamic rules, hardlinks,
+  fail-closed sanity block) unchanged.
+- Watch items: (1) the synthetic revision now lives inside the real Intel
+  cache entry — a future `hf download` coexists fine, but a cache PRUNE
+  could drop it; re-running prepare-model.sh restores it in seconds.
+  (2) If a model re-pin happens, re-run prepare-model.sh (it re-links from
+  the new snapshot and rewrites config.json — same as before, plus the ref
+  already exists). (3) `refs/gptq-surgery` contains a non-hash string —
+  tolerated by huggingface_hub offline resolution; if a future hub version
+  validates ref contents, the fallback is naming the snapshot dir with a
+  real 40-hex hash and pointing the ref at it.

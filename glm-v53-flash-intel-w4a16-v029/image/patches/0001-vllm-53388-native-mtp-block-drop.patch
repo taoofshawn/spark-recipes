@@ -1,0 +1,168 @@
+diff --git a/vllm/config/speculative.py b/vllm/config/speculative.py
+index fde84a262..92cf7c2ec 100644
+--- a/vllm/config/speculative.py
++++ b/vllm/config/speculative.py
+@@ -436,6 +436,11 @@ class SpeculativeConfig:
+     speculative input batches can contain sequences of different lengths,
+     which may only be supported by certain attention backends. This currently
+     only affects the EAGLE method of speculation."""
++    disable_eagle_block_drop: bool = False
++    """Disable dropping the trailing prefix-cache block for EAGLE-like
++    speculative methods. This is an experimental option for measuring the
++    acceptance-rate impact of reusing that block. It does not disable the
++    speculative drafter itself."""
+     use_local_argmax_reduction: bool = False
+     """Use vocab-parallel local argmax instead of all-gathering full logits
+     for draft token generation. Reduces communication from O(vocab_size) to
+@@ -1846,6 +1851,10 @@ class SpeculativeConfig:
+         # TODO(ben): Refactor this so the naming is clearer
+         return self.method in ("eagle", "eagle3", "mtp", "dflash", "dspark")
+ 
++    def use_eagle_block_drop(self) -> bool:
++        """Whether volatile trailing cache blocks should be discarded."""
++        return self.use_eagle() and not self.disable_eagle_block_drop
++
+     def use_dflash(self) -> bool:
+         return self.method == "dflash"
+ 
+diff --git a/vllm/distributed/kv_transfer/kv_connector/v1/mooncake/store/worker.py b/vllm/distributed/kv_transfer/kv_connector/v1/mooncake/store/worker.py
+index 2331d4da6..95c892c06 100644
+--- a/vllm/distributed/kv_transfer/kv_connector/v1/mooncake/store/worker.py
++++ b/vllm/distributed/kv_transfer/kv_connector/v1/mooncake/store/worker.py
+@@ -1593,16 +1593,17 @@ class MooncakeStoreWorker:
+             for group in kv_cache_config.transfer_groups
+         ]
+         spec_cfg = getattr(vllm_config, "speculative_config", None)
+-        use_eagle = bool(
+-            spec_cfg.use_eagle()
+-            if spec_cfg is not None and callable(getattr(spec_cfg, "use_eagle", None))
++        use_eagle_block_drop = bool(
++            spec_cfg.use_eagle_block_drop()
++            if spec_cfg is not None
++            and callable(getattr(spec_cfg, "use_eagle_block_drop", None))
+             else False
+         )
+         self.coord = MooncakeStoreCoordinator(
+             self._kv_cache_groups,
+             scheduler_block_size=self.block_size,
+             hash_block_size=self.hash_block_size,
+-            use_eagle=use_eagle,
++            use_eagle=use_eagle_block_drop,
+             retention_interval=kv_cache_config.prefix_cache_retention_interval,
+             dcp_world_size=self.dcp_size,
+         )
+diff --git a/vllm/distributed/kv_transfer/kv_connector/v1/offloading/scheduler.py b/vllm/distributed/kv_transfer/kv_connector/v1/offloading/scheduler.py
+index 330f8270b..402bd55dc 100644
+--- a/vllm/distributed/kv_transfer/kv_connector/v1/offloading/scheduler.py
++++ b/vllm/distributed/kv_transfer/kv_connector/v1/offloading/scheduler.py
+@@ -223,11 +223,11 @@ class SchedulerOffloadConfig(NamedTuple):
+             if g.is_eagle_group
+         }
+ 
+-        use_eagle = (
++        use_eagle_block_drop = (
+             vllm_config.speculative_config is not None
+-            and vllm_config.speculative_config.use_eagle()
++            and vllm_config.speculative_config.use_eagle_block_drop()
+         )
+-        if use_eagle and not eagle_groups:
++        if use_eagle_block_drop and not eagle_groups:
+             eagle_groups = set(range(len(kv_cache_config.kv_cache_groups)))
+ 
+         if eagle_groups:
+diff --git a/vllm/v1/core/kv_cache_utils.py b/vllm/v1/core/kv_cache_utils.py
+index 7572aac8f..c528e42b0 100644
+--- a/vllm/v1/core/kv_cache_utils.py
++++ b/vllm/v1/core/kv_cache_utils.py
+@@ -1841,7 +1841,7 @@ def _annotate_eagle_groups(
+         use_deepseek_v4_fallback: Enable rule 2 for a DeepseekV4 packed group.
+     """
+     spec_config = vllm_config.speculative_config
+-    if spec_config is None or not spec_config.use_eagle():
++    if spec_config is None or not spec_config.use_eagle_block_drop():
+         return
+ 
+     for group in kv_cache_groups:
+diff --git a/vllm/v1/core/sched/scheduler.py b/vllm/v1/core/sched/scheduler.py
+index 83ed59799..b0fd3d25b 100644
+--- a/vllm/v1/core/sched/scheduler.py
++++ b/vllm/v1/core/sched/scheduler.py
+@@ -255,6 +255,7 @@ class Scheduler(SchedulerInterface):
+         )
+         speculative_config = vllm_config.speculative_config
+         self.use_eagle = False
++        self.use_eagle_block_drop = False
+         self.num_spec_tokens = vllm_config.num_speculative_tokens
+         self.num_lookahead_tokens = vllm_config.num_lookahead_tokens
+         # Positions past the computed tokens that the drafter reads mid-prefill.
+@@ -279,6 +280,13 @@ class Scheduler(SchedulerInterface):
+                     if speculative_config.use_multi_module_mtp()
+                     else 1
+                 )
++            self.use_eagle_block_drop = speculative_config.use_eagle_block_drop()
++            if self.use_eagle and not self.use_eagle_block_drop:
++                logger.warning(
++                    "EAGLE trailing prefix-cache block dropping is disabled. "
++                    "This is experimental and may affect speculative-token "
++                    "acceptance rates."
++                )
+ 
+         # Create the KV cache manager.
+         if hash_block_size is None:
+@@ -289,7 +297,7 @@ class Scheduler(SchedulerInterface):
+             max_model_len=self.max_model_len,
+             max_in_flight_tokens=vllm_config.max_in_flight_tokens,
+             enable_caching=self.cache_config.enable_prefix_caching,
+-            use_eagle=self.use_eagle,
++            use_eagle=self.use_eagle_block_drop,
+             num_prefill_lookahead=self.num_prefill_lookahead,
+             log_stats=self.log_stats,
+             enable_kv_cache_events=self.enable_kv_cache_events,
+@@ -414,7 +422,7 @@ class Scheduler(SchedulerInterface):
+         # Eagle, FullAttn prunes the last matching block, so back off one
+         # block to avoid a Mamba cache miss.
+         last_cache_position = request.num_tokens - request.num_tokens % block_size
+-        if self.use_eagle:
++        if self.use_eagle_block_drop:
+             last_cache_position = max(last_cache_position - block_size, 0)
+ 
+         end = start + num_new_tokens
+diff --git a/vllm/v1/core/single_type_kv_cache_manager.py b/vllm/v1/core/single_type_kv_cache_manager.py
+index 443017012..2091be31c 100644
+--- a/vllm/v1/core/single_type_kv_cache_manager.py
++++ b/vllm/v1/core/single_type_kv_cache_manager.py
+@@ -925,10 +925,9 @@ class SlidingWindowManager(SingleTypeKVCacheManager):
+         )
+         assert dcp_world_size == 1, "DCP not support sliding window attn now."
+         assert pcp_world_size == 1, "PCP not support sliding window attn now."
+-        # Fine-grained partial hits are not supported for sliding window now
+-        assert alignment_tokens % kv_cache_spec.block_size == 0, (
+-            "SlidingWindowManager does not support fine-grained (partial) cache hits"
+-        )
++        # Sliding-window cache hits must stay at the group's physical block
++        # granularity. resolve_block_hashes() converts finer-grained hashes to
++        # that view when the hybrid-cache alignment is smaller than block_size.
+         block_hashes = resolve_block_hashes(
+             block_hashes,
+             block_pool.hash_block_size,
+diff --git a/vllm/v1/simple_kv_offload/manager.py b/vllm/v1/simple_kv_offload/manager.py
+index 0a78c5e9c..cc3a1fcc3 100644
+--- a/vllm/v1/simple_kv_offload/manager.py
++++ b/vllm/v1/simple_kv_offload/manager.py
+@@ -125,12 +125,14 @@ class SimpleCPUOffloadScheduler:
+         )
+ 
+         spec_config = vllm_config.speculative_config
+-        use_eagle = spec_config is not None and spec_config.use_eagle()
++        use_eagle_block_drop = (
++            spec_config is not None and spec_config.use_eagle_block_drop()
++        )
+         self.cpu_coordinator: KVCacheCoordinator = get_kv_cache_coordinator(
+             kv_cache_config=self.cpu_kv_cache_config,
+             max_model_len=vllm_config.model_config.max_model_len,
+             max_in_flight_tokens=vllm_config.max_in_flight_tokens,
+-            use_eagle=use_eagle,
++            use_eagle=use_eagle_block_drop,
+             enable_caching=True,
+             enable_kv_cache_events=self.enable_kv_cache_events,
+             dcp_world_size=dcp_world_size,

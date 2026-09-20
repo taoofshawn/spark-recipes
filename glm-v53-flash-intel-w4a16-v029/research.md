@@ -57,3 +57,117 @@ re-gated at bring-up on this new image):** GMU 0.85, MAX_LEN 1,048,576,
 MAX_SEQS 6, MNBT 8192, BLOCK_SIZE 2304, KV pin 13.5 GB fp8 e4m3 → ~1.92M-token
 pool, marlin MoE, temp 1.0 / top_p 0.95 / thinking ON at effort `high`,
 worker-first start order, port 8000, GID auto-detect, offline serving.
+
+## 2026-09-20 — bring-up of `glm53-intel-w4a16-v029:20260920` — VERDICT: FATAL at first boot; recipe premise unmet; rolled back to legacy mtp3 lane
+
+Executed per `docs/TESTING-RUNBOOK.md` from a remote session. All §1 staging
+passed, §5 worker-first launch executed; **worker AND leader both FATAL ~20 s
+after container start** — before any weight load, GID detect fine
+(`NCCL_IB_GID_INDEX=3` on node1), raw auto-round snapshot preflight OK.
+
+### FATAL
+
+```
+NotImplementedError: Unsupported speculative method: 'mtp'
+  at vllm/config/speculative.py:1331 (__post_init__ else-raise),
+  via EngineArgs.create_speculative_config → SpeculativeConfig(**speculative_config)
+```
+
+Same traceback on both ranks (worker `run_headless`, leader APIServer).
+
+### Root cause (verified against the built image, not the tag tree)
+
+`SpeculativeConfig.__post_init__` on v0.29.0 classifies a self-drafting MTP
+target **purely by the draft config's `hf_config.model_type ∈ MTPModelTypes`**;
+for an explicit `method:"mtp"` with no drafter it self-drafts from the target
+checkpoint (`self.model = target.model_weights or target.model`, quantization
+aligned) and injects **no** model_type override. The Intel checkpoint (and the
+official zai FP8 one — checked, `num_nextn_predict_layers: null` in BOTH, so
+that field is not the discriminator) has `model_type: "glm5_next"`, which is
+**not** a member of the image's `MTPModelTypes` Literal (`deepseek_mtp`,
+`glm4_moe_mtp`, `qwen3_next_mtp`, … 25 members, no `glm5_next`) → the elif
+chain falls to the final `else: raise`.
+
+Deeper: **the image has no GLM-5.3 integration at all.** Broad grep
+(`grep -rln -i glm5 vllm/`) finds only `models/deepseek_v32/nvidia/glm52_low_latency_gemm.py`
+(a fused-GEMM kernel shipped for DSv3.2, not GLM-5.3 support): no
+`vllm/models/glm5next/`, no registry entries (`Glm5NextForCausalLM` /
+`Glm5NextForConditionalGeneration` / `Glm5NextMTPModel` absent from
+`model_executor/models/registry.py`). `ModelConfig` probe in-image resolves the
+checkpoint to `TransformersMultiModalMoEForCausalLM` → "has no vLLM
+implementation, falling back to Transformers". In-image transformers 5.16.1
+DOES ship `models/glm5_next/`, so a no-spec-decode boot through the
+Transformers fallback is *possible* in principle — but the mtp3 lane,
+`FLASHINFER_MLA_SPARSE_SM120` selection and every SM121 patch in the stack
+assume the native model, so the recipe's premise (mtp3 + sparse-MLA on a stock
+v0.29.0 base + 4 patches) is **unmet**: the patch stack baked 0001/0003/0011/0012
+onto a base that never had the model.
+
+**Research receipt correction:** the inception receipt's "PR #53906 GLM-5.3
+native support in v0.29.0 — VERIFIED, `vllm/models/glm5next/`" is WRONG for the
+v0.29.0 tag (2026-09-08). The native module exists on **main** only
+(24-file tree: `common/{model,mtp,attention,kda,multimodal,sparse_indexer}.py`,
+`nvidia/ops/{fused_eh_norm,kpool_compress}`, `third_party/kda` triton kernels,
+amd/ variants) with registry entries at `registry.py:122/428/692` and the spec
+glue in main's `speculative.py` (~:1045: `glm5_next` → `glm5_next_mtp`,
+`n_predict = num_nextn_predict_layers`, `architectures: ["Glm5NextMTPModel"]`;
+`glm5_next_mtp` added to `MTPModelTypes`). The official recipe's
+`min_vllm_version: 0.29.0` evidently presumes a build carrying that main-branch
+integration. v0.29.0 is still the newest stable release today (no 0.29.1/0.30),
+so there is no stable base that carries GLM-5.3 natively.
+
+### Corrections + observations recorded during bring-up
+
+- **Missing `IMAGE` var (fixed pre-launch):** compose reads `image: ${IMAGE}`
+  but no `.env` defined it → compose FATALs at `up`. Added
+  `IMAGE=glm53-intel-w4a16-v029:20260920` on the branch (commit `d7a206c`),
+  pulled on both node clones; `docker compose config` then resolved the
+  image + container name correctly on both nodes. Mirror of the legacy
+  recipe's convention.
+- **FLAGS-AUDIT watch item #1 confirmed:** boot warns
+  `Unknown vLLM environment variable detected: VLLM_EXECUTE_MODEL_TIMEOUT_S`
+  — v0.29.0 does not read it. A future build should set
+  `VLLM_ENGINE_READY_TIMEOUT_S=3600` instead (both rows in compose env).
+- **Image distribution:** image was on node0 under both tags
+  (`glm53-intel-w4a16-v029:20260920` == `ghcr.io/taoofshawn/vllm-glm53-intel-w4a16:v0.29.0-pmu128-mtp3`,
+  ID `1e987123e58f`); node1 had NEITHER (ghcr push does not land on node
+  dockerd). Measured paths node0→node1: workstation-relayed
+  `docker save|gzip|ssh` = **11 MB/s** (mgmt enP7s7); ssh pipe over the RoCE
+  rail collapses sustained (342 MB/s burst for 300 MB, ~MB/s sustained);
+  **disk-staged scp over RoCE = 411 MB/s sustained** (22,261,490,688 B in
+  51.7 s) + `docker load -i` 2m09s. For future ~20 GiB image transfers use
+  `docker save -o` → scp → `docker load`; skip streaming pipes. Temp tars
+  removed from both nodes after load.
+
+### Rollback (executed same session)
+
+v029 containers `down` on both nodes → node clones back to `main` (clean,
+`git diff origin/main...glm53-w4a16-v029-stock -- glm-v53-flash-intel-w4a16/`
+empty, so main serves the identical legacy config as pre-cutover) →
+drop_caches ritual → legacy `glm-v53-flash-intel-w4a16` worker-first relaunch
+on `glm53-intel-mtp3-pmu128:20260907` → health re-verified (see below).
+model-name-proxy (:4000, `BACKEND_MODEL=glm-5.3-flash`) stayed up throughout;
+its healthcheck flips unhealthy while the backend is down and recovers with it.
+
+### Bench gate (§8)
+
+NOT RUN — the new image cannot serve, so no A/B numbers exist and the legacy
+lane's recorded numbers (c4 129.3–132.1 stable, 2026-09-19 bench) stand
+uncontested.
+
+### Next-build options (user decision; none executed here)
+
+1. **Port glm5next from main onto v0.29.0**: copy the 24-file module + 3
+   registry lines + the `speculative.py` translation block + `glm5_next_mtp`
+   Literal member, then audit `common/{attention,kda}.py` imports against
+   v0.29.0's attention/kv-cache APIs (real drift risk — the 0011 patch already
+   tunes the SM120 sparse-MLA file that main's module expects unmodified).
+   Must go through the installer + build-receipt flow, not a bind-mount hack.
+2. **Rebuild on a nightly base** that carries glm5next natively — re-opens
+   every SM121 question (flashinfer pin, kernel stack) the v0.29.0 pin was
+   chosen to avoid.
+3. **Wait for 0.30 stable** carrying #53906's glue natively.
+4. Diagnostic-only (not the recipe goal): boot the RAW checkpoint with NO
+   speculative-config through the Transformers fallback to prove the INC
+   auto-round load path on GB10. Loses mtp3 + likely sparse-MLA; not a
+   serving candidate.

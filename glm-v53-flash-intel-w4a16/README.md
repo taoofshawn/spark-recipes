@@ -82,15 +82,17 @@ python3 -m venv /tmp/hfvenv && /tmp/hfvenv/bin/pip install -q -U huggingface_hub
 #    /tmp/hfvenv/bin/hf download incoai/GLM-5.3-Flash-DFlash2 \
 #        --revision bf582e4eacc1810f76656d1811693ff6c6737d2a
 
-# c) the GPTQ surgery (builds $MODEL_HOST_PATH from the snapshot):
+# c) the GPTQ surgery — writes a synthetic `gptq-surgery` revision INTO the
+#    model's HF cache entry (hardlinks + rewritten config.json + a refs file):
 ./prepare-model.sh            # run on BOTH nodes
 ```
 
 `prepare-model.sh` is required because the model does not load as shipped:
 `auto-round` is not in the GB10 forks' `QUANTIZATION_METHODS`, but the
 tensors are plain GPTQ (`auto_round:auto_gptq`, sym, group-128). The script
-materializes a serving dir from the HF snapshot (hardlinks, zero extra
-space) and swaps `quantization_config` in `config.json`:
+materializes a synthetic `gptq-surgery` revision inside the model's HF cache
+entry — a snapshot of hardlinks from the pinned upstream snapshot (zero extra
+space) whose `config.json` swaps `quantization_config`:
 
 ```json
 {"quant_method": "gptq", "bits": 4, "group_size": 128, "sym": true,
@@ -102,6 +104,14 @@ space) and swaps `quantization_config` in `config.json`:
 (BF16 load), which is exactly what auto-round's `extra_config` meant
 (verified against `vllm/model_executor/layers/quantization/utils/gptq_utils.py`
 `get_dynamic_override`). Idempotent; fail-closed.
+
+Why a synthetic revision: the recipe serves the HF repo ID
+(`vllm serve Intel/GLM-5.3-Flash-W4A16-AutoRound --revision gptq-surgery`)
+and lets vLLM resolve the weights from the local HF cache offline — so
+`/v1/models .root` reports the real HF ID instead of a local path (parity
+with `deepseek-v4-flash-vision-0rand`; tool-eval-bench's "Model:" banner
+shows the HF ID too). The `id` field stays `glm-5.3-flash` (`--served-model-name`;
+the model-name proxy keeps serving `spark-llm`).
 
 ### 1) Build the serving image (BOTH nodes)
 
@@ -135,11 +145,19 @@ The wrong start order hangs the rendezvous (`DistStoreError: 1/2 clients`,
 between relaunches. Cold boot ~8–10 min (weight load + engine init; JIT
 caches persist). Never benchmark right after boot.
 
+**Upgrading an existing deployment to the HF-ID serving flow** (one-time):
+`git pull` on both nodes → re-run `./prepare-model.sh` on BOTH nodes
+(idempotent, seconds — it writes the synthetic `gptq-surgery` revision into
+the existing HF cache entry; no downloads, no image rebuild) → then the
+coordinated restart above. Without the prepare-model re-run the boot
+preflight FATALs (the revision does not exist yet) — by design.
+
 ### 3) Verify (leader)
 
 ```bash
 curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8000/health   # 200 — /v1/models returns 200 even with a dead engine
-curl -s http://127.0.0.1:8000/v1/models        # "id":"glm-5.3-flash", max_model_len 1048576
+curl -s http://127.0.0.1:8000/v1/models        # "id":"glm-5.3-flash", "root":"Intel/GLM-5.3-Flash-W4A16-AutoRound", max_model_len 1048576
+curl -s http://127.0.0.1:8000/v1/models | jq -r '.data[0].root'   # Intel/GLM-5.3-Flash-W4A16-AutoRound (HF-ID serving check)
 ```
 
 End-to-end through the model-name proxy (clients use `spark-llm`):

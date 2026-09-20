@@ -1,0 +1,125 @@
+# Sparkrun recipe: GLM-5.3-Flash Intel W4A16, mtp3 lane, 2x DGX Spark.
+# Deploy / run / verify: see README.md in this directory.
+
+recipe_version: "2"
+name: glm-v53-flash-intel-w4a16-sparkrun
+description: GLM-5.3-Flash Intel W4A16 AutoRound, 1M context, native MTP3 + PMU128, via a hosted ghcr image (no rebuild)
+
+model: Intel/GLM-5.3-Flash-W4A16-AutoRound
+# Upstream revision — drives sparkrun's model sync; the server serves
+# {surgery_revision}, written into the HF cache by prepare-model.sh.
+model_revision: 5eee1846f0321058ed73745f9aa16f2aaf0fc0a0
+runtime: vllm
+
+container: ghcr.io/taoofshawn/vllm-glm53-intel-mtp3-pmu128:20260920@sha256:f1aaeafbc77d0173b3551f86c93f06a09debe979b5bbf079c9cc754b1391b481
+
+# Pull the prebuilt ghcr image — never a source build.
+builder: docker-pull
+
+min_nodes: 2
+max_nodes: 2
+
+metadata:
+  description: Intel W4A16 AutoRound via GPTQ surgery; native MTP3 (k=3), PMU128 prefix matching, marlin MoE, fp8 KV (13.5 GB pin), 1M context
+  maintainer: sdrew
+  base_recipe: glm-v53-flash-intel-w4a16
+
+defaults:
+  port: 8000
+  host: 0.0.0.0
+  tensor_parallel: 2
+  gpu_memory_utilization: 0.85
+  max_model_len: 1048576
+  max_num_seqs: 6
+  max_num_batched_tokens: 8192
+  block_size: 2304
+  kv_cache_dtype: fp8_e4m3
+  kv_cache_memory: 13500000000
+  served_model_name: glm-5.3-flash
+  surgery_revision: gptq-surgery
+  # JSON-valued flags live as single defaults values (sparkrun substitutes
+  # {key} as one unit — no double-brace escapes).
+  speculative_config: '{"method":"mtp","num_speculative_tokens":3,"disable_eagle_block_drop":true}'
+  gen_config: '{"temperature": 1.0, "top_p": 0.95}'
+  chat_template_kwargs: '{"enable_thinking": true, "reasoning_effort": "high"}'
+
+env:
+  CUDA_VISIBLE_DEVICES: "0"
+  CUDA_DEVICE_ORDER: "PCI_BUS_ID"
+  # Do NOT set NCCL_IB_GID_INDEX here: sparkrun detects the RoCE v2 GID index
+  # per host, and recipe env wins over comm env.
+  NCCL_NET: "IB"
+  NCCL_IB_DISABLE: "0"
+  NCCL_NET_PLUGIN: "none"
+  NCCL_IB_HCA: "rocep1s0f0,roceP2p1s0f0"
+  NCCL_IB_ROCE_VERSION_NUM: "2"
+  NCCL_SOCKET_IFNAME: "enp1s0f0np0"
+  GLOO_SOCKET_IFNAME: "enp1s0f0np0"
+  TP_SOCKET_IFNAME: "enp1s0f0np0"
+  MN_IF_NAME: "enp1s0f0np0"
+  NCCL_NVLS_ENABLE: "0"
+  NCCL_CROSS_NIC: "0"
+  NCCL_IB_MERGE_NICS: "0"
+  NCCL_CUMEM_ENABLE: "0"
+  NCCL_IGNORE_CPU_AFFINITY: "1"
+  NCCL_DEBUG: "WARN"
+  TORCH_NCCL_ASYNC_ERROR_HANDLING: "1"
+  NCCL_MIN_NCHANNELS: "8"
+  NCCL_MAX_NCHANNELS: "8"
+  TORCH_CUDA_ARCH_LIST: "12.1a"
+  FLASHINFER_CUDA_ARCH_LIST: "12.1a"
+  FLASHINFER_DISABLE_VERSION_CHECK: "1"
+  VLLM_EXECUTE_MODEL_TIMEOUT_S: "3600"
+  PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"
+  TORCHINDUCTOR_CACHE_DIR: "/cache/huggingface/torchinductor"
+  TILELANG_CACHE_DIR: "/cache/huggingface/tilelang"
+  VLLM_MARLIN_USE_ATOMIC_ADD: "0"
+  VLLM_USE_FUSED_MOE_GROUPED_TOPK: "0"
+  GLM53_INDEXER_WORKSPACE: "rightsize"
+  HF_HUB_OFFLINE: "1"
+  TRANSFORMERS_OFFLINE: "1"
+  HF_HOME: "/cache/huggingface"
+
+executor_config:
+  # Run as root (the compose recipe runs this image as root); overriding every
+  # field the rootless path touches forces run-as-root without --rootful.
+  privileged: true
+  security_opt: null
+  cap_add: null
+  user: null
+  gpus: all
+  ipc: host
+  shm_size: 32gb
+  network: host
+  devices:
+    - /dev/infiniband
+  ulimit:
+    - "memlock=-1:-1"
+    - "nofile=1048576:1048576"
+    - "stack=67108864:67108864"
+
+# Plain vllm invocation, last line without a trailing backslash: sparkrun
+# appends the per-node rendezvous flags (--nnodes/--node-rank/--master-addr/
+# --master-port, --headless on the worker). Do NOT add those here.
+command: |
+  vllm serve {model} \
+      --revision {surgery_revision} \
+      --served-model-name {served_model_name} \
+      --host {host} --port {port} --trust-remote-code \
+      --distributed-executor-backend mp \
+      --tensor-parallel-size {tensor_parallel} \
+      --gpu-memory-utilization {gpu_memory_utilization} \
+      --max-model-len {max_model_len} \
+      --max-num-seqs {max_num_seqs} \
+      --max-num-batched-tokens {max_num_batched_tokens} \
+      --block-size {block_size} \
+      --kv-cache-dtype {kv_cache_dtype} \
+      --kv-cache-memory {kv_cache_memory} \
+      --moe-backend marlin \
+      --speculative-config '{speculative_config}' \
+      --prefix-match-unit 128 --enable-prompt-tokens-details \
+      --tool-call-parser glm47 --enable-auto-tool-choice --reasoning-parser glm45 \
+      --chat-template /models/chat_template_mm.jinja \
+      --default-chat-template-kwargs '{chat_template_kwargs}' \
+      --generation-config vllm --override-generation-config '{gen_config}' \
+      --no-enable-flashinfer-autotune

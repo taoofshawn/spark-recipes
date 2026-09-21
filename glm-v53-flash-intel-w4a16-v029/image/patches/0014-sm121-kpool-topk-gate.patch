@@ -1,0 +1,21 @@
+diff --git a/vllm/model_executor/layers/sparse_attn_indexer_kpool.py b/vllm/model_executor/layers/sparse_attn_indexer_kpool.py
+index ba7a5adff..47af3496a 100644
+--- a/vllm/model_executor/layers/sparse_attn_indexer_kpool.py
++++ b/vllm/model_executor/layers/sparse_attn_indexer_kpool.py
+@@ -805,7 +805,15 @@ def sparse_attn_indexer_kpool(
+         else:
+             topk_dst = topk_indices_buffer[:num_padded_tokens, :topk_tokens]
+ 
+-        if current_platform.is_cuda() and select_k in (512, 1024, 2048):
++        # SM121/GB10 (48 SMs, 99KB smem): persistent_topk oversubscribes past
++        # ~24K ctx and its FilteredTopK fallback needs 128KB smem -> hard
++        # raise. Route small-SM parts to top_k_per_row_decode instead
++        # (tonyd2wild sm121-v7 port).
++        if (
++            current_platform.is_cuda()
++            and select_k in (512, 1024, 2048)
++            and torch.cuda.get_device_properties(0).multi_processor_count >= 78
++        ):
+             workspace_manager = current_workspace_manager()
+             (topk_workspace,) = workspace_manager.get_simultaneous(
+                 ((RADIX_TOPK_WORKSPACE_SIZE,), torch.uint8),

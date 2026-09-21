@@ -99,7 +99,7 @@ services:
       HF_HOME: /cache/huggingface
       HF_HUB_OFFLINE: "1"
       TRANSFORMERS_OFFLINE: "1"
-      VLLM_EXECUTE_MODEL_TIMEOUT_S: "3600"
+      VLLM_ENGINE_READY_TIMEOUT_S: "3600"
       PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"
       TORCH_CUDA_ARCH_LIST: "12.1a"
       FLASHINFER_CUDA_ARCH_LIST: "12.1a"

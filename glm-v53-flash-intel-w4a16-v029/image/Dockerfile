@@ -1,9 +1,12 @@
 # GLM-5.3-Flash Intel W4A16 AutoRound serving image (spark-recipes
-# glm-v53-flash-intel-w4a16-v029). Base: official stable vLLM v0.29.0, arm64,
-# CUDA 13.0 — digest-pinned. Everything SM121-specific is baked here; the
+# glm-v53-flash-intel-w4a16-v029). Base: the OFFICIAL model-recipe image
+# vllm/vllm-openai:glm53-flash-arm64-cu130 (re-pushed 2026-09-09, main
+# snapshot 385dce36b) — the only official image carrying GLM-5.3-Flash native
+# model + MTP support (v0.29.0 stable predates the #53906 merge; verified
+# 2026-09-20). Digest-pinned. Everything SM121-specific is baked here; the
 # recipe runs with no runtime overlays and no GPTQ model surgery (the Intel
-# AutoRound checkpoint loads natively via vLLM's INCConfig on v0.29.0).
-FROM vllm/vllm-openai@sha256:18372a7224938643461b846fb64c5c9d3d6e9727e82caf2dc3043e620c9d4d7a
+# AutoRound checkpoint loads natively via vLLM's INCConfig).
+FROM vllm/vllm-openai@sha256:b0501f99fec5136f248f78d5850977a2ec32d55cd9a665f4a9ffef24cbdf7fe5
 
 ARG VLLM_DIST=/usr/local/lib/python3.12/dist-packages
 
@@ -30,8 +33,8 @@ ENV TORCH_CUDA_ARCH_LIST="12.1a" \
     FLASHINFER_DISABLE_VERSION_CHECK="1" \
     PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"
 
-LABEL org.opencontainers.image.description="GLM-5.3-Flash Intel W4A16 AutoRound, stock vLLM v0.29.0, SM121 patch stack baked (spark-recipes)" \
-      org.opencontainers.image.base="vllm/vllm-openai:v0.29.0-aarch64" \
-      org.opencontainers.image.base.digest="sha256:18372a7224938643461b846fb64c5c9d3d6e9727e82caf2dc3043e620c9d4d7a" \
-      org.opencontainers.image.revision.vllm="v0.29.0" \
+LABEL org.opencontainers.image.description="GLM-5.3-Flash Intel W4A16 AutoRound, official glm53-flash recipe base, SM121 patch stack baked (spark-recipes)" \
+      org.opencontainers.image.base="vllm/vllm-openai:glm53-flash-arm64-cu130" \
+      org.opencontainers.image.base.digest="sha256:b0501f99fec5136f248f78d5850977a2ec32d55cd9a665f4a9ffef24cbdf7fe5" \
+      org.opencontainers.image.revision.vllm="0.28.1rc1.dev580+g385dce36b" \
       org.opencontainers.image.revision.patch53969="open PR d1e5e66-base, applied 2026-09-20"

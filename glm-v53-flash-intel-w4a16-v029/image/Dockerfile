@@ -10,6 +10,23 @@ FROM vllm/vllm-openai@sha256:b0501f99fec5136f248f78d5850977a2ec32d55cd9a665f4a9f
 
 ARG VLLM_DIST=/usr/local/lib/python3.12/dist-packages
 
+# flashinfer: the release 0.6.18 bundled in this base is NOT Blackwell-native
+# for the fa2/fa3 MLA paths — the fp8-MLA device gate excludes major==12 and
+# the fa3 fp8 MLA kernels carry no SM121 SASS ("no kernel image is available
+# for execution on the device", observed 2026-09-21 round-2 bring-up at the
+# SM90 sparse-MLA warmup). The legacy serving image
+# glm53-intel-mtp3-pmu128:20260907 served THIS EXACT model/hardware/config
+# with flashinfer 0.6.18.dev20260819: torch 2.13.0+cu130 (ABI-identical),
+# ckv_scale_arr API identical (19 refs both sides), SM121-capable. Adopt its
+# flashinfer + cubin dists wholesale. Applied BEFORE the patch chain, so the
+# installer's SHA gates see the adopted tree (the legacy flashinfer already
+# carries the (9,12) fp8-MLA gate; patch 0017 is therefore not needed).
+COPY --from=glm53-intel-mtp3-pmu128:20260907 /usr/local/lib/python3.12/dist-packages/flashinfer /usr/local/lib/python3.12/dist-packages/flashinfer
+COPY --from=glm53-intel-mtp3-pmu128:20260907 /usr/local/lib/python3.12/dist-packages/flashinfer_cubin /usr/local/lib/python3.12/dist-packages/flashinfer_cubin
+COPY --from=glm53-intel-mtp3-pmu128:20260907 /usr/local/lib/python3.12/dist-packages/flashinfer_cubin-0.6.18.dev20260819.dist-info /usr/local/lib/python3.12/dist-packages/flashinfer_cubin-0.6.18.dev20260819.dist-info
+COPY --from=glm53-intel-mtp3-pmu128:20260907 /usr/local/lib/python3.12/dist-packages/flashinfer_python-0.6.18.dev20260819.dist-info /usr/local/lib/python3.12/dist-packages/flashinfer_python-0.6.18.dev20260819.dist-info
+RUN rm -rf ${VLLM_DIST}/flashinfer_python-0.6.18.dist-info
+
 COPY apply_runtime_patches.py /tmp/spark-recipe/apply_runtime_patches.py
 COPY patches/ /tmp/spark-recipe/patches/
 

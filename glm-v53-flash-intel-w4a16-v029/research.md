@@ -171,3 +171,44 @@ uncontested.
    speculative-config through the Transformers fallback to prove the INC
    auto-round load path on GB10. Loses mtp3 + likely sparse-MLA; not a
    serving candidate.
+
+## 2026-09-20 (later) — parent-agent verification of the FATAL + probe of the official `glm53-flash` day-0 tag: viable new base found
+
+Independent verification of the bring-up record (both facts confirmed):
+
+- `git ls-tree -r v0.29.0 | grep -c glm5next` = **0**; `grep glm5_next_mtp
+  vllm/config/speculative.py@v0.29.0` = 0. The tag has NO GLM-5.3 support.
+- Ancestry check in the scratch clone:
+  `git merge-base --is-ancestor 98ed0856 (#53906) v0.29.0` → **NOT an
+  ancestor**; same for `481839ad (#53388)`. The v0.29.0 tag lives on a release
+  branch cut before the GLM-5.3 main merge — the "merged 09-03, tag 09-08"
+  dates were misleading; the inception receipt's inference ("in v0.29.0 per
+  merge date") was wrong. Agent-verified in-image finding stands.
+
+**Probe of the official re-pushed tag** `vllm/vllm-openai:glm53-flash-arm64-cu130@sha256:b0501f99fec5136f248f78d5850977a2ec32d55cd9a665f4a9ffef24cbdf7fe5`
+(pushed 2026-09-09 06:16, i.e. AFTER the GLM-5.3 main merge; version string
+`0.28.1rc1.dev580+g385dce36b` — a newer main snapshot than tonyd2wild's
+`0.1.dev20051+g487ecf187` base), probed in-image on spark-0f0b:
+
+| capability | present |
+|---|---|
+| `vllm/models/glm5next/` native module | YES (21 .py files) |
+| registry: Glm5NextForConditionalGeneration / ForCausalLM / MTPModel | ALL YES |
+| `speculative.py`: `glm5_next_mtp` | YES (native MTP for GLM-5.3) |
+| `disable_eagle_block_drop` (#53388) | **ALREADY IN TREE** → patch 0001 droppable |
+| INC auto-round override (`auto-round`) | YES → no surgery |
+| auto_gptq `is_sym`/`use_zp` guard | YES → no eugr patch |
+| `platforms/cuda.py::is_arch_support_pdl` | still `major >= 9` → PDL gate (0012) needed |
+| `sparse_attn_indexer_kpool.py` | EXISTS (v7 overlay target alive) |
+| CTA_TILE_KV in `*mla*sparse*` files | not found (v8 target TBD) |
+| flashinfer 0.6.18 / NCCL 2.30.7 / cutlass-dsl 4.6.2 / torch 2.13.0+cu130 | shipped (v3/v4/v5 pins unnecessary) |
+
+This is the image the official recipe prescribes ("use
+`vllm/vllm-openai:glm53-flash` until support lands in the standard image") —
+official docker-hub, digest-pinnable, arm64/CUDA-13.0, and it carries native
+GLM-5.3 + MTP + auto-round. Recommended base for build round 2; the patch
+stack must be re-derived against THIS tree with the same fail-closed
+empirical-gate flow (0001 drops; 0003/0012 re-check; v1/v7/v8-equivalent
+SM121 fixes re-evaluated; flags re-audited — this tree predates the
+`--kv-cache-memory-bytes` rename question and needs its own check).
+

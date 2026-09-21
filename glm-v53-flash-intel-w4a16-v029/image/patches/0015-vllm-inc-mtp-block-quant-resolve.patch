@@ -1,8 +1,8 @@
 diff --git a/vllm/model_executor/layers/quantization/inc/config_parser.py b/vllm/model_executor/layers/quantization/inc/config_parser.py
-index 87483942f..94110f9aa 100644
+index 87483942f..97b5c2d0b 100644
 --- a/vllm/model_executor/layers/quantization/inc/config_parser.py
 +++ b/vllm/model_executor/layers/quantization/inc/config_parser.py
-@@ -174,6 +174,26 @@
+@@ -174,6 +174,29 @@
                  layer_name.startswith(name)
                  for name in self._config.block_name_to_quantize
              )
@@ -11,20 +11,23 @@ index 87483942f..94110f9aa 100644
 +                # Glm5Next MTP nextn layer is checkpointed at
 +                # model.language_model.layers.45.* but constructed under
 +                # model.layers.45.* (the mtp_block nesting exists only in
-+                # module-attribute / weight-name space). Re-test the
-+                # HF-equivalent name so the quantized nextn layer resolves
-+                # like the target layers it mirrors; block_name_to_quantize
-+                # covers model.language_model.layers only and the draft
-+                # prefix misses it (observed 2026-09-21 round-2 bring-up:
-+                # draft experts came up unquantized while the checkpoint
-+                # ships qweight tensors for them).
-+                hf_name = layer_name.replace(".mtp_block", "", 1)
-+                hf_name = hf_name.replace(
-+                    "model.layers.", "model.language_model.layers.", 1
-+                )
++                # module-attribute / weight-name space). Re-test against the
++                # target model's vLLM naming (Glm5Next multimodal wrapper
++                # maps model.language_model.* -> language_model.model.*, so
++                # block_name_to_quantize carries language_model.model.layers
++                # at runtime) so the quantized nextn layer resolves like the
++                # target layers it mirrors. Observed 2026-09-21 round-2
++                # bring-up: draft experts came up unquantized while the
++                # checkpoint ships qweight tensors for them.
++                base = layer_name.replace(".mtp_block", "", 1)
++                candidates = [
++                    base.replace("model.layers.", "language_model.model.layers.", 1),
++                    base.replace("model.layers.", "model.language_model.layers.", 1),
++                ]
 +                quantized = any(
-+                    hf_name.startswith(name)
++                    candidate.startswith(name)
 +                    for name in self._config.block_name_to_quantize
++                    for candidate in candidates
 +                )
  
          if self._config.extra_config and "fusedmoe" in layer.__class__.__name__.lower():

@@ -79,6 +79,11 @@ PATCH_STEPS = [
             "631ae1cce792c18f2922af7763264c486317cb6f4318823b1482e55bec5d7f59",
             "d105bbeef7b8c2b3730d256302e41ae948721013c4323c3d6013f4fa1e77091b"),
     }),
+    ("0015-vllm-inc-mtp-block-quant-resolve.patch", {
+        "vllm/model_executor/layers/quantization/inc/config_parser.py": (
+            "87483942f440742cfe767bc87912d008390fe84432bc443acb554fea53710ee4",
+            "c0c15ef554cd86a4c5856c2055f165a1afead56981762dddc7fc06683be87d42"),
+    }),
 ]
 
 # No complete-file overlays in this stack: the legacy kpool indexer overlay is

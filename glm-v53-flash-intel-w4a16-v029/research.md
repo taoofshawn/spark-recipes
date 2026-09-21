@@ -212,3 +212,60 @@ empirical-gate flow (0001 drops; 0003/0012 re-check; v1/v7/v8-equivalent
 SM121 fixes re-evaluated; flags re-audited — this tree predates the
 `--kv-cache-memory-bytes` rename question and needs its own check).
 
+
+## 2026-09-21 — round-2 bring-up + validation (image `20260921-r9`, all gates green)
+
+Executed `docs/TESTING-RUNBOOK.md` top-to-bottom on the 2-node cluster.
+Image lineage: `20260920-r2` (`6b838e5a0ff8`, all r2 gates green in-build) →
+four bring-up fixes → `20260921-r9` (`b7fee2d76a85`). ghcr staging: node1
+pulled `ghcr.io/taoofshawn/vllm-glm53-intel-w4a16:glm53flash-pmu128-mtp3`
+(= r2 ID; user-pushed) in ~2 min via daemon-side layer dedup; later rounds
+transferred node0→node1 via `docker save` → scp over RoCE → `docker load`
+(~4 min for ~29.8 GiB). Note: `ghcr ...:v0.29.0-pmu128-mtp3` (`1e987123`) is
+the FATAL round-1 image — never serve it.
+
+### Bring-up failures and fixes (each boot ~14 min; 5 rounds)
+
+| boot | failure | root cause | fix |
+|---|---|---|---|
+| r2 (`20260920-r2`) | `ValueError: moe_backend='marlin' is not supported for unquantized MoE` | compose force-passed `--moe-backend marlin`; v0.29 applies it globally and the checkpoint is MIXED: 45 quantized W4A16 layers + the nextn layer's experts, which INCConfig resolved unquantized | compose: emit `--moe-backend` only when `MOE_BACKEND` is set (oracle auto-select; `.env` `MOE_BACKEND=` empty) |
+| r2 | `KeyError: 'model.layers.45.mtp_block.mlp.experts.routed_experts.w2_qweight'` (draft load) | the nextn layer IS quantized in the checkpoint (`layers.45.*` qweight) but the draft FusedMoE prefix `model.layers.45.mlp.experts` misses `block_name_to_quantize` (runtime value `language_model.model.layers` — Glm5Next inherits GLM-4V's `model.language_model.*`→`language_model.model.*` mapper; the `mtp_block` nesting exists only in attribute/weight-name space) → draft experts built unquantized, quantized tensors homeless | patch **0015**: `INCConfigParser._resolve_raw` re-tests any missed name against the target-model naming candidates (`language_model.model.layers.*` / `model.language_model.layers.*`) |
+| r9-partial (during KV/warmup) | `ValueError: MLA kv_data_type torch.uint8 is not supported` (flashinfer MLA plan allowlist) | vLLM fp8-MLA KV spec stores E4M3 payloads as raw uint8; flashinfer's planner allowlists logical dtypes only | patch **0016**: `_SM90State` maps uint8→`float8_e4m3fn` for plan (forward already `.view()`s) |
+| r7 | `no kernel image is available for execution on the device` at SM90 warmup | base's flashinfer 0.6.18 release: fp8-MLA gate narrowed to `major != 9` (legacy lane's `0.6.18.dev20260819` allowed `(9,12)`), and fa3 (CUTLASS SM90a) carries no SM121 SASS | image: adopt the legacy image's `flashinfer 0.6.18.dev20260819` + `flashinfer_cubin` via `COPY --from=glm53-intel-mtp3-pmu128:20260907` (torch 2.13.0+cu130 ABI-identical, ckv_scale_arr API identical, 19 refs both sides; dev build carries the `(9,12)` gate natively → planned 0017 dropped) |
+| r8 | same "no kernel image", now from a JIT op dir suffixed `_sm90` | v0.29's sm90 impl hard-codes `backend="fa3"`; legacy tree selected `("fa3" if major==9 else "fa2")` — on GB10 the validated path is fa2/trtllm-fmha (JIT compiles for 121a; legacy lane's JIT cache proves it) | patch **0018**: sm90 sparse-MLA wrapper selects fa2 on non-SM90 |
+
+### Gate A — boot markers (leader log, r9)
+
+- `GID auto-detect: NCCL_IB_GID_INDEX=3` (no error dump)
+- `SpeculativeConfig(method='mtp', ..., num_spec_tokens=3)` — mtp3 lane
+- preflight: `raw auto-round snapshot OK` — INC/auto-round load path, NO surgery
+- `Using 'MARLIN' WNA16 MoE backend` + `Using MarlinExperts` (+ `MarlinLinearKernel for AutoGPTQLinearMethod`)
+- `GPU KV cache size: 1,920,956 tokens` — **exact legacy-lane pool @ 13.5 GB pin** (MRV2 accounting did NOT shrink it)
+- `Using FLASHINFER_MLA_SPARSE_SM90 attention backend` (patch 0013, running fa2 on SM121 via 0018)
+- `Application startup complete`; cold boot ≈ 14 min (worker-first + 35 s stagger)
+
+### Gate B — API sanity (leader)
+
+`/health` 200; `/v1/models` → id `glm-5.3-flash`, root `Intel/GLM-5.3-Flash-W4A16-AutoRound`,
+`max_model_len` 1048576; chat completion returns real text ("Hi!", 12 completion tokens).
+
+### Gate C — PMU128 + spec decode + long-context indexer
+
+- PMU128: 274-token prompt ×2 → pass2 `cached_tokens=256` = `floor(274/128)×128` exact; 31.5K-token
+  prompt ×2 → pass2 `cached_tokens=31488` = exact floor. PASS.
+- Spec decode: 5 agent-style code-ish prompts (200–300 tok each), all coherent, no
+  `EngineDeadError`/`DistStoreError`; `/metrics` acceptance counters: accepted/draft = 811/1242
+  = **0.653** (~2.6 accepted/step, inside the legacy lane's 2.4–3.9 band). PASS (bench quantifies decode).
+- Indexer/long-context: **31,533-token** prompt decoded correctly twice — past the legacy kpool
+  ~24K crash territory; pass1 prefill 21.3 s, pass2 1.8 s (PMU replay). PASS (patch 0014's topk
+  gate + PR #53969 unified indexer survived real traffic).
+
+### Notes / watch items
+
+- flashinfer version in-image is now `0.6.18.dev20260819` (adopted from the legacy image) —
+  the base's flashinfer release 0.6.18 is NOT Blackwell-native for fa2/fa3 MLA. This is a
+  dependency divergence from the official base worth re-checking when flashinfer ships
+  Blackwell-native MLA.
+- KV pool gate: 1,920,956 tokens — no need for the `KV_CACHE_MEMORY=` profiler-sized fallback.
+- Legacy lane torn down per runbook §3 (containers removed on both nodes); rollback = bring
+  `glm-v53-flash-intel-w4a16/` compose back up (worker first), nothing about it was modified.

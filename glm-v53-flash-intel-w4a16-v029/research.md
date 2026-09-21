@@ -269,3 +269,42 @@ the FATAL round-1 image — never serve it.
 - KV pool gate: 1,920,956 tokens — no need for the `KV_CACHE_MEMORY=` profiler-sized fallback.
 - Legacy lane torn down per runbook §3 (containers removed on both nodes); rollback = bring
   `glm-v53-flash-intel-w4a16/` compose back up (worker first), nothing about it was modified.
+
+### §8 A/B bench — VERDICT: no regression (2026-09-21)
+
+`bench_recipe.py` Tier 1 (after side fresh boot `20260921-v029-r9`, warm-up stage
+mandatory; raw runs `~/benchmarks/20260921-v029-r9` on the head). Before sides:
+the 2026-09-19 recorded legacy mtp3 @ 13.5 GB runs (`20260919-mtp3-before`
+32 h-warm; `20260919-mtp3-before2` fresh-boot control). Prompts byte-identical
+(script-baked constants), stream:false semantics via final-usage chunks.
+
+| cell | legacy before median | v029-r9 after median | delta | verdict |
+|---|---|---|---|---|
+| c4_prose_short (primary) | 129.97 (129.29–130.65) | 124.78 (117.69–131.88) | −4.0% | NOISE (ranges overlap) |
+| c1_prose_short | 39.68 | 39.07 | −1.5% | INFO |
+| c1_code_short | 39.77 | 39.89 | +0.3% | INFO |
+| c1_prose_medium | 37.57 | 38.06 | +1.3% | INFO |
+| c1_prose_long | 35.79 | 36.67 | +2.5% | INFO |
+| pmu_replay_long | cached 43904 = expected | cached 43904 = expected | — | PASS both |
+
+- acceptance (temp-0): 0.9968/0.9976 → 0.9979 (Δ +0.001, NOISE). Note: the
+  engine's SpecDecoding log line reads "Mean acceptance length: 4.00, per-position
+  1.000/1.000/1.000" under the temp-0 bench — genuine greedy acceptance (the
+  drafter is the target's MTP head), matching the legacy lane's 0.997+ band.
+- KV pool: 1,920,956 tokens on BOTH sides (compare tool flags "DIFFERENT" only
+  because it can't parse the legacy log format; values identical).
+- MemAvailable 3.28/3.0 → 3.37 GiB (ok).
+- Verdicts from both references (`mtp3-before` and `mtp3-before2`): **no
+  regression detected (medians within noise bands)**.
+- JIT watch: `_rejection_kernel`/`_resample_kernel` Triton compilations during
+  the first bench round on the worker (one-off latency spike; benign per skill
+  doctrine, but the warmup does not cover them in this tree).
+
+### Round-2 stop state (2026-09-21)
+
+Legacy lane restored to serving per runbook §9 default (user decides after
+seeing numbers; PR not merged). Branch `glm53-w4a16-v029-stock` @ `1918c78`+
+has everything (patches 0015/0016/0018, legacy-flashinfer Dockerfile adoption,
+moe-backend conditional, runbook/gate/bench records). One-command path back to
+the new lane: pull branch on both nodes, `docker compose down` both, ritual,
+worker-first `up` (image `20260921-r9` already on both nodes).

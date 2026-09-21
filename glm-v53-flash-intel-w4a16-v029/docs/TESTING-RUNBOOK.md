@@ -14,11 +14,22 @@ Branch: `glm53-w4a16-v029-stock` (all commits pushed). Recipe dir:
 
 ## 0. What was built
 
-`glm53-intel-w4a16-v029:20260920` (image ID `sha256:1e987123…7d286b048`) —
-official `vllm/vllm-openai:v0.29.0-aarch64` base + baked SM121 patch stack
-(#53388 backport, LCM align, PR #53969 NoPE/topk, PDL gate). Serves
+`glm53-intel-w4a16-v029:20260920-r2` (image ID `sha256:6b838e5a…9cb75bbf6`) —
+official `vllm/vllm-openai:glm53-flash-arm64-cu130@sha256:b0501f99…` base (the
+model-recipe build that carries GLM-5.3-Flash native model + MTP support —
+round 1 on `v0.29.0-aarch64` FATALed precisely because that tag lacks it; see
+`research.md`) + baked SM121 patch stack (LCM align, PR #53969 NoPE/topk, PDL
+gate, SM90-cap12 gate, kpool topk gate). Serves
 `Intel/GLM-5.3-Flash-W4A16-AutoRound@5eee1846…` **raw** — no GPTQ surgery, no
-runtime overlays, mtp3 lane (native MTP k=3 + PMU128) only.
+runtime overlays, mtp3 lane (native MTP k=3 + PMU128) only. This is the
+round-2 rebuild; round 1 is documented in `research.md` and `docs/BUILD-RECEIPT.md`.
+
+**Round-2 gate expectations (differences from the round-1 writeup):**
+- Backend selection should show **`FLASHINFER_MLA_SPARSE_SM90`** (patch 0013
+  makes it the first cap-12 candidate; it covers GLM's NoPE dims + fp8_e4m3).
+- `disable_eagle_block_drop` is in-tree (no 0001 needed).
+- The `VLLM_EXECUTE_MODEL_TIMEOUT_S` env was replaced by
+  `VLLM_ENGINE_READY_TIMEOUT_S=3600` in the compose.
 
 Cluster facts: node0 = `spark-0f0b.shawndo.intra` (leader, rank 0, API
 :8000, RoCE 192.168.0.170), node1 = `spark-6d14.shawndo.intra` (worker, rank
@@ -29,12 +40,15 @@ Do NOT edit files on the nodes; all recipe changes flow through git.
 
 ## 1. Preconditions (verify, don't assume)
 
-- [ ] Image exists on node0: `ssh spark-0f0b.shawndo.intra 'docker images glm53-intel-w4a16-v029 --format "{{.Tag}} {{.ID}}"'` → `20260920 sha256:1e987123…`
+- [ ] Image exists on node0: `ssh spark-0f0b.shawndo.intra 'docker images glm53-intel-w4a16-v029 --format "{{.Tag}} {{.ID}}"'` → `20260920-r2 sha256:6b838e5a…`
 - [ ] Image on node1 — it is NOT there yet. Transfer (runs from node0, ~20 GiB over LAN, several minutes):
   ```bash
-  ssh spark-0f0b.shawndo.intra 'docker save glm53-intel-w4a16-v029:20260920 | gzip' | ssh spark-6d14.shawndo.intra 'gunzip | docker load'
+  ssh spark-0f0b.shawndo.intra 'docker save glm53-intel-w4a16-v029:20260920-r2 | gzip' | ssh spark-6d14.shawndo.intra 'gunzip | docker load'
   ```
-  Verify on node1 with the same `docker images` command.
+  (Streaming pipes measured ~11 MB/s node0→node1; the disk-staged path is much
+  faster if patience runs out: `docker save -o /tmp/r2.tar` → `scp` over RoCE
+  (411 MB/s sustained) → `docker load -i`.) Verify on node1 with the same
+  `docker images` command.
 - [ ] Weights on BOTH nodes (should already be there — the legacy lane uses the same snapshot):
   `ssh <node> 'jq -r ".quantization_config.quant_method" /home/sdrew/.cache/huggingface/hub/models--Intel--GLM-5.3-Flash-W4A16-AutoRound/snapshots/5eee1846f0321058ed73745f9aa16f2aaf0fc0a0/config.json'` → expect `auto-round`.
 - [ ] Recipe files on the nodes come from the branch: `git pull origin glm53-w4a16-v029-stock` on node0 (the nodes have their own clones under the user's home; locate the existing spark-recipes clone with `ls ~/*/spark-recipes` on node0 — ask the user if ambiguous).
@@ -95,9 +109,9 @@ ssh spark-0f0b.shawndo.intra 'docker logs glm53-intel-w4a16-v029 2>&1 | grep -F 
 ssh spark-0f0b.shawndo.intra 'docker logs glm53-intel-w4a16-v029 2>&1 | grep -iE "B16|bf16|unquantized"'  # → excluded modules (attn/router/shared experts/visual/norms) load BF16
 ```
 Also grep the load log for which attention backend was chosen
-(`FLASHINFER_MLA_SPARSE_SM120` expected) and save the full leader boot log to
-the recipe's research notes. **KV pool check:** if the pool is materially
-below ~1.9M tokens (MRV2 accounting change suspects), boot once with
+(`FLASHINFER_MLA_SPARSE_SM90` expected per patch 0013) and save the full
+leader boot log to the recipe's research notes. **KV pool check:** if the pool
+is materially below ~1.9M tokens (MRV2 accounting suspects), boot once with
 `KV_CACHE_MEMORY=` (empty) in `.env` — profiler-sized — and record both
 numbers; keep whichever works for the bench.
 

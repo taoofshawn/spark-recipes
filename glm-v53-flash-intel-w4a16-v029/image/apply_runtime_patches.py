@@ -82,7 +82,7 @@ PATCH_STEPS = [
     ("0015-vllm-inc-mtp-block-quant-resolve.patch", {
         "vllm/model_executor/layers/quantization/inc/config_parser.py": (
             "87483942f440742cfe767bc87912d008390fe84432bc443acb554fea53710ee4",
-            "c0c15ef554cd86a4c5856c2055f165a1afead56981762dddc7fc06683be87d42"),
+            "94110f9a607ba44b2cb9d6c017ab7d8286ce5157b4cc3e174496264756a170a7"),
     }),
 ]
 

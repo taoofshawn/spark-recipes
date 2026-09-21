@@ -1,0 +1,19 @@
+diff --git a/flashinfer/mla/_core.py b/flashinfer/mla/_core.py
+index a270d84f4..f4c683c10 100644
+--- a/flashinfer/mla/_core.py
++++ b/flashinfer/mla/_core.py
+@@ -2199,7 +2199,13 @@
+                     f"backend on SM90, got backend={self._backend!r}."
+                 )
+             major, minor = get_compute_capability(self.device)
+-            if major != 9:
++            # GB10/SM121 (major 12) re-allowed: flashinfer 0.6.18.dev20260819
++            # (validated on the legacy GLM-5.3-Flash W4A16 lane serving fp8_e4m3
++            # MLA KV on 2x DGX Spark) accepted major in (9, 12); the 0.6.18
++            # release narrowed it to 9 and broke the SM90 sparse-MLA fp8 path
++            # on Blackwell (observed 2026-09-21 round-2 bring-up). The fa3 fp8
++            # MLA kernels run on SM121; restore the validated gate.
++            if major not in (9, 12):
+                 raise ValueError(
+                     "FP8 kv_data_type for MLA requires an SM90 (Hopper) device, "
+                     f"got SM{major}{minor}."

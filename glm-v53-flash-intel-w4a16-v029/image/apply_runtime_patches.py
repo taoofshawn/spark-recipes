@@ -89,6 +89,11 @@ PATCH_STEPS = [
             "4042e4f9dfa19801c4cb623a46e6fbad95c047fce4f80468ad335d6e80c1c564",
             "b6c80b5ea1ce5a0d785bd3aab90d9ab7358d729ec6f5e6b25df8779c20f7cc93"),
     }),
+    ("0017-flashinfer-fp8-mla-sm121-gate.patch", {
+        "flashinfer/mla/_core.py": (
+            "a270d84f420133c1a9653e5e109508160cd5dc873ff6a36e5099afdebdfae937",
+            "f4c683c10b294e31ab4c31a41ebc0534f9a33bcfea4c317396c63cd6ed7b3361"),
+    }),
 ]
 
 # No complete-file overlays in this stack: the legacy kpool indexer overlay is

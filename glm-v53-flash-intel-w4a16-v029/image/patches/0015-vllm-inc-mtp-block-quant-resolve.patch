@@ -24,4 +24,6 @@ index 87483942f..c0c15ef55 100644
 +                    hf_name.startswith(name)
 +                    for name in self._config.block_name_to_quantize
 +                )
+ 
          if self._config.extra_config and "fusedmoe" in layer.__class__.__name__.lower():
+             moe_configs = [

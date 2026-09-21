@@ -89,6 +89,11 @@ PATCH_STEPS = [
             "4042e4f9dfa19801c4cb623a46e6fbad95c047fce4f80468ad335d6e80c1c564",
             "b6c80b5ea1ce5a0d785bd3aab90d9ab7358d729ec6f5e6b25df8779c20f7cc93"),
     }),
+    ("0018-sm90-fa2-blackwell.patch", {
+        "vllm/v1/attention/backends/mla/flashinfer_mla_sparse_sm90.py": (
+            "b6c80b5ea1ce5a0d785bd3aab90d9ab7358d729ec6f5e6b25df8779c20f7cc93",
+            "2d0872653530b21c881b330a507bdbd864395600c3b1c7bf66126e292d6d101b"),
+    }),
 ]
 
 # No complete-file overlays in this stack: the legacy kpool indexer overlay is

@@ -1,0 +1,23 @@
+diff --git a/vllm/v1/attention/backends/mla/flashinfer_mla_sparse_sm90.py b/vllm/v1/attention/backends/mla/flashinfer_mla_sparse_sm90.py
+index b6c80b5ea..2d0872653 100644
+--- a/vllm/v1/attention/backends/mla/flashinfer_mla_sparse_sm90.py
++++ b/vllm/v1/attention/backends/mla/flashinfer_mla_sparse_sm90.py
+@@ -210,7 +210,17 @@
+             kv_indices=self.kv_indices,
+             kv_len_arr=self.kv_len_arr,
+             use_cuda_graph=True,
+-            backend="fa3",
++            # fa3 (CUTLASS SM90a) has no SM121 SASS; its JIT op dir gets an
++            # _sm90 suffix and dies with "no kernel image is available" on
++            # GB10 (observed 2026-09-21 round-2 bring-up). The legacy
++            # validated path on this cluster is the fa2/trtllm-fmha JIT
++            # (compiles for 121a). Match the legacy selection: fa3 only on
++            # true SM90.
++            backend=(
++                "fa3"
++                if torch.cuda.get_device_capability()[0] == 9
++                else "fa2"
++            ),
+         )
+         self._arange_cpu = torch.arange(self.max_tokens + 1, dtype=torch.int32)
+         self._qo_cpu = torch.empty(self.max_tokens + 1, dtype=torch.int32)

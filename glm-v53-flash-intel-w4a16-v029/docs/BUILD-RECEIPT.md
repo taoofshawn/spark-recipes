@@ -6,7 +6,7 @@
 |---|---|
 | final tag | `glm53-intel-w4a16-v029:20260921-r9` |
 | image ID | `sha256:b7fee2d76a85…` (full ID in `docker images` on both nodes) |
-| ghcr tag | `ghcr.io/taoofshawn/vllm-glm53-intel-w4a16:glm53flash-pmu128-mtp3` |
+| ghcr tag | `ghcr.io/taoofshawn/vllm-glm53-intel-w4a16:glm53flash-pmu128-mtp3` — **PUSHED 2026-09-21** (= r9); the recipe's `.env IMAGE` references this tag |
 | on both nodes | YES (`r2`→`r9` lineage present; `r3`–`r8` are intermediate build tags, safe to delete locally) |
 
 The `r2`→`r9` lineage (5 boot rounds, each fix root-caused and recorded in

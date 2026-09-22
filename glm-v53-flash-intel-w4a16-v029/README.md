@@ -13,8 +13,8 @@ same cluster, same serving profile values — new runtime base.
 
 | | |
 |---|---|
-| ghcr | `ghcr.io/taoofshawn/vllm-glm53-intel-w4a16:glm53flash-pmu128-mtp3` |
-| local tag | `glm53-intel-w4a16-v029:20260921-r9` (ID `b7fee2d76a85`) |
+| ghcr (published, canonical) | `ghcr.io/taoofshawn/vllm-glm53-intel-w4a16:glm53flash-pmu128-mtp3` — pushed 2026-09-21, = the validated `20260921-r9` build |
+| local build tag | `glm53-intel-w4a16-v029:20260921-r9` (ID `b7fee2d76a85`) |
 | base | `vllm/vllm-openai:glm53-flash-arm64-cu130@sha256:b0501f99…` (official model-recipe image; carries GLM-5.3-Flash native model + MTP — v0.29.0 stable does NOT, it predates the #53906 merge) |
 | vLLM | `0.28.1rc1.dev580+g385dce36b`, CUDA 13.0 aarch64, torch 2.13.0+cu130 |
 | flashinfer | `0.6.18.dev20260819` (adopted from the legacy image — the base's release flashinfer is not Blackwell-native for fa2/fa3 MLA) |

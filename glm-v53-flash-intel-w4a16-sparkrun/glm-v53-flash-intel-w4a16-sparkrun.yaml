@@ -1,6 +1,3 @@
-# Sparkrun recipe: GLM-5.3-Flash Intel W4A16, 2x DGX Spark.
-# Deploy / run / verify: see README.md in this directory.
-
 recipe_version: "2"
 name: glm-v53-flash-intel-w4a16-sparkrun
 description: GLM-5.3-Flash Intel W4A16 AutoRound, 1M context, native MTP3 + PMU128, via a hosted ghcr image (no rebuild)
@@ -79,8 +76,7 @@ env:
   HF_HOME: "/cache/huggingface"
 
 executor_config:
-  # Run as root (the compose recipe runs this image as root); overriding every
-  # field the rootless path touches forces run-as-root without --rootful.
+  entrypoint: ""
   privileged: true
   security_opt: null
   cap_add: null
@@ -96,9 +92,6 @@ executor_config:
     - "nofile=1048576:1048576"
     - "stack=67108864:67108864"
 
-# Plain vllm invocation, last line without a trailing backslash: sparkrun
-# appends the per-node rendezvous flags (--nnodes/--node-rank/--master-addr/
-# --master-port, --headless on the worker). Do NOT add those here.
 command: |
   vllm serve {model} \
       --revision {model_revision} \

@@ -26,7 +26,9 @@ preparation step.
 ## Prerequisites
 
 - Two DGX Sparks connected (management network + the RoCE crossover cable)
-- [sparkrun](https://sparkrun.dev/getting-started/installation/) installed on the **leader** node
+- [sparkrun](https://sparkrun.dev/getting-started/installation/) installed on the **leader** node —
+  **must be >= 0.3.0** (this image declares an `ENTRYPOINT`; only 0.3.0+ lets
+  the recipe clear it — see the Gotchas section)
 - This repo cloned on the **leader** node
 - Docker working on both nodes.
 - ~60 GB free per node for the model weights, and enough container-disk for
@@ -158,6 +160,13 @@ and host headroom through a ~950K prefill — the parent recipe measured a
 
 ## Gotchas
 
+- **sparkrun >= 0.3.0 required — image ENTRYPOINT:** this image inherits
+  `ENTRYPOINT ["vllm","serve"]` from the official model-recipe base. The
+  recipe clears it (`executor_config: entrypoint: ""`, mirroring the parent
+  compose's `entrypoint: []`); that key only exists in sparkrun 0.3.0+. On
+  older sparkrun versions the launch fails fast with
+  `argument --compilation-config/-cc: Invalid JSON` (the keep-alive wrapper
+  gets fed to `vllm serve` as arguments, and `-c` is the `-cc` alias).
 - **KV pin trap:** `--kv-cache-memory-bytes` skips the profiler's activation
   check — too high kills the engine on the first long prompt.
 - **Do NOT force `--moe-backend marlin`:** the checkpoint is MIXED (45

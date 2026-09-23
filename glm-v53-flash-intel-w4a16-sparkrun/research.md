@@ -75,8 +75,30 @@ the validation record live in the parent recipe's `research.md`; summary:
   compose start-order failure mode impossible)
 - PMU128 cached_tokens behavior (README verify section)
 
+## First bring-up (2026-09-23) — PASS after entrypoint fix
+
+Launched under sparkrun 0.2.38, which has no `executor_config.entrypoint`
+support: the image's `ENTRYPOINT ["vllm","serve"]` consumed sparkrun's
+keep-alive wrapper as extra `vllm serve` args (`-c` = `--compilation-config`
+alias → `Invalid JSON`). Worked around at launch time with
+`--executor-args "--entrypoint \"\""`, then upgraded the leader to sparkrun
+0.3.9 (entrypoint support landed in 0.3.0) and fixed it in the recipe yaml
+(`executor_config: entrypoint: ""`). All boot gates green:
+
+- `quantization=inc` (native auto-round load), `SpeculativeConfig(method='mtp',
+  num_spec_tokens=3)`, `Using 'MARLIN' WNA16 MoE backend` (oracle-selected),
+  `Using FLASHINFER_MLA_SPARSE_SM90 attention backend`
+- `GPU KV cache size: 1,920,956 tokens` (exact 13.5 GB-pin pool)
+- `/health` 200; `/v1/models` → `glm-5.3-flash` /
+  `Intel/GLM-5.3-Flash-W4A16-AutoRound` / `max_model_len` 1048576
+- chat smoke: coherent reply, 14 completion tokens
+
 ## Changelog
 
+- **2026-09-23** — added `executor_config.entrypoint: ""` (requires sparkrun
+  >= 0.3.0; the image inherits a consuming `ENTRYPOINT ["vllm","serve"]`
+  which otherwise breaks sparkrun's keep-alive launch — see the first
+  bring-up note). Leader upgraded 0.2.38 → 0.3.9.
 - **2026-09-23** — updated the sparkrun port to the parent recipe's current
   image lineage (`glm53flash-pmu128-mtp3`, rebase off `main` @ `e539498`):
   new digest pin, `INCConfig` native auto-round load path (raw HF snapshot

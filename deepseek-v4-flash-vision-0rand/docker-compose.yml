@@ -112,6 +112,18 @@ services:
       # research.md 2026-09-15). Default OFF.
       ASYNC_SCHEDULING: "${ASYNC_SCHEDULING:-0}"
       FIX_PREFIX_CACHE_DEDUPE: "${FIX_PREFIX_CACHE_DEDUPE:-0}"
+      # Opt-in DSV4 tool-call parser backports (oselivanov/ollie-gb10-serving-stacks
+      # @ da88a2c, 2026-09-18): orphan-invoke = PR #55954 (d98c8c0) parser
+      # state-machine fix (parse <invoke> without the <tool_calls> wrapper +
+      # drop text after a tool block); misspelled-wrapper = PR #56141
+      # (9e25706) — NOT baked into any published image (the Dickson build is
+      # pre-09-10). Both default OFF; see README + research.md 2026-09-23.
+      FIX_TOOLCALL_ORPHAN_INVOKE: "${FIX_TOOLCALL_ORPHAN_INVOKE:-0}"
+      FIX_TOOLCALL_MISSPELLED_WRAPPER: "${FIX_TOOLCALL_MISSPELLED_WRAPPER:-0}"
+      # A/B knob: --long-prefill-token-threshold (Ollie's vision-exp-stack
+      # ships 1024; stu.miller TP4 measured the next turn behind a cold 250K
+      # prefill at 153.6s -> 2.17s, threshold 0 -> 1024). Empty = not passed.
+      LONG_PREFILL_TOKEN_THRESHOLD: "${LONG_PREFILL_TOKEN_THRESHOLD:-}"
       # ---- multi-node ----
       NODE_RANK: "${NODE_RANK}"
       HEADLESS: "${HEADLESS}"
@@ -193,10 +205,36 @@ services:
           bash /mods/fix-vllm-prefix-cache-dedupe/run.sh
         fi
 
+        # Opt-in DSV4 tool-call parser backports (vLLM PRs #55954/#56141,
+        # vendored from oselivanov/ollie-gb10-serving-stacks @ da88a2c,
+        # 2026-09-18): orphan-invoke patches the parser state machine
+        # (CONTENT -> INVOKE_PREFIX -> TOOL_NAME; TOOL_ARGS/TOOL_BETWEEN ->
+        # TOOL_END drops trailing text); misspelled-wrapper adds DSML opener
+        # spelling variants (<toolcalls>/<tool>) + tuple-terminal helpers
+        # across 5 parser files. Both Python-only, idempotent, dry-run
+        # guarded; failure is fatal by design (an explicitly requested fix
+        # must not be silently missing). Default OFF. The misspelled-wrapper
+        # fix (9e25706) is NOT baked into any published image (Dickson's is
+        # pre-09-10); the orphan-invoke fix (d98c8c0) IS baked in, so on this
+        # image expect "already applied - skipping".
+        if [ "$${FIX_TOOLCALL_ORPHAN_INVOKE:-0}" = "1" ]; then
+          bash /mods/fix-dsv4-toolcall-orphan-invoke/run.sh
+        fi
+        if [ "$${FIX_TOOLCALL_MISSPELLED_WRAPPER:-0}" = "1" ]; then
+          bash /mods/fix-dsv4-toolcall-misspelled-wrapper/run.sh
+        fi
+
         # A/B knob (research.md 2026-09-15): --async-scheduling swaps in the
         # AsyncScheduler (CPU scheduling overlapped with GPU execution).
         ASYNC_ARGS="";
         if [ "$${ASYNC_SCHEDULING:-0}" = "1" ]; then ASYNC_ARGS="--async-scheduling"; fi;
+
+        # A/B knob (research.md 2026-09-23): --long-prefill-token-threshold
+        # switches prefill scheduling for long prompts (Ollie's stack ships
+        # 1024; stu.miller measured the next turn behind a cold 250K prefill
+        # at 153.6s -> 2.17s on TP4). Empty = not passed (vLLM default 0).
+        LPFT_ARGS="";
+        if [ -n "$${LONG_PREFILL_TOKEN_THRESHOLD:-}" ]; then LPFT_ARGS="--long-prefill-token-threshold $${LONG_PREFILL_TOKEN_THRESHOLD}"; fi;
 
         exec vllm serve "$${DSPARK_MODEL:-deepseek-ai/DeepSeek-V4-Flash-Vision-Exp}" \
           $${REVISION_ARGS} \
@@ -209,6 +247,7 @@ services:
           --max-cudagraph-capture-size "$${MAX_CUDAGRAPH_CAPTURE_SIZE:-48}" \
           --gpu-memory-utilization "$${GPU_MEMORY_UTILIZATION:-0.87}" \
           --enable-prefix-caching $${ASYNC_ARGS} --enable-chunked-prefill \
+          $${LPFT_ARGS} \
           --skip-mm-profiling \
           "$${LIMIT_MM_ARGS[@]}" \
           --tokenizer-mode deepseek_v4 \

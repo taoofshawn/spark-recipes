@@ -2,3 +2,7 @@ c9f23d8b52938b975217af474580a6cd830f9defc29d90b16a4deb5a12eb28fe  fix-dsv4-prefi
 fd9479dd52d9d76b3ec244285d93911e60004da51c09c3ee95bfb26bb11b086d  fix-dsv4-prefix-replay-tail/run.sh
 d2b37bea63824620dba25d4104078b1c8578fda27b554ad3a04a6ababbdf12e4  fix-vllm-prefix-cache-dedupe/prefix-cache-dedupe.patch
 42fe729a8993eaaa32375b5348a8e5e43a544d54c44dbff70e36159e5720acff  fix-vllm-prefix-cache-dedupe/run.sh
+7db4d0ebabf4c4fa4c6334098ce3ea10db67b12b4df414ef7e3701e1bbebc74c  fix-dsv4-toolcall-orphan-invoke/deepseek_v4.patch
+a1bbfb9dc04209a9a33a481b76272a8f8eaf3482229053b3f6b4557202dd48eb  fix-dsv4-toolcall-orphan-invoke/run.sh
+4bf557e0a4abdc7ed9dfb0a2f90bd4fbbefe6af99a3ab78b7a5b919306829d5d  fix-dsv4-toolcall-misspelled-wrapper/toolcall-misspelled-wrapper.patch
+83061d4a5ac1af433bbec96162b32da685f66e217fb267b6c87cc56cc5936109  fix-dsv4-toolcall-misspelled-wrapper/run.sh

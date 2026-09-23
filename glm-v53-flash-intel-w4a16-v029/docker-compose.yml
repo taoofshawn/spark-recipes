@@ -1,9 +1,6 @@
 services:
   vllm-dspark:
     image: ${IMAGE}
-    # Clear the image's ENTRYPOINT (["vllm","serve"]) — the command block below
-    # is the actual entry; without this the bash script is appended to
-    # `vllm serve` as args and the container dies at argparse.
     entrypoint: []
     container_name: glm53-intel-w4a16-v029
     restart: "no"
@@ -26,18 +23,9 @@ services:
       retries: 3
       start_period: 900s
     volumes:
-      # Model weights: the RAW Intel W4A16 AutoRound snapshot at MODEL_REVISION
-      # is served directly — v0.29.0's INCConfig loads quant_method "auto-round"
-      # natively, so there is NO gptq-surgery revision and NO prepare-model.sh
-      # step. DFlash drafter resolution is not needed (mtp3 lane only).
       - ${HF_CACHE}:/cache/huggingface
-      # Cache root -> /cache (JIT caches; node-local disk only) + a /root/.cache
-      # catch-all for anything that ignores the env overrides below.
       - ${CACHE_HOST_PATH}:/cache
       - ${CACHE_HOST_PATH}/root-cache:/root/.cache
-      # NO vLLM file overlays: the SM121 patch stack (#53388 backport, LCM
-      # align, PR #53969 NoPE/topk, PDL gate) and the chat template are baked
-      # into the image at build time (see image/Dockerfile).
     environment:
       # ---- GPU ----
       CUDA_VISIBLE_DEVICES: "0"
@@ -59,15 +47,12 @@ services:
       KV_DTYPE: "${KV_DTYPE:-fp8_e4m3}"
       KV_CACHE_MEMORY: "${KV_CACHE_MEMORY:-}"
       ASYNC: "${ASYNC:-0}"
-      LANE: "${LANE:-mtp3}"
       PMU: "${PMU:-1}"
       DISABLE_FLASHINFER_AUTOTUNE: "${DISABLE_FLASHINFER_AUTOTUNE:-1}"
       SERVED_MODEL_NAME: "${SERVED_MODEL_NAME:-glm-5.3-flash}"
-      # Model identity — the RAW snapshot revision (no surgery). Serving the
-      # HF ID keeps /v1/models .root == the HF id (tool-eval-bench parity).
       MODEL: "${MODEL}"
       MODEL_REVISION: "${MODEL_REVISION}"
-      # ---- sampling / thinking defaults (explicit, legacy-lane parity) ----
+      # ---- sampling / thinking defaults ----
       THINKING: "${THINKING:-true}"
       REASONING_EFFORT: "${REASONING_EFFORT:-high}"
       TEMPERATURE: "${TEMPERATURE:-1.0}"
@@ -94,7 +79,7 @@ services:
       TORCH_NCCL_ASYNC_ERROR_HANDLING: "1"
       NCCL_MIN_NCHANNELS: "${NCCL_NCHANNELS:-8}"
       NCCL_MAX_NCHANNELS: "${NCCL_NCHANNELS:-8}"
-      # ---- runtime (stock v0.29.0; vLLM at /usr/local/lib/python3.12/dist-packages) ----
+
       VLLM_HOST_IP: "${ROCE_IP}"
       HF_HOME: /cache/huggingface
       HF_HUB_OFFLINE: "1"
@@ -135,13 +120,10 @@ services:
           export NCCL_IB_GID_INDEX
         fi
 
-        # ---- preflight: the RAW model snapshot must exist and be auto-round
-        # (NO surgery revision on this lane — v0.29.0 loads auto-round natively
-        # via INCConfig; a gptq-surgery revision is neither written nor used) ----
         HUB=/cache/huggingface/hub/models--$$(printf '%s' "$${MODEL}" | sed 's|/|--|g')
         M="$$HUB/snapshots/$${MODEL_REVISION}"
-        [ -f "$$M/config.json" ] || { echo "FATAL: raw snapshot missing at $$M — download Intel/GLM-5.3-Flash-W4A16-AutoRound --revision $$MODEL_REVISION on this node (see README)" >&2; exit 2; }
-        python3 - "$$M/config.json" <<'PY' || { echo "FATAL: raw snapshot config is not auto-round (unexpected — this recipe serves the raw Intel checkpoint)" >&2; exit 2; }
+        [ -f "$$M/config.json" ] || { echo "FATAL: snapshot missing at $$M — download Intel/GLM-5.3-Flash-W4A16-AutoRound --revision $$MODEL_REVISION on this node (see README)" >&2; exit 2; }
+        python3 - "$$M/config.json" <<'PY' || { echo "FATAL: snapshot config is not auto-round (this recipe serves the raw Intel checkpoint)" >&2; exit 2; }
         import json, sys
         qc = json.load(open(sys.argv[1])).get("quantization_config") or {}
         sys.exit(0 if qc.get("quant_method") == "auto-round" else 3)
@@ -159,38 +141,21 @@ services:
           --block-size "$${BLOCK_SIZE:-2304}"
           --kv-cache-dtype "$${KV_DTYPE:-fp8_e4m3}"
         )
-        # Speculative: native MTP k=3 with disable_eagle_block_drop=true (the
-        # flag exists via baked patch 0001 = PR #53388 backport) + PMU128
-        # prefix matching + prompt-token details. This image is mtp3-only; the
-        # dflash2pmu lane stays on the legacy glm-v53-flash-intel-w4a16 image.
         ARGS+=(--speculative-config "{\"method\":\"mtp\",\"num_speculative_tokens\":3,\"disable_eagle_block_drop\":true}")
         [ "$${PMU:-0}" != "0" ] && ARGS+=(--prefix-match-unit 128 --enable-prompt-tokens-details)
         [ -n "$${MNBT:-}" ] && ARGS+=(--max-num-batched-tokens "$${MNBT}")
         _kvmem="$${KV_CACHE_MEMORY:-}"
-        # v0.29.0 renamed the flag: --kv-cache-memory -> --kv-cache-memory-bytes
         [ -n "$$_kvmem" ] && ARGS+=(--kv-cache-memory-bytes "$$_kvmem")
-        # Emit --moe-backend only when MOE_BACKEND is set. v0.29's MoE oracle
-        # auto-selects per layer class: WNA16-quantized experts pick MARLIN
-        # (priority [MARLIN, BATCHED_MARLIN, ...]), while UNquantized MoE
-        # (the BF16 MTP/nextn layer — quant config covers only
-        # model.language_model.layers) falls through to the unquantized
-        # oracle. Forcing --moe-backend marlin applies it globally and FATALs
-        # with "moe_backend='marlin' is not supported for unquantized MoE"
-        # (observed on 2026-09-21 round-2 bring-up).
         [ -n "$${MOE_BACKEND:-}" ] && ARGS+=(--moe-backend "$$MOE_BACKEND")
-        # Parsers + explicit thinking defaults. The baked chat template
-        # (/models/chat_template_mm.jinja) honors enable_thinking +
-        # reasoning_effort; the kwargs pin them server-side (clients override
-        # per request via chat_template_kwargs / the OpenAI reasoning_effort
-        # field).
+        # Parsers + thinking defaults (the baked chat template honors
+        # enable_thinking + reasoning_effort; clients can override per request).
         ARGS+=(--tool-call-parser glm47 --enable-auto-tool-choice
           --reasoning-parser glm45
           --chat-template /models/chat_template_mm.jinja
           --default-chat-template-kwargs "{\"enable_thinking\": $${THINKING:-true}, \"reasoning_effort\": \"$${REASONING_EFFORT:-high}\"}")
-        # Sampling pins — explicit recipe-owned (temp 1.0 / top_p 0.95, same
-        # values as the other recipes). --generation-config vllm ignores the
-        # checkpoint's generation_config.json for SAMPLING only (multi-EOS
-        # stop set still loads from it).
+        # Sampling pins. --generation-config vllm ignores the checkpoint's
+        # generation_config.json for SAMPLING only (multi-EOS stop set still
+        # loads from it).
         GEN_CFG="{\"temperature\": $${TEMPERATURE:-1.0}, \"top_p\": $${TOP_P:-0.95}}"
         ARGS+=(--generation-config vllm --override-generation-config "$${GEN_CFG}")
         # Eager / autotune / async
@@ -203,6 +168,6 @@ services:
           --master-addr "$${MASTER_ADDR}" --master-port "$${MPORT:-29521}")
         [ -n "$${HEADLESS:-}" ] && ARGS+=(--headless)
 
-        echo "launched image=$IMAGE rank=$${NODE_RANK:-0} host=$${ROCE_IP} gid=$${NCCL_IB_GID_INDEX} lane=$${LANE:-mtp3} kv=$${_kvmem:-profiler}/$${KV_DTYPE} max_len=$${MAX_LEN:-1048576} seqs=$${MAX_SEQS:-6} moe=$${MOE_BACKEND:-auto} rev=$${MODEL_REVISION}"
+        echo "launched image=$IMAGE rank=$${NODE_RANK:-0} host=$${ROCE_IP} gid=$${NCCL_IB_GID_INDEX} kv=$${_kvmem:-profiler}/$${KV_DTYPE} max_len=$${MAX_LEN:-1048576} seqs=$${MAX_SEQS:-6} moe=$${MOE_BACKEND:-auto} rev=$${MODEL_REVISION}"
 
         exec vllm "$${ARGS[@]}"

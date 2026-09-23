@@ -2,27 +2,21 @@
 """Fail-closed installer for the glm-v53-flash-intel-w4a16-v029 patch stack.
 
 Applies the bundled unified diffs to the vLLM tree of the digest-pinned
-official base image (vllm/vllm-openai:glm53-flash-arm64-cu130 — the
-model-recipe day-0/09-09 build that carries GLM-5.3-Flash + native MTP
-natively), gating every step on exact before and after SHA-256. All outputs
-are derived and validated in memory (hashes + syntax) BEFORE the first write;
-installation stages temp siblings and atomically replaces each target. Any
-mismatch aborts without writing. Pure Python: no `patch` or `git` binary is
-required inside the image.
+official base image (vllm/vllm-openai:glm53-flash-arm64-cu130), gating every
+step on exact before and after SHA-256. All outputs are derived and validated
+in memory (hashes + syntax) BEFORE the first write; installation stages temp
+siblings and atomically replaces each target. Any mismatch aborts without
+writing. Pure Python: no `patch` or `git` binary is required inside the image.
 
-Patch stack (order matters; see docs/PATCH-REBASE-NOTES.md for provenance):
-  0003  scheduler LCM/mamba block align (PMU128; one hunk)
-  0011  PR #53969 backport — SM120 sparse-MLA NoPE zero-pad + effective topk
-  0012  SM121 PDL gate       — is_arch_support_pdl major in (9,10)
-  0013  SM121 SM90 NoPE sparse-MLA backend on cap-12 (tonyd2wild v1 port)
-  0014  SM121 kpool top-k SM-count gate (tonyd2wild v7 port)
-
-Patch 0001 (#53388 disable_eagle_block_drop backport) is DROPPED in round 2:
-the glm53-flash base tree already carries the flag natively.
-
-Before/after hashes were captured empirically by applying the stack in a
-scratch container of the exact pinned base image (2026-09-20); the image tree
-is byte-identical to main commit 385dce36b.
+Patch stack (order matters; full provenance in ../research.md):
+  0003  scheduler LCM/mamba block align (PMU128)
+  0011  SM120 sparse-MLA NoPE zero-pad + effective topk width (PR #53969)
+  0012  SM121 PDL gate — is_arch_support_pdl major in (9,10)
+  0013  SM90 NoPE sparse-MLA backend on cap-12
+  0014  kpool top-k SM-count gate
+  0015  INCConfigParser nextn/MTP-layer expert-name resolve
+  0016  SM90 fp8-KV plan dtype
+  0018  SM90 sparse-MLA fa2 selection on non-SM90
 
 Usage:
   apply_runtime_patches.py [--root DIR]              apply all steps
@@ -96,10 +90,7 @@ PATCH_STEPS = [
     }),
 ]
 
-# No complete-file overlays in this stack: the legacy kpool indexer overlay is
-# obsolete against v0.29.0 (the file no longer exists; PR #53906 integrated the
-# GLM indexer into the unified sparse_attn_indexer.py — see
-# docs/PATCH-REBASE-NOTES.md).
+# No complete-file overlays in this stack.
 OVERLAY = {}
 
 HUNK_HEADER = re.compile(r"^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@")

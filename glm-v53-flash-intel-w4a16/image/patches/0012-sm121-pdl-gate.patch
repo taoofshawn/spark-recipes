@@ -1,0 +1,16 @@
+diff --git a/vllm/platforms/cuda.py b/vllm/platforms/cuda.py
+index 1e5a5a3ad..622229429 100644
+--- a/vllm/platforms/cuda.py
++++ b/vllm/platforms/cuda.py
+@@ -757,7 +757,10 @@ class CudaPlatformBase(Platform):
+             major, _ = torch.cuda.get_device_capability(device)
+         except Exception:
+             return False
+-        return major >= 9
++        # SM12x (GB10/DGX Spark): PDL races in the KDA-state Triton kernels
++        # cause a boot NaN lottery (tonyd2wild sm121-v6 fix). Restrict PDL to
++        # Hopper/SM100 until upstream lands a proper SM12x gate.
++        return major in (9, 10)
+ 
+ 
+ # NVML utils

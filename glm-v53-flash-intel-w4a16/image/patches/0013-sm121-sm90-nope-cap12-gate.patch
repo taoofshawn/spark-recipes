@@ -1,0 +1,33 @@
+diff --git a/vllm/platforms/cuda.py b/vllm/platforms/cuda.py
+index 1e5a5a3ad..788c7317f 100644
+--- a/vllm/platforms/cuda.py
++++ b/vllm/platforms/cuda.py
+@@ -129,8 +129,12 @@ def _get_backend_priorities(
+                 *sparse_backends,
+             ]
+         elif device_capability.major == 12:
++            # SM121/GB10: the NoPE-capable SM90 sparse-MLA backend is the
++            # validated GLM-5.3-Flash path on GB10 (tonyd2wild sm121-v1 port);
++            # SM120 sparse-MLA stays as the DeepSeek-shaped fallback.
+             return [
+                 AttentionBackendEnum.TRITON_MLA,
++                AttentionBackendEnum.FLASHINFER_MLA_SPARSE_SM90,
+                 AttentionBackendEnum.FLASHINFER_MLA_SPARSE_SM120,
+             ]
+         else:
+diff --git a/vllm/v1/attention/backends/mla/flashinfer_mla_sparse_sm90.py b/vllm/v1/attention/backends/mla/flashinfer_mla_sparse_sm90.py
+index 90dc4cd94..cae68e44c 100644
+--- a/vllm/v1/attention/backends/mla/flashinfer_mla_sparse_sm90.py
++++ b/vllm/v1/attention/backends/mla/flashinfer_mla_sparse_sm90.py
+@@ -104,7 +104,10 @@ class FlashInferMLASparseSM90Backend(AttentionBackend):
+ 
+     @classmethod
+     def supports_compute_capability(cls, capability: DeviceCapability) -> bool:
+-        return capability.major == 9
++        # SM121/GB10 gate (tonyd2wild sm121-v1 port): this backend covers
++        # NoPE sparse MLA (kpe in {0, 64}) with fp8_e4m3 KV — the validated
++        # GLM-5.3-Flash path on GB10.
++        return capability.major in (9, 12)
+ 
+     @classmethod
+     def supports_combination(

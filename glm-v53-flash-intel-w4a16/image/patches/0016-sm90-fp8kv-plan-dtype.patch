@@ -1,0 +1,21 @@
+diff --git a/vllm/v1/attention/backends/mla/flashinfer_mla_sparse_sm90.py b/vllm/v1/attention/backends/mla/flashinfer_mla_sparse_sm90.py
+index 4042e4f9f..b6c80b5ea 100644
+--- a/vllm/v1/attention/backends/mla/flashinfer_mla_sparse_sm90.py
++++ b/vllm/v1/attention/backends/mla/flashinfer_mla_sparse_sm90.py
+@@ -181,7 +181,15 @@
+         self.workspace = torch.empty(_WORKSPACE_BYTES, dtype=torch.uint8, device=device)
+         self.device = device
+         self.num_heads = num_heads
+-        self.kv_dtype = kv_dtype
++        # The fp8-MLA KV cache spec stores E4M3 payloads as raw uint8 bytes
++        # (vLLM quantized-KV storage; forward() reinterprets with
++        # .view(torch.float8_e4m3fn)). The flashinfer MLA planner, however,
++        # allowlists logical dtypes only (f16/bf16/f8_e4m3fn) and rejects
++        # uint8 ("MLA kv_data_type torch.uint8 is not supported", observed
++        # 2026-09-21 round-2 bring-up). Plan with the logical dtype.
++        self.kv_dtype = (
++            torch.float8_e4m3fn if kv_dtype is torch.uint8 else kv_dtype
++        )
+         self.max_tokens = max_tokens
+         self.topk_width = topk_width
+         self.kv_lora_rank = kv_lora_rank

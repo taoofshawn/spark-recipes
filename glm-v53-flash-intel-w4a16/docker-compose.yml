@@ -1,12 +1,8 @@
 services:
   vllm-dspark:
     image: ${IMAGE}
-    # Clear the image's ENTRYPOINT (["vllm","serve"]) — the command block below
-    # is the actual entry; without this the bash script is appended to
-    # `vllm serve` as args and the container dies at argparse (parity with
-    # glm-v53-flash / glm-v53-flash-miaai, which also set entrypoint: []).
     entrypoint: []
-    container_name: glm53-intel-w4a16
+    container_name: glm53-intel-w4a16-v029
     restart: "no"
     network_mode: host
     ipc: host
@@ -27,26 +23,9 @@ services:
       retries: 3
       start_period: 900s
     volumes:
-      # Model weights are served as the HF repo ID + the synthetic
-      # "gptq-surgery" revision that prepare-model.sh writes INTO the HF cache
-      # entry below (hardlinked snapshot + GPTQ-adapted config.json + a refs
-      # file) — so /v1/models .root reports the HF id, not a local path
-      # (parity with deepseek-v4-flash-vision-0rand). DFlash2 drafter is
-      # resolved from HF_CACHE at boot — no separate volume mount needed.
       - ${HF_CACHE}:/cache/huggingface
-      # Cache root -> /cache (JIT caches; node-local disk only) + a /root/.cache
-      # catch-all for anything that ignores the env overrides below.
       - ${CACHE_HOST_PATH}:/cache
       - ${CACHE_HOST_PATH}/root-cache:/root/.cache
-      # SM121 indexer overlay (full-file replacement; fail-closed at boot if the
-      # injected file does not exist — the mount is per-file so a missing host
-      # file makes the mount fail loudly, which is what we want).
-      - ./patches/sparse_attn_indexer_kpool.py:/usr/local/lib/python3.12/dist-packages/vllm/model_executor/layers/sparse_attn_indexer_kpool.py:ro
-      # Fixed chat template (enable_thinking + reasoning_effort + image/video
-      # macros; rodman80's copy, validated on this image). The Intel repo ships
-      # a complete template but it ignores enable_thinking — this file makes
-      # the THINKING toggle explicit (parity with glm-v53-flash-entrpi).
-      - ./patches/chat_template_mm.jinja:/models/chat_template_mm.jinja:ro
     environment:
       # ---- GPU ----
       CUDA_VISIBLE_DEVICES: "0"
@@ -67,47 +46,17 @@ services:
       BLOCK_SIZE: "${BLOCK_SIZE:-2304}"
       KV_DTYPE: "${KV_DTYPE:-fp8_e4m3}"
       KV_CACHE_MEMORY: "${KV_CACHE_MEMORY:-}"
-      # Async scheduling — MUST be in the container env: the command block
-      # branches on it ([ "${ASYNC:-0}" != "0" ] → --async-scheduling).
-      # Without this entry the .env ASYNC knob was silently inert (flag
-      # never applied in any deployment — found by the 2026-09-18 A/B).
       ASYNC: "${ASYNC:-0}"
-      # Lane selector — MUST be in the container env: the command block
-      # branches on it (mtp3 / dflash2pmu). "mtp3" is the DEFAULT (native MTP3
-      # + PMU128, image built from mtp3-pmu128/Dockerfile, no drafter
-      # checkpoint); "dflash2pmu" is the alternative (external DFlash2 k=7 +
-      # PMU128, image built from dflash2-pmu128/Dockerfile). Default flipped
-      # to mtp3 per the 2026-09-18 A/B (mtp3 >= dflash2pmu at c4 in every
-      # round, larger KV pool, no drafter download). Without this entry the
-      # container env LANE is empty and the block defaults to mtp3, so the
-      # lane args (PMU128 flags, disable_eagle_block_drop) would silently
-      # never apply. See .env for the exact build/run rows.
-      LANE: "${LANE:-mtp3}"
-      # DFlash2 drafter (dflash2pmu lane; resolved from the HF cache snapshot at boot)
-      DFLASH_MODEL: "${DFLASH_MODEL:-incoai/GLM-5.3-Flash-DFlash2}"
-      DFLASH_REVISION: "${DFLASH_REVISION:-bf582e4eacc1810f76656d1811693ff6c6737d2a}"
-      DFLASH_TOKENS: "${DFLASH_TOKENS:-7}"
-      # PMU128 prefix matching (mtp3/dflash2pmu lanes; needs a patch-baked
-      # image). Both shipped lanes are PMU128 lanes, so the default is 1.
       PMU: "${PMU:-1}"
       DISABLE_FLASHINFER_AUTOTUNE: "${DISABLE_FLASHINFER_AUTOTUNE:-1}"
-      VLLM_MARLIN_USE_ATOMIC_ADD: "${VLLM_MARLIN_USE_ATOMIC_ADD:-0}"
-      VLLM_USE_FUSED_MOE_GROUPED_TOPK: "${VLLM_USE_FUSED_MOE_GROUPED_TOPK:-0}"
-      GLM53_INDEXER_WORKSPACE: "${GLM53_INDEXER_WORKSPACE:-rightsize}"
       SERVED_MODEL_NAME: "${SERVED_MODEL_NAME:-glm-5.3-flash}"
-      # Model identity — MUST be in the container env: the command block serves
-      # the HF repo ID + the synthetic surgery revision (prepare-model.sh
-      # writes it into the HF cache entry). Serving the HF ID keeps
-      # /v1/models .root == the HF id (tool-eval-bench banner parity).
       MODEL: "${MODEL}"
-      SURGERY_REVISION: "${SURGERY_REVISION:-gptq-surgery}"
-      # ---- sampling / thinking defaults (explicit, repo parity: thinking ON
-      # at REASONING_EFFORT; temp 1.0 / top_p 0.95) ----
+      MODEL_REVISION: "${MODEL_REVISION}"
+      # ---- sampling / thinking defaults ----
       THINKING: "${THINKING:-true}"
       REASONING_EFFORT: "${REASONING_EFFORT:-high}"
       TEMPERATURE: "${TEMPERATURE:-1.0}"
       TOP_P: "${TOP_P:-0.95}"
-      GEN_CFG: "${GEN_CFG:-}"
       # ---- RoCE networking (this cluster's NICs) ----
       NCCL_NET: IB
       NCCL_IB_DISABLE: "0"
@@ -130,12 +79,12 @@ services:
       TORCH_NCCL_ASYNC_ERROR_HANDLING: "1"
       NCCL_MIN_NCHANNELS: "${NCCL_NCHANNELS:-8}"
       NCCL_MAX_NCHANNELS: "${NCCL_NCHANNELS:-8}"
-      # ---- runtime (Tony sm121-v11 lineage; vLLM at /usr/local/lib/python3.12) ----
+
       VLLM_HOST_IP: "${ROCE_IP}"
       HF_HOME: /cache/huggingface
       HF_HUB_OFFLINE: "1"
       TRANSFORMERS_OFFLINE: "1"
-      VLLM_EXECUTE_MODEL_TIMEOUT_S: "3600"
+      VLLM_ENGINE_READY_TIMEOUT_S: "3600"
       PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"
       TORCH_CUDA_ARCH_LIST: "12.1a"
       FLASHINFER_CUDA_ARCH_LIST: "12.1a"
@@ -171,33 +120,17 @@ services:
           export NCCL_IB_GID_INDEX
         fi
 
-        # ---- preflight: post-surgery model revision (prepare-model.sh writes
-        # the synthetic "$SURGERY_REVISION" snapshot into the model's HF cache
-        # entry; serving HF-ID + revision keeps /v1/models .root == HF id) ----
         HUB=/cache/huggingface/hub/models--$$(printf '%s' "$${MODEL}" | sed 's|/|--|g')
-        M="$$HUB/snapshots/$${SURGERY_REVISION:-gptq-surgery}"
-        [ -f "$$M/config.json" ] || { echo "FATAL: $$M/config.json missing — run prepare-model.sh on this node (see README)" >&2; exit 2; }
-        grep -q '"quant_method": "gptq"' "$$M/config.json" || { echo "FATAL: $$M/config.json is not the GPTQ-surgery config (run prepare-model.sh)" >&2; exit 2; }
+        M="$$HUB/snapshots/$${MODEL_REVISION}"
+        [ -f "$$M/config.json" ] || { echo "FATAL: snapshot missing at $$M — download Intel/GLM-5.3-Flash-W4A16-AutoRound --revision $$MODEL_REVISION on this node (see README)" >&2; exit 2; }
+        python3 - "$$M/config.json" <<'PY' || { echo "FATAL: snapshot config is not auto-round (this recipe serves the raw Intel checkpoint)" >&2; exit 2; }
+        import json, sys
+        qc = json.load(open(sys.argv[1])).get("quantization_config") or {}
+        sys.exit(0 if qc.get("quant_method") == "auto-round" else 3)
+        PY
+        echo "[glm53-intel-w4a16-v029] raw auto-round snapshot OK: $$M"
 
-        # ---- dflash2pmu lane: resolve the DFlash2 drafter to its HF snapshot
-        # dir (offline). The default mtp3 lane needs no drafter checkpoint, so
-        # it is the only lane that skips this. ----
-        DFLASH_MODEL_DIR=""
-        if [ "$${LANE:-mtp3}" = "dflash2pmu" ]; then
-          resolve_snapshot() {
-            local hub="$1" rev="$2"
-            local dir="/cache/huggingface/hub/models--$$(echo "$$hub" | sed 's|/|--|g')"
-            if [ -n "$$rev" ] && [ -d "$$dir/snapshots/$$rev" ]; then echo "$$dir/snapshots/$$rev"; return 0; fi
-            local snap; for snap in "$$dir"/snapshots/*/; do
-              if [ -f "$$snap/config.json" ]; then echo "$$snap"; return 0; fi
-            done
-            echo ""
-          }
-          DFLASH_MODEL_DIR="$$(resolve_snapshot "$${DFLASH_MODEL}" "$${DFLASH_REVISION:-}")"
-          [ -n "$$DFLASH_MODEL_DIR" ] || { echo "FATAL: DFlash2 drafter not found in HF cache for $$DFLASH_MODEL. Download on both nodes first (see README)." >&2; exit 2; }
-          echo "[glm53-intel-w4a16] drafter=$$DFLASH_MODEL_DIR"
-        fi
-        ARGS=(serve "$$MODEL" --revision "$${SURGERY_REVISION:-gptq-surgery}"
+        ARGS=(serve "$$MODEL" --revision "$${MODEL_REVISION}"
           --served-model-name "$${SERVED_MODEL_NAME:-glm-5.3-flash}"
           --host 0.0.0.0 --port "$${PORT:-8000}"
           --trust-remote-code
@@ -208,44 +141,21 @@ services:
           --block-size "$${BLOCK_SIZE:-2304}"
           --kv-cache-dtype "$${KV_DTYPE:-fp8_e4m3}"
         )
-        # Speculative: lane-conditional (default mtp3). mtp3 = native MTP k=3
-        # with disable_eagle_block_drop=true (upstream PR #53388, baked into
-        # the mtp3-pmu128 image) + PMU128 prefix matching + prompt-token
-        # details. dflash2pmu = external DFlash2 k=7 (fixed — any other count
-        # wedges the boot) + PMU128.
-        if [ "$${LANE:-mtp3}" = "mtp3" ]; then
-          ARGS+=(--speculative-config "{\"method\":\"mtp\",\"num_speculative_tokens\":3,\"disable_eagle_block_drop\":true}")
-          [ "$${PMU:-0}" != "0" ] && ARGS+=(--prefix-match-unit 128 --enable-prompt-tokens-details)
-        else
-          # DFlash2 k=7 + PMU128 (florianbrede's external-drafter profile,
-          # vendored in dflash2-pmu128/; baked patches add fine-grained SWA
-          # hits + scheduler LCM block alignment). Retention-0 is an ENV VAR
-          # in this vLLM build (florianbrede's launch.sh sets
-          # VLLM_PREFIX_CACHE_RETENTION_INTERVAL=0) — there is no
-          # --prefix-cache-retention-interval CLI flag (argparse rejects it).
-          ARGS+=(--speculative-config "{\"method\":\"dflash\",\"model\":\"$$DFLASH_MODEL_DIR\",\"num_speculative_tokens\":$${DFLASH_TOKENS:-7},\"disable_eagle_block_drop\":true}")
-          [ "$${PMU:-0}" != "0" ] && ARGS+=(--enable-prefix-caching --prefix-match-unit 128 --enable-prompt-tokens-details)
-          [ "$${PMU:-0}" != "0" ] && export VLLM_PREFIX_CACHE_RETENTION_INTERVAL=0
-        fi
+        ARGS+=(--speculative-config "{\"method\":\"mtp\",\"num_speculative_tokens\":3,\"disable_eagle_block_drop\":true}")
+        [ "$${PMU:-0}" != "0" ] && ARGS+=(--prefix-match-unit 128 --enable-prompt-tokens-details)
         [ -n "$${MNBT:-}" ] && ARGS+=(--max-num-batched-tokens "$${MNBT}")
         _kvmem="$${KV_CACHE_MEMORY:-}"
-        [ -n "$$_kvmem" ] && ARGS+=(--kv-cache-memory "$$_kvmem")
-        ARGS+=(--moe-backend "$${MOE_BACKEND:-marlin}")
-        # Parsers (glm-glue) + explicit thinking defaults. The vendored
-        # chat_template_mm.jinja (mounted at /models/chat_template_mm.jinja)
-        # honors enable_thinking + reasoning_effort; without the kwargs the
-        # template defaults to effort=max/thinking-on, so we pin them
-        # server-side (clients override per request via chat_template_kwargs /
-        # the OpenAI reasoning_effort field).
+        [ -n "$$_kvmem" ] && ARGS+=(--kv-cache-memory-bytes "$$_kvmem")
+        [ -n "$${MOE_BACKEND:-}" ] && ARGS+=(--moe-backend "$$MOE_BACKEND")
+        # Parsers + thinking defaults (the baked chat template honors
+        # enable_thinking + reasoning_effort; clients can override per request).
         ARGS+=(--tool-call-parser glm47 --enable-auto-tool-choice
           --reasoning-parser glm45
           --chat-template /models/chat_template_mm.jinja
           --default-chat-template-kwargs "{\"enable_thinking\": $${THINKING:-true}, \"reasoning_effort\": \"$${REASONING_EFFORT:-high}\"}")
-        # Sampling pins — explicit recipe-owned (temp 1.0 / top_p 0.95, same
-        # values as the other recipes). --generation-config vllm ignores the
-        # checkpoint's generation_config.json for SAMPLING only (multi-EOS
-        # stop set still loads from it), so a checkpoint refresh can't drift
-        # top_p back to vLLM's 1.0.
+        # Sampling pins. --generation-config vllm ignores the checkpoint's
+        # generation_config.json for SAMPLING only (multi-EOS stop set still
+        # loads from it).
         GEN_CFG="{\"temperature\": $${TEMPERATURE:-1.0}, \"top_p\": $${TOP_P:-0.95}}"
         ARGS+=(--generation-config vllm --override-generation-config "$${GEN_CFG}")
         # Eager / autotune / async
@@ -258,6 +168,6 @@ services:
           --master-addr "$${MASTER_ADDR}" --master-port "$${MPORT:-29521}")
         [ -n "$${HEADLESS:-}" ] && ARGS+=(--headless)
 
-        echo "launched image=$IMAGE rank=$${NODE_RANK:-0} host=$${ROCE_IP} gid=$${NCCL_IB_GID_INDEX} lane=$${LANE:-mtp3} kv=$${_kvmem:-profiler}/$${KV_DTYPE} max_len=$${MAX_LEN:-1048576} seqs=$${MAX_SEQS:-6} moe=$${MOE_BACKEND:-marlin}"
+        echo "launched image=$IMAGE rank=$${NODE_RANK:-0} host=$${ROCE_IP} gid=$${NCCL_IB_GID_INDEX} kv=$${_kvmem:-profiler}/$${KV_DTYPE} max_len=$${MAX_LEN:-1048576} seqs=$${MAX_SEQS:-6} moe=$${MOE_BACKEND:-auto} rev=$${MODEL_REVISION}"
 
         exec vllm "$${ARGS[@]}"

@@ -113,6 +113,67 @@ Every non-cluster value traces to a reviewed source:
 
 ## Changelog
 
+### 2026-09-23 — bring-up A/B: 1M profile validated on-cluster, MNBT 4096 wins c2, 0.29 hold stands (branch `glm-nvfp4-0rand-0922-updates`)
+
+Four cold-cache boots (down-both → drop_caches → worker-first → head),
+identical bench each side: warm-up ×2, c1 = 2× single-stream tg1024,
+c2 = 2 rounds of 2-parallel tg512 (the 09-18 async-A/B lane shape), temp 0,
+`stream:false`, real `usage.completion_tokens`, EOS-short rounds excluded
+(none occurred), α from `/metrics` counter deltas. ~2K-token VARIED prose
+prompt (deterministic shuffle, baked in `~/bench_glm_ab.py` on the head).
+Gotcha hit: the first attempt used a repeated-paragraph prompt — temp-0
+continuation of repeated text pins per-position acceptance at ~1.0 (α=0.991,
+c1 58 t/s, flat 832/832/831/829) and inflates tok/s ~2×; replaced with varied
+prose before any verdict. c1 rounds within a boot are ultra-stable (<1%);
+ACROSS boots, c1/c2 track α (0.89–0.98) — the content-acceptance swing the
+±10% rule warns about. Never benchmarked right after boot (health→bench gap
+≥2 min plus warm-up; boots below are health-time, not serving-time).
+
+| boot | config | KV pool | boot (head) | c1 tg1024 | c2 2×tg512 | α |
+|---|---|---|---|---|---|---|
+| A | shipped 700K, MNBT 2048, 9 GiB pin, 0.28 | 1,027,894 (1.47×) | ~609 s | 53.36/53.67 | 62.93/62.19 | 0.930 |
+| B | 1M, MNBT 1024, 10.24 GB pin | 1,172,644 (1.12×) — **exact upstream match** | ~990 s | 51.23/52.47 | 64.86/61.55 | 0.952 |
+| C | 1M, MNBT 4096 | 1,150,684 (1.10×) | ~983 s | 52.67/52.80 | **66.06/77.20** | 0.980 |
+| D | 0.29 image @ shipped 700K | 1,027,894 (1.47×) | ~974 s | 47.75/47.65 | 66.26/61.41 | 0.895 |
+
+- **GMU gate (the main risk item): PASSED first try.** GMU 0.88 with the
+  10.24 GB pin cleared the fatal whole-system-RAM pre-load check on BOTH
+  1M boots (B and C) — no stepwise pin lowering (9.5→9 GiB) was needed and
+  0.85 was never touched. Host free RAM was ~117 GiB at boot time (well above
+  the ~107.1 GiB the 0.88 gate needs). 0rand's 1M profile is launch-verified
+  on THIS cluster now.
+- **MNBT 1024-vs-4096 verdict: 4096** (adopted). C vs B: c1 +1.7% (noise),
+  c2 +13.3% with non-overlapping ranges (C min 66.06 > B max 64.86). The
+  c2 gain is not pure α luck: C's α (0.980) exceeds B's (0.952), but C's c1
+  stayed flat while c2 rose — acceptance boosts both cells proportionally,
+  so a c1-flat/c2-up split points at real batching behavior under 2 streams.
+  Cost: pool 1,172,644 → 1,150,684 (−21,960 tokens, larger activation
+  reserve). Matches 0rand's post-82 daily-driver batch.
+- **0.29 image verdict: NO — hold stands.** c2 +2.0% (overlap, NOISE),
+  c1 −10.9% (no overlap, but α fell 0.930→0.895 — decode tracks acceptance).
+  Same pool as boot A (1,027,894). Consistent with ttsiodras post 92
+  ("~same as 0.28"). The held-image item keeps: no reason to bump.
+- **Config left serving: boot C** (1M ctx, MNBT 4096, 10.24 GB pin, GMU 0.88,
+  seqs 4, ASYNC=1, k=5, image 0.28). Rationale: c2 aggregate (the
+  discriminator cell) beats boot A by +14.5% median (beyond the ±10% band,
+  ranges disjoint) with c1 flat; ties-or-beats B; adds 1M ctx over the
+  shipped 700K at no measured speed cost. B vs A was a tie (c1 −3.1%, c2
+  +1.0%).
+- α vs upstream's ~88% structured / ~71% code: NOT a mismatch signal —
+  upstream's receipts are spec-bench structured/code; our bench is temp-0
+  prose continuation, which the drafter finds easy (α 0.89–0.98 across all
+  four boots, per-position decay healthy 1707→1624). Report-only, per plan.
+- Display-KV: OUT OF SCOPE (user decision; documented, not wired). Async:
+  not relitigated (two A/Bs on 09-18, no delta at seqs 4).
+- Boot markers (all four boots): `B12X NvFp4 MoE`, `DFlash2DraftModel`,
+  `SpeculativeConfig(method='dflash', num_spec_tokens=5)`, Eagle3 aux
+  `(6, 15, 25, 34, 43)`, graph capture ~10–12 s, proxy `BACKEND_MODEL`
+  `glm-5.3-flash` matched.
+- Reference-number caveat: absolute c1 here (47–54) far exceeds the 09-18
+  async A/B's c1 (22–27) — different prompt/API shape (raw `/v1/completions`,
+  ~2K varied prompt, no chat-template thinking segment), so only intra-matrix
+  comparisons are meaningful; the 09-18 lane's shape was not reproduced.
+
 ### 2026-09-23 — update pass: adopt the 1M production profile as a tuning row + document the upstream display-KV variant (held)
 
 Sources swept (window 2026-09-15/18 → 09-23): upstream repo (0rand primary —

@@ -191,6 +191,45 @@ Verify with [co-le's cache-pressure tool](https://github.com/co-l/cache-pressure
 A third candidate (`boundfix`) ships in Ollie's repo explicitly marked NOT
 READY — not vendored here.
 
+## Optional: DSV4 tool-call parser backports (`FIX_TOOLCALL_ORPHAN_INVOKE` / `FIX_TOOLCALL_MISSPELLED_WRAPPER`)
+
+Two upstream vLLM fixes for the `deepseek_v4` streaming tool-call parser,
+backported by [oselivanov/ollie-gb10-serving-stacks](https://github.com/oselivanov/ollie-gb10-serving-stacks)
+(commit `da88a2c`, 2026-09-18) and vendored verbatim under `mods/` (default
+OFF, same fail-loud pattern as the other mods):
+
+- **`FIX_TOOLCALL_ORPHAN_INVOKE=1`** (PR #55954 / `d98c8c0`): parses an
+  `<invoke>` that omits the `<tool_calls>` wrapper (at long context the model
+  sometimes drops the wrapper and opens `<invoke name="...">` directly from
+  CONTENT — the bare invoke leaked as content), and drops text after a tool
+  block (TOOL_ARGS/TOOL_BETWEEN → TOOL_END now stays in TOOL_BETWEEN,
+  matching official DSV4 behaviour). Our Dickson image already bakes `d98c8c0`
+  in, so on this image the mod reports `already applied - skipping`; it is
+  vendored for forward-compatibility with image refreshes.
+- **`FIX_TOOLCALL_MISSPELLED_WRAPPER=1`** (PR #56141 / `9e25706`): tolerates
+  production-observed DSML opener misspellings (`<｜DSML｜tool>` /
+  `<｜DSML｜toolcalls>` instead of `<｜DSML｜toolcalls>`) — the model corrupts
+  the opener spelling and the wrapped tool block leaked as content. **This fix
+  is NOT baked into any published image** (Dickson's push predates the merge
+  by 38 min); it was this recipe's top image-refresh watch item and is adopted
+  here as a boot mod instead of an image bump. Patches 5 parser files
+  (`deepseek_v4.py` + 4 `vllm/parser/engine/*` files) at our exact engine rev.
+
+To enable (either or both): set the flag(s) in `.env`, recreate the container
+on BOTH nodes — worker first (start order). Python-only, idempotent, dry-run
+guarded; patch failure is fatal by design. The two mods are independent and
+apply in either order. Both ship OFF in Ollie's stack too — enable + validate
+(tool-eval bench) in a bring-up pass.
+
+## Optional: long-prefill scheduling A/B knob (`LONG_PREFILL_TOKEN_THRESHOLD`)
+
+`--long-prefill-token-threshold` (Ollie's stack ships `1024`; stu.miller
+measured the next turn behind a cold 250K prefill at 153.6 s → 2.17 s,
+threshold 0 → 1024, on his TP4 stack — 70×). Empty = not passed (vLLM default
+0). Unvalidated at our shape (2-node TP2, batch 4096, seqs 8); OllieO notes
+his own unpublished patch "performs better under high decode (a lot of
+thinking) load" — treat as a one-knob A/B candidate, not a default.
+
 ## References
 
 - Upstream repo: [0rand/DeepSeek-v4-flash-ver-2sparks-vllm-029-0rand](https://github.com/0rand/DeepSeek-v4-flash-ver-2sparks-vllm-029-0rand)
@@ -205,7 +244,16 @@ READY — not vendored here.
   — 0rand's posts from 09-08/09-09: image push (#151), k=3 thinking regression
   (#171), k=6 + 93/100 receipt (#173/#176), tool-result image re-homing (#177);
   parser-fix provenance (#185), Dickson image switch (#194/#214), locked
-  benchmark comparison (#212).
+  benchmark comparison (#212). Later receipts: prefix-cache dead zone
+  (#296/#302), Dickson image in production with 8 coding agents (#419),
+  b12x-vs-marlin round-up (#350/#352/#373/#397/#405/#431), stu.miller's TP4
+  profile (#394/#397), Ollie's tool-call backports + long-prefill threshold
+  (#408), eugr-container lane debate (#409/#411/#429/#431).
+- Sibling stacks: [oselivanov/ollie-gb10-serving-stacks](https://github.com/oselivanov/ollie-gb10-serving-stacks)
+  (source of the prefix-cache + tool-call mods; `da88a2c` = the tool-call
+  backport commit, `9d5b744` = the long-prefill threshold) and
+  [stu.miller's TP4 write-up](https://forums.developer.nvidia.com/t/deepseek-v4-flash-vision-exp-is-released-as-open-weights/381911/397)
+  (5-dial 4-node profile — different topology, not this recipe).
 - Sibling recipe: [`../deepseek-v4-flash-vision-miaai`](../deepseek-v4-flash-vision-miaai)
   (Anemll 0.1.1 + NVFP4-MLA + hotfix chain — the quality-reference lane;
   this 0rand lane is the speed/context lane with identical weights).
@@ -251,6 +299,26 @@ starting. One recipe at a time.
   reports (#259/#262) to b12x MoE kernels and rebuilt without them. Our
   recipe runs b12x on the Dickson image with no observed degradation; if
   corruption-under-concurrency appears, drop the moe backend first.
+  **Follow-ups (2026-09-16..18):** OllieO's repro procedure (#352: 6 streams
+  + b12x MoE → "all pelicans except one turning into horror movie") and
+  HTK-7300's crash report (#350) corroborate; his stack then switched the
+  **linear** layers to the marlin backend too (#373, "had to fix it first, it
+  was broken for VisionExp in vllm" — a max-stability build, TEB 91.0 ± 1.1
+  over 6 trials #378). stu.miller's TP4 also runs marlin (#397). Counter-
+  receipt: bernisse found marlin "a much slower system" and prefers b12x +
+  FLASHINFER_MLA_SPARSE_DSV4 (#431); b12x MoE looks fixed on the newest
+  eugr-container builds (#432-#440 pelican tests). No change here — the
+  Dickson image's b12x has shown no corruption on this cluster; revisit only
+  on the #259 pattern.
+- **Vision-Exp looping under agentic work (ajvazan #361/#402):** freezing/
+  looping errors on parallel ~350K-ctx projects (2026-09-16) and a later
+  verdict "impossible to use for serious agentic/coding work with large
+  repositories … getting stuck in mental loops even in 'high' mode" —
+  reverted to 0731 (2026-09-19). Not reproduced on this cluster; the
+  `index_topk` 512→1024 config surgery did not fix it (#406). Watch item.
+- **Driver 580.178.04 (thread 383859 + GLM recipe watch):** random hard
+  freezes reported on 580.178.04 (Ama5u, 2026-09-22); this cluster is on
+  580.173.02 — don't upgrade blindly (repo-wide driver watch).
 
 Dated changelog and update-pass findings live in [`research.md`](research.md)
 (AGENTS.md convention: the README is the active-running doc only).

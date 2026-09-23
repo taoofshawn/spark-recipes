@@ -7,6 +7,120 @@ items live here (AGENTS.md convention).
 
 ## Changelog
 
+### 2026-09-23 — update pass: adopt the vLLM tool-call parser backports as opt-in mods + long-prefill A/B knob
+
+Sources swept (window 2026-09-15/17 → 09-23): NVIDIA forum thread 381911
+posts #349–#440 (the thread's `highest_post_number` is 440 despite
+`posts_count` 431) + board sweep (cats 721/723) + full-text passes; GitHub
+(0rand primary — HEAD unchanged at `d0c8584`, zero open PRs/issues;
+oselivanov/ollie-gb10-serving-stacks — 8 commits after 09-15; PilcoTHINK
+Dockerfile lane; Dickson); Docker Hub (Dickson `0.29-b12x` @ `sha256:899d174e`
+digest unmoved since its 09-10 push — pin current, still the only tag); HF
+model (see below); mods-family repos (stujmiller/dsv4-prefix-replay-tail-fix,
+co-l/ds4-prefix-cache-fixes, co-l/cache-pressure — no updates needed).
+
+**Pins verified current (no action):** image digest unmoved; 0rand upstream
+`d0c8584` = HEAD, no open items; PilcoTHINK `0.29/DSV4F-Vision-exp` lane last
+changed 09-15/16 (the held 09-15 image stays held — no new receipt at our
+shape). HF `DeepSeek-V4-Flash-Vision-Exp`: default-branch HEAD is now
+**`6821d6ad`** (lastModified 2026-09-01) — our pin `86f746b3` still resolves
+(HTTP 200) but is off-HEAD; both revisions list the identical 48 weight
+shards, HEAD adds only `.eval_results/` + an `eval-results` tag (upstream
+re-push/revert, not a weight change). Keep `86f746b3` — a pin==HEAD bump buys
+nothing (same verdict as the 2026-09-11 pass).
+
+**Adopted — the two vLLM tool-call parser backports as opt-in mods (default
+OFF), vendored verbatim from oselivanov/ollie-gb10-serving-stacks @ `da88a2c`
+(2026-09-18):**
+
+- `mods/fix-dsv4-toolcall-orphan-invoke/` (PR #55954 / `d98c8c0`): parser
+  state-machine fix — CONTENT → INVOKE_PREFIX → TOOL_NAME (an `<invoke>` with
+  no `<tool_calls>` wrapper anchors tool-call detection; at long context the
+  model drops the wrapper and the bare invoke leaked as content), and
+  TOOL_ARGS/TOOL_BETWEEN → TOOL_END stays in TOOL_BETWEEN (text after a tool
+  block is dropped). Our Dickson image already bakes `d98c8c0` in — expect
+  "already applied - skipping" on this image; vendored for forward-compat
+  with image refreshes (the mod's dry-run -R guard handles both cases
+  fail-loud on drift).
+- `mods/fix-dsv4-toolcall-misspelled-wrapper/` (PR #56141 / `9e25706`):
+  tolerates production-observed DSML opener misspellings
+  (`<｜DSML｜tool>`/`<｜DSML｜toolcalls>`); patches `deepseek_v4.py` +
+  4 `vllm/parser/engine/*` files (tuple terminals + `terminal_literal`/
+  `terminal_literals` helpers) at our exact engine rev
+  `0.28.1rc1.dev475+g6fbb00b18`. **This closes the top image-refresh watch
+  item** (2026-09-11/09-15 entries: #56141 "still not confirmed in ANY
+  consumable image") — no image bump needed; the fix arrives as a boot mod
+  instead. OllieO confirmed on the forum (#408, 2026-09-19): "added couple of
+  tool call fixes (backports from vllm main tree), but they are off by
+  default."
+- Wired as `FIX_TOOLCALL_ORPHAN_INVOKE=0` / `FIX_TOOLCALL_MISSPELLED_WRAPPER=0`
+  (compose env + boot hooks, same fail-loud pattern as the other mods);
+  SHA256SUMS updated. Both mods are independent (apply in either order) and
+  ship OFF in Ollie's stack too — enable + validate (tool-eval bench) in a
+  bring-up pass, not this one.
+
+**Adopted — `LONG_PREFILL_TOKEN_THRESHOLD` as an opt-in A/B knob (default
+off):** `--long-prefill-token-threshold`. Receipts: Ollie's vision-exp-stack
+ships `1024` and adopted it into main (#408); stu.miller's TP4 measured the
+next turn behind a cold 250K prefill at **153.6 s → 2.17 s, threshold 0 →
+1024** (#397, "we tried 8192 first and it was worse than 1024") — a 70×
+next-turn-behind-cold-prefill improvement. NOT defaulted on: measured on TP4
+at 600K ctx / seqs 12, not our shape (2-node TP2, batch 4096, seqs 8), and
+OllieO himself notes his own unpublished patch "performs better under high
+decode (a lot of thinking) load" (#399). One-knob A/B candidate for a
+bring-up pass; potentially relevant to the open prefix-cache watch item
+(full-context re-prefill every agent turn, 4.6% hit rate — a long-prefill
+threshold may change that decode-fairness picture).
+
+**Not adopted (re-evaluated):**
+
+- **Marlin linear backend** (Ollie #373 switched his stack's linear layers to
+  marlin after fixing a VisionExp-specific vLLM bug; stu.miller's TP4 runs
+  marlin #397). Counter-receipt: bernisse found marlin "a much slower system"
+  and prefers b12x + FLASHINFER_MLA_SPARSE_DSV4 (#431); b12x MoE looks fixed
+  on the newest eugr-container builds (#432-#440 pelican tests). Our Dickson
+  image's b12x has shown no corruption on this cluster — no change; the
+  README b12x ops note updated with the round-up receipts.
+- **stu.miller's TP4 profile** (#394/#397) — 4-node topology (`--kv-cache-memory-bytes
+  48516805580`, 159,346 KV tokens/GiB sizing rule, seqs 12, 600K ctx, +46% c1
+  decode vs 2-node). Different topology; a future lane, not this recipe.
+- **Spec-decode k change** (#377): bench suggests "reducing
+  num_speculative_tokens to ~3 (currently ~5)" at k=5 stacks (43%
+  draft-window utilization). Targets k=5 stacks; our k=6 pin has its own
+  receipts (k=3 brain-damages thinking, #171) — no change.
+- **`index_topk` 512→1024 config surgery** (#403/#406): ajvazan tried it, did
+  NOT fix his loop issue. Watch only (single unverified receipt, now weaker).
+- **eugr-container lane** (bernisse #409/#429/#431: base `@eugr_nv` container
+  + 3 mods incl. the o_proj einsum fix and a 128mb→512mb sm12x workspace
+  patch for the 2026-09-20 wheels; "most of the patches … have been fixed
+  upstream") vs stu.miller's counter (#411: "only 2 of 9 fixes in the build
+  actually went upstream"). Alternative lane, no change here.
+
+**Watchlist updates:**
+
+- **Vision-Exp looping under agentic work** (ajvazan #361/#402): "impossible
+  to use for serious agentic/coding work … stuck in mental loops even in
+  'high' mode" — reverted to 0731. Not reproduced on this cluster; recorded
+  in README ops notes.
+- **b12x-vs-marlin round-up** — see "Not adopted"; README ops note updated.
+- **Board sweep (new topics):** 383583 (DSv4.1 Flash EXL3 3bpw, ~3M KV,
+  **"+2GB free RAM Unlock for all GB10s"** — the display-KV technique family;
+  cross-links the GLM recipe's display-KV watch), 384069 (DSv4 Flash 2-node
+  throughput collapse at large prompt+concurrency), 384035 (v4.1 TP2 spec
+  decoding), 384044 (TP2 vs TP2+PP2), MiMo-V2.6 DFLASH family (383933/
+  383968/384064 — sibling recipe lane), kernel 7.6.0/7.0.0-1019 slowdown
+  threads (383926/383859/383563/383624 — repo-wide OTA watch corroborated).
+- **Ollie's stack state** (#373, #408): marlin linear + max-stability build,
+  TEB 91.0 ± 1.1 over 6 trials (#378); his KV headroom data (#408): 3.5M KV
+  pool with 116/121 GB free — "can be bumped to probably like somewhere in
+  4-5-6 ish M range". Our GMU/KV is per-image tuned — no transfer.
+
+**Gotchas hit:** the thread's `posts_count` (431) understates the thread
+(`highest_post_number` = 440) — paginate to `highest_post_number`, not
+`posts_count`. The upstream `.env.sample`-style re-framing seen in the GLM
+repo has no analog here (0rand's DSv4-vision repo is unchanged since
+`d0c8584`).
+
 ### 2026-09-17 — incident: boot-3 pairing (async ON + seqs 4) collapses decode at batch 2 under real agent load; profile restored
 
 Troubleshoot-slowness pass on the live deployment (container up ~15 h = boot 3

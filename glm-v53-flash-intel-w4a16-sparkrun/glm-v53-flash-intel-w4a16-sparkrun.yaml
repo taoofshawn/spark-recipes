@@ -1,4 +1,4 @@
-# Sparkrun recipe: GLM-5.3-Flash Intel W4A16, mtp3 lane, 2x DGX Spark.
+# Sparkrun recipe: GLM-5.3-Flash Intel W4A16, 2x DGX Spark.
 # Deploy / run / verify: see README.md in this directory.
 
 recipe_version: "2"
@@ -6,12 +6,10 @@ name: glm-v53-flash-intel-w4a16-sparkrun
 description: GLM-5.3-Flash Intel W4A16 AutoRound, 1M context, native MTP3 + PMU128, via a hosted ghcr image (no rebuild)
 
 model: Intel/GLM-5.3-Flash-W4A16-AutoRound
-# Upstream revision — drives sparkrun's model sync; the server serves
-# {surgery_revision}, written into the HF cache by prepare-model.sh.
 model_revision: 5eee1846f0321058ed73745f9aa16f2aaf0fc0a0
 runtime: vllm
 
-container: ghcr.io/taoofshawn/vllm-glm53-intel-mtp3-pmu128:20260920@sha256:f1aaeafbc77d0173b3551f86c93f06a09debe979b5bbf079c9cc754b1391b481
+container: ghcr.io/taoofshawn/vllm-glm53-intel-w4a16:glm53flash-pmu128-mtp3@sha256:de350dc62b81f3ef5da5d913638af571ec89f5c8a35f08ac596be57adeec27a3
 
 # Pull the prebuilt ghcr image — never a source build.
 builder: docker-pull
@@ -20,7 +18,7 @@ min_nodes: 2
 max_nodes: 2
 
 metadata:
-  description: Intel W4A16 AutoRound via GPTQ surgery; native MTP3 (k=3), PMU128 prefix matching, marlin MoE, fp8 KV (13.5 GB pin), 1M context
+  description: Intel W4A16 AutoRound loaded natively by INCConfig; native MTP3 (k=3), PMU128 prefix matching, oracle MoE selection (mixed W4A16/BF16 checkpoint), fp8 KV (13.5 GB pin), 1M context
   maintainer: sdrew
   base_recipe: glm-v53-flash-intel-w4a16
 
@@ -34,9 +32,12 @@ defaults:
   max_num_batched_tokens: 8192
   block_size: 2304
   kv_cache_dtype: fp8_e4m3
-  kv_cache_memory: 13500000000
+  kv_cache_memory_bytes: 13500000000
   served_model_name: glm-5.3-flash
-  surgery_revision: gptq-surgery
+  # model_revision must appear in BOTH the top-level field and defaults:
+  # top-level drives model-distribution lookup; only defaults keys get
+  # {placeholder}-substituted into the command.
+  model_revision: 5eee1846f0321058ed73745f9aa16f2aaf0fc0a0
   # JSON-valued flags live as single defaults values (sparkrun substitutes
   # {key} as one unit — no double-brace escapes).
   speculative_config: '{"method":"mtp","num_speculative_tokens":3,"disable_eagle_block_drop":true}'
@@ -69,13 +70,10 @@ env:
   TORCH_CUDA_ARCH_LIST: "12.1a"
   FLASHINFER_CUDA_ARCH_LIST: "12.1a"
   FLASHINFER_DISABLE_VERSION_CHECK: "1"
-  VLLM_EXECUTE_MODEL_TIMEOUT_S: "3600"
+  VLLM_ENGINE_READY_TIMEOUT_S: "3600"
   PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"
   TORCHINDUCTOR_CACHE_DIR: "/cache/huggingface/torchinductor"
   TILELANG_CACHE_DIR: "/cache/huggingface/tilelang"
-  VLLM_MARLIN_USE_ATOMIC_ADD: "0"
-  VLLM_USE_FUSED_MOE_GROUPED_TOPK: "0"
-  GLM53_INDEXER_WORKSPACE: "rightsize"
   HF_HUB_OFFLINE: "1"
   TRANSFORMERS_OFFLINE: "1"
   HF_HOME: "/cache/huggingface"
@@ -103,7 +101,7 @@ executor_config:
 # --master-port, --headless on the worker). Do NOT add those here.
 command: |
   vllm serve {model} \
-      --revision {surgery_revision} \
+      --revision {model_revision} \
       --served-model-name {served_model_name} \
       --host {host} --port {port} --trust-remote-code \
       --distributed-executor-backend mp \
@@ -114,8 +112,7 @@ command: |
       --max-num-batched-tokens {max_num_batched_tokens} \
       --block-size {block_size} \
       --kv-cache-dtype {kv_cache_dtype} \
-      --kv-cache-memory {kv_cache_memory} \
-      --moe-backend marlin \
+      --kv-cache-memory-bytes {kv_cache_memory_bytes} \
       --speculative-config '{speculative_config}' \
       --prefix-match-unit 128 --enable-prompt-tokens-details \
       --tool-call-parser glm47 --enable-auto-tool-choice --reasoning-parser glm45 \

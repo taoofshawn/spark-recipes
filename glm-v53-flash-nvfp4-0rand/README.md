@@ -121,6 +121,8 @@ The engine names the largest context that fits if the pool is too small:
 | You want | Set | Effect / receipt |
 |---|---|---|
 | the quality-verified profile | `MAX_LEN=700160` | 94/100 (166/176, HM 38/38), pool 892,139 (1.27×) upstream |
+| upstream's launch-verified 1M profile (2026-09-22) | `MAX_LEN=1048576 KV_CACHE_MEMORY=10240000000` | pool 1,172,644 (1.12×); GMU 0.88, seqs 4, batch 1024 (README; post 82 reports batch 4096 on his daily driver), async ON; boot ~13 min; "stable, no oom, 30-35 t/s on mixed" (post 82). Upstream now frames 900K/9 GiB as the conservative FIRST-BOOT demo — raise the pin toward 10.24 GB only after your own boot proves the headroom (fatal GMU gate below) |
+| the experimental +18.4%-KV variant | see "Display-KV variant" below | pool 1,388,762 at 1M ctx (+216,118); concurrency 1.32× vs 1.12×; TEB hardmode 91/100, 0.0% error rate; requires sudo + runtime DRM reload — NOT wired into this compose recipe |
 | more concurrency | `MAX_LEN=524288 MAX_SEQS=2 MNBT=8192 KV_CACHE_MEMORY=6979321856` | jetspark's 524K row (post 39). **Activations ≈ MNBT × ~800 KiB/token** (8192 → ~6.4 GiB) — raise seqs only with a smaller batch |
 | faster decode (k=4) | `DFLASH_TOKENS=4` | ~20% faster decode than k=7, same tokens/step accepted (posts 17/39) |
 | official k=7 | `DFLASH_TOKENS=7` | pilcothink: TG128 39.1 t/s @262K (post 1) |
@@ -133,6 +135,42 @@ pre-load check against *whole-system* RAM (`docs/FINDINGS.md` §2): 0.88 was
 `ValueError: Free memory on device cuda:0 (X/121.69 GiB) on startup is less than
 desired GPU memory utilization`, lower GMU (0.85 — the intel recipe's value — is
 a safe start) and re-measure. `--kv-cache-memory` does **not** bypass this gate.
+
+## Display-KV variant (upstream, EXPERIMENTAL — not wired here)
+
+Upstream commit [`4ec03bf`](https://github.com/0rand/glm-5.3-flash-nvidia-nvfp4-dflash-2x-dgx-sparks/commit/4ec03bfc1e6a22b0ca59f73da3bd57c5d9a145ff)
+(2026-09-22) added `start-display-kv.sh`: an alternative launcher that unlocks
+the ~2 GiB firmware-reserved display memory on headless GB10 nodes and uses it
+as KV-cache backing (technique and AGPL-3.0 allocator by coolbho3k,
+[DeepSeek-v4.1-Flash-2x-DGX-Spark](https://github.com/coolbho3k/DeepSeek-v4.1-Flash-2x-DGX-Spark)).
+Measured A/B on the GLM stack (2026-09-22): KV pool 1,388,762 vs 1,172,644
+(+216,118, **+18.4%**), concurrency at 1M ctx 1.32× vs 1.12×, TEB hardmode
+91/100 (160/176, parallel 4, seed 42) with 0.0% error rate, **no decode tax**
+within fluctuation. `nvidia-smi` stays blind; GMU is unchanged.
+
+Why it is documented but not vendored into this recipe:
+
+- **Requires host-level changes our compose cannot express:** a runtime-only
+  `nvidia_drm` reload (`modeset=1 fbdev=0`) on BOTH nodes, with **passwordless
+  sudo on the worker** (`<user> ALL=(ALL) NOPASSWD: ALL`) for the remote reload;
+  the head prompts once per boot. Nothing is persisted — a plain reboot
+  restores boot defaults. This is a pre-bring-up host step, not a compose knob.
+- **AGPL-3.0 allocator** — the shim/allocator source lives upstream under
+  `display-kv/` (AGPL); vendoring it into this repo is a licensing decision
+  deliberately not taken in this update pass.
+- The launcher is coupled to upstream's `start.sh`/`run_cluster_dual.sh` lane,
+  not our docker-compose conventions; wiring it here would be a compose opt-in
+  mode with its own bring-up validation pass.
+
+To adopt it here later: vendor `display-kv/` verbatim + a host DRM-reload
+runbook step, wire `PYTHONPATH=/opt/display-kv` + `DISPLAY_KV_*` env via
+compose mounts, keep `KV_CACHE_MEMORY=10240000000` (the preflight requires the
+production 10.24 GB pin) and `MAX_LEN=1048576`, and bench before/after (the
+pin+DEVICEMAP registration path itself carries a bandwidth cost: display
+segment reads 163–168 GB/s vs 235–269 GB/s ordinary cudaMalloc; copy-engine
+DMA access is catastrophic ~0.9–2.3 GB/s — attention kernels use SM loads,
+which is why KV works fine). Driver-dependent: verified on 580.x; failure
+reported upstream on 595.84 — re-probe after any driver change.
 
 ## Known issues & gotchas
 
@@ -160,7 +198,18 @@ a safe start) and re-measure. `--kv-cache-memory` does **not** bypass this gate.
   memory test, not a flag test.
 - **Driver generation (repo-wide watch).** NVIDIA 610.43.02 costs ~4 GiB more
   unified memory and is boot-nondeterministic; this cluster is on 580.173.02 —
-  don't upgrade blindly.
+  don't upgrade blindly. **580.178.04 random hard freezes (forum #83, 2026-09-22):
+  random hard freezes with no pattern, days into uptime** (Ama5u's units, running
+  a week; diagnostics in amasu/glm53-flash-cluster) — stay put unless a boot test
+  clears it; treat any driver bump as a re-measure event.
+- **pilcothink 0.29 image exists (HELD).** `pilcothink/vllm_spark_glm53:0.29`
+  (digest `sha256:82807abe…`, pushed 2026-09-17) — the 0.29 engine lane adds the
+  `GLM53_CONTEXT_CUDA_GRAPH` / `GLM53_GROUPED_CONTEXT_STORE` /
+  `GLM53_FUSED_DFLASH_TAPS` / `GLM53_CONTEXT_GRAPH_CACHE_V2` env family.
+  ttsiodras's receipt (forum #92): GMU 0.9, batch 8192, seqs 10 @ 262K ctx —
+  perf ~same as 0.28. Held: image bump requires a bring-up A/B at our shape
+  (the new flags are unvalidated at seqs 4 / batch 2048 / 1M ctx); the pinned
+  0.28 digest is unmoved and receipts unchanged.
 - **DGX OS 7.5.0 OTA (repo-wide watch).** Boots with ~7.2 GiB less RAM (forum
   383222: 119.5 → 112.3 GiB kernel-available). The GMU 0.88 gate is a fatal
   whole-system-RAM check — do not take this OTA without lowering GMU and
@@ -171,14 +220,20 @@ a safe start) and re-measure. `--kv-cache-memory` does **not** bypass this gate.
 ## References
 
 - Upstream: [0rand/glm-5.3-flash-nvidia-nvfp4-dflash-2x-dgx-sparks](https://github.com/0rand/glm-5.3-flash-nvidia-nvfp4-dflash-2x-dgx-sparks)
-  (README 2026-09-13 state; `start.sh` @ `0227b8df` = the authoritative flag
-  set; `docs/FINDINGS.md` = the memory model, failure catalogue, measurement
-  protocol)
+  (README 2026-09-22 state: launch-verified 1M production profile + display-KV
+  variant; `start.sh` @ `0227b8df` = still the authoritative flag set, untouched
+  by `4ec03bf`; `docs/FINDINGS.md` = the memory model, failure catalogue,
+  measurement protocol; `display-kv/` = the experimental AGPL allocator + shim)
 - Forum: [382939 — Let's optimize nvidia/GLM-5.3-Flash-NVFP4 for 2× DGX Spark](https://forums.developer.nvidia.com/t/lets-optimize-nvidia-glm-5-3-flash-nvfp4-for-2x-dgx-spark/382939)
   (post 1 = pilcothink's original results + 94/100; post 2 = 0rand's ~1.3M FP8
   cache + b12x bug hunt; post 17 = W4A4-vs-W4A16 fit + k=4; post 39 = the
   memory-zone model + spec-bench ladder + 2-parallel ceiling at 524K; post 41 =
-  95/100 replication at 900K; post 44 = 1M-context claim)
+  95/100 replication at 900K; post 44 = 1M-context claim; post 64 = pilcothink's
+  W4A16-vs-W4A4 workload-fit comparison; post 80 = 0rand tested the
+  local-inference-lab NVFP4 requant — "slower and constantly choked", stays on
+  the nvidia quant; post 82 = 0rand's daily driver: 1M ctx, 11 GB pin, stable;
+  posts 83/85/87 = 580.178.04 freezes + the display-KV unlock; post 92 =
+  ttsiodras's 0.29-image receipt)
 - Weights: [nvidia/GLM-5.3-Flash-NVFP4](https://huggingface.co/nvidia/GLM-5.3-Flash-NVFP4)
   @ `09b04e5e74bca08ca8549fc736d4cdd8624bfde3`
 - Drafter: [incoai/GLM-5.3-Flash-DFlash2](https://huggingface.co/incoai/GLM-5.3-Flash-DFlash2)

@@ -113,6 +113,115 @@ Every non-cluster value traces to a reviewed source:
 
 ## Changelog
 
+### 2026-09-23 — update pass: adopt the 1M production profile as a tuning row + document the upstream display-KV variant (held)
+
+Sources swept (window 2026-09-15/18 → 09-23): upstream repo (0rand primary —
+one new commit `4ec03bf`, 2026-09-22T10:59Z), forum 382939 posts 56–92 (last
+post 2026-09-23), Docker Hub (`pilcothink/vllm_spark_glm53` — NEW tag `0.29`
+@ `sha256:82807abe…`, pushed 2026-09-17; pinned `0.28` @ `e99cb670` unmoved),
+HF model/drafter, board sweep.
+
+**Pins verified current (live, no action):** HF weights
+`nvidia/GLM-5.3-Flash-NVFP4` @ `09b04e5e` (lastModified 2026-09-11, exactly our
+pin; 33 shards + index unchanged) and drafter `incoai/GLM-5.3-Flash-DFlash2` @
+`bf582e4e` (lastModified 2026-08-31, exactly our pin). PilcoTHINK Dockerfile
+lane: `0.29/GLM53-flash` guide update `6eedaa37` (2026-09-17) = the `0.29`
+image push above; `0.28` lane untouched. Sibling stack watch: Ollie's
+ollie-gb10-serving-stacks switched his GLM/DSv4 stack to the **marlin linear
+backend** (`1e0297f`, 2026-09-17) — no config change here; see the DSv4-vision
+recipe's b12x watch. `local-inference-lab/GLM-5.3-Flash-NVFP4` requant pushed
+2026-09-16 (`175ae8ce`, QAD "quantization-aware-distillation") — 0rand tested
+it on the forum (post 80): "slower and constantly choked" — watch only.
+
+**Upstream delta since our pin (`e1de4ab` → `4ec03bf`):** one functional commit,
+`4ec03bf` (2026-09-22): "display-KV variant: +18.4% KV via display-reserve
+unlock (experimental)". Files: `start-display-kv.sh` (+249), `display-kv/`
+(shim `display_kv_glm.py` + `sitecustomize.py` + `libdisplay_kv_glm.so` +
+toolkit + AGPL allocator source from coolbho3k's DeepSeek-v4.1-Flash repo),
+README sections, `.env.sample` re-framing. **`start.sh` is untouched** —
+`0227b8df` remains the authoritative production flag set.
+
+**Adopted — the launch-verified 1M production profile as a tuning row (docs +
+`.env` comment; shipped profile unchanged):**
+
+- Upstream README now documents a **launch-verified 1M profile (2026-09-22)**:
+  ctx 1,048,576, KV pool 1,172,644 production, GMU 0.88, **10,240,000,000-byte
+  KV pin** ("11 GB"), seqs 4, batch 1024, async ON, boot ~13 min; max
+  concurrency at full 1M ctx 1.12×. Post 82 (0rand, 2026-09-22) confirms it as
+  his daily driver: "1m kv cache with 11GB kv cache pin, 4096 batch, 1m
+  session. 120/122gb on head node, stable, no oom, no issues, 30-35 t/s on
+  mixed" — note the batch discrepancy (README 1024 vs post 4096).
+- `.env.sample` now frames the 900K/9 GiB profile as a "conservative FIRST-BOOT
+  demo profile" and points production at 1M + 10.24 GB. Our shipped `.env`
+  stays at the operator's middle-ground profile (700K / MNBT 2048 / 9 GiB pin,
+  the deliberate 09-16 revert state) — flipping `MAX_LEN` to 1M is a one-line
+  change + bench (the 10.24 GB pin must clear the fatal whole-system-RAM GMU
+  gate on OUR hosts; upstream's ceiling was measured on his). Added as a tuning
+  row in README + a commented alternative in `.env`.
+
+**Documented (HELD) — the display-KV variant (EXPERIMENTAL):**
+
+- Mechanism: runtime-only `nvidia_drm` reload (`modeset=1 fbdev=0`, never
+  persisted; reboot restores) on both nodes, then a fail-closed allocator shim
+  replaces vLLM's final KV `torch.zeros` backing with a contiguous UVA span:
+  production 10.24 GB ordinary pin (never exceeded) + 1.75 GiB DRM display
+  carveout per rank. Measured A/B (2026-09-22): KV pool 1,388,762 vs 1,172,644
+  (+216,118, **+18.4%**); concurrency at 1M ctx 1.32× vs 1.12×; TEB hardmode
+  91/100 (160/176, parallel 4, seed 42), 0.0% error rate; no decode tax within
+  fluctuation (fill run ~10% faster, in the noise band). Bandwidth receipts:
+  display segment SM reads 163–168 GB/s vs 235–269 GB/s ordinary cudaMalloc;
+  copy-engine DMA catastrophic (0.9–2.3 GB/s) — attention kernels use SM loads,
+  which is why KV works.
+- Why held, not adopted: (a) requires **host-level changes** the compose cannot
+  express — the runtime DRM reload with **passwordless sudo on the worker**
+  (head prompts once per boot); (b) the allocator is **AGPL-3.0** — vendoring
+  into this repo is a licensing decision not taken this pass; (c) the shim is
+  coupled to upstream's `start.sh`/`run_cluster_dual.sh` launcher lane, not
+  our docker-compose conventions; (d) driver-dependent (verified 580.x,
+  fails on 595.84 upstream) — a boot-test + A/B at our shape is needed first.
+- Re-adoption trigger: the operator wants +18.4% KV at 1M ctx and accepts the
+  sudo/DRM host prerequisites → vendor `display-kv/` verbatim + a host DRM
+  runbook step + compose opt-in env (`PYTHONPATH=/opt/display-kv`,
+  `DISPLAY_KV_*`, `KV_CACHE_MEMORY=10240000000`, `MAX_LEN=1048576`) in a
+  bring-up pass with before/after bench. Documented in README
+  "Display-KV variant".
+
+**Not adopted — `pilcothink/vllm_spark_glm53:0.29` (held):**
+
+- New tag pushed 2026-09-17T16:24Z (`sha256:82807abe…`); the 0.29 GLM53 lane
+  adds the `GLM53_CONTEXT_CUDA_GRAPH` / `GLM53_GROUPED_CONTEXT_STORE` /
+  `GLM53_FUSED_DFLASH_TAPS` / `GLM53_CONTEXT_GRAPH_CACHE_V2` env family.
+  ttsiodras's receipt (post 92, 2026-09-22): GMU 0.9, batch 8192, seqs 10,
+  262K ctx, graphs ≤64 — TEB + llama-benchy ~same as 0.28.
+- Why held: the new flags are unvalidated at our shape (seqs 4 / batch 2048 /
+  1M ctx); the pinned 0.28 digest is unmoved and its receipts unchanged; an
+  image bump requires a bring-up A/B, not this update pass. Recorded as a
+  README known-issues hold.
+
+**Forum receipts adopted as documentation (no config):**
+
+- Post 63/64 (pilcothink): W4A16-vs-W4A4 workload fit — NVFP4 W4A4 shines at
+  high concurrency on datacenter Blackwell; on GB10 "support for NVFP4
+  computation still appears to be somewhat limited" — W4A16 can win at low
+  concurrency. Context for the intel-vs-nvidia recipe question; no config.
+- Post 79/80 (0rand): tested the **local-inference-lab NVFP4 requant** —
+  "slower and constantly choked switching between prefill and decode. I have
+  image and recipe but not using it and no point publishing". Receipt for
+  staying on the nvidia quant; watch item closed.
+- Post 82/84 (Ama5u): same recipe at 900K running stable for a week on his
+  nodes — independent stability receipt for the shipped profile family.
+- Watch items updated: **driver 580.178.04 random hard freezes** (post 83 +
+  amasu/glm53-flash-cluster diagnostics; random, days into uptime) added to
+  the README driver watch — our cluster is on 580.173.02, stay put. New
+  quants spotted (brandonmusic/GLM-5.3-Flash-tr3-4bpw,
+  canada-quant/GLM-5.3-Flash-W4A16-MTP): watch only, no receipts.
+
+**Gotchas hit:** the upstream `.env.sample` re-framing is comment-only (the
+`KV_CACHE_MEMORY=9663676416` demo default and all real keys are unchanged) —
+no flag drift to mirror. Upstream `start.sh` blob is byte-identical to our
+pinned `0227b8df` state (`4ec03bf` did not touch it), so no spec/serve flag
+changes propagated into the compose.
+
 - **2026-09-14** — adopted from
   `0rand/glm-5.3-flash-nvidia-nvfp4-dflash-2x-dgx-sparks` (README 2026-09-13
   state; `start.sh` @ `0227b8dfd13397eee04051817b03b9c04e808a67`;

@@ -21,8 +21,8 @@ infrastructure-as-code (`agent-preflight.sh`, `render-netplan.sh`, `bootstrap-no
 |---|---|---|---|---|
 | `spark-0f0b` | leader, rank 0, DeepSeek API server | `10.69.42.170` | **one** crossover cable → 6d14, plugged in the **left** QSFP port: `enp1s0f0np0` UP (192.168.0.170) + `enP2p1s0f0np0` UP (192.168.1.170) = the port's two PCIe views; `enp1s0f1np1` DOWN, `enP2p1s0f1np1` DOWN (right port, uncabled) | `6.17.0-1032-nvidia` |
 | `spark-6d14` | worker, rank 1 | `10.69.42.171` | same layout, 192.168.0.171 / 192.168.1.171 | `6.17.0-1032-nvidia` |
-| `spark-6d90` | **not up yet** — fresh install | expected `10.69.42.172` (confirm) | unknown | unknown |
-| `spark-6d24` | **not up yet** — fresh install | expected `10.69.42.173` (confirm) | unknown | unknown |
+| `spark-6d90` | **not up yet** — fresh install | expected `10.69.42.172` (confirm) | unknown | **7.x** → Phase 1b downgrade |
+| `spark-6d24` | **not up yet** — fresh install | expected `10.69.42.173` (confirm) | unknown | **7.x** → Phase 1b downgrade |
 
 Key facts established:
 
@@ -46,7 +46,7 @@ Key facts established:
   remains the authority.
 - Existing nodes run kernel `6.17.0-1032-nvidia` — the **known-good** kernel. The newer
   `7.0.0-1019-nvidia` breaks switchless-ring NCCL/RoCE (`ibv_reg_mr_iova2` ENOMEM,
-  forum thread 383023). Fresh installs may ship the bad kernel → Phase 4 checkpoint.
+  forum thread 383023). Fresh installs ship 7.x kernels → Phase 1b downgrade required.
 - `spark-0f0b`: 1.9 TB free on `/`, repo clone at `~/code/spark-recipes` (2-node DeepSeek
   recipes — stays for rollback, untouched by this build). No containers running at the
   time of the inventory.
@@ -127,10 +127,10 @@ SSH aliases for the two new nodes must exist in the workstation ssh config
 must equal its cluster alias (`spark-6d90`, `spark-6d24`) — `deploy-host.sh` refuses a
 hostname/alias mismatch.
 
-**Kernel checkpoint (fresh nodes):** `uname -r` must be `6.17.0-1032-nvidia` (or another
-pre-7.0.0 kernel). If a fresh node boots `7.0.0-1019-nvidia`, install/hold
-`6.17.0-1032-nvidia` and reboot it **before** the fabric comes up (thread 383023:
-7.0.0-1019 fails `ibv_reg_mr_iova2` with ENOMEM → NCCL/RoCE dead on TP4 rings).
+**Kernel checkpoint (fresh nodes):** fresh installs ship **7.x** kernels — they must be
+downgraded to `6.17.0-1032-nvidia` first (Phase 1b), because `7.0.0-1019-nvidia` breaks
+switchless-ring NCCL/RoCE (thread 383023: `ibv_reg_mr_iova2` ENOMEM → NCCL/RoCE dead on
+TP4 rings).
 
 **Operator-supplied payloads (hard prereq for the current recipe):** the SparkCache
 connector/encoder and the SIRCL bundle/runtime are **not redistributed** by the repo.
@@ -193,8 +193,74 @@ that is the "recipe as-is" part.
 ### Phase 1 — rack + boot the new nodes
 
 Rack spark-6d90 and spark-6d24, let the fresh OS come up, confirm: `hostname -s`, mgmt IP
-on `enP7s7` (expected .172/.173), `uname -r` (Phase 4 kernel checkpoint), Docker + rdma-core
-present, SSH keys installed for `sdrew`. Disk ≥330 GiB free each.
+on `enP7s7` (expected .172/.173), `uname -r` (**fresh installs ship 7.x kernels → Phase 1b
+downgrade required**), Docker + rdma-core present, SSH keys installed for `sdrew`.
+Disk ≥330 GiB free each.
+
+### Phase 1b — downgrade the fresh nodes to the known-good kernel (7.x → 6.17.0-1032-nvidia)
+
+**Why:** the 7.0.0-1019-nvidia kernel breaks switchless-ring NCCL/RoCE (`ibv_reg_mr_iova2`
+ENOMEM, forum thread 383023). Both existing nodes run `6.17.0-1032-nvidia` — replicate that
+exact set before the fabric or netplan is configured.
+
+Do this **before** Phase 4 (the preflight's RoCE checks fail on a 7.x kernel) and before
+Phase 6's `/etc` phase (netplan/GRUB activation must happen on the good kernel). One node
+at a time, node fully idle.
+
+Reference package set on spark-0f0b (version `6.17.0-1032.32`, `nvidia-hwe-24.04` flavour):
+
+- `linux-image-6.17.0-1032-nvidia`, `linux-modules-6.17.0-1032-nvidia`
+- `linux-modules-nvidia-580-open-6.17.0-1032-nvidia`, `linux-modules-nvidia-fs-6.17.0-1032-nvidia`
+- `linux-headers-6.17.0-1032-nvidia`, `linux-tools-6.17.0-1032-nvidia`
+- metas: `linux-nvidia-hwe-24.04`, `linux-image-nvidia-hwe-24.04`,
+  `linux-headers-nvidia-hwe-24.04`, `linux-modules-nvidia-580-open-nvidia-hwe-24.04`,
+  `linux-modules-nvidia-fs-nvidia-hwe-24.04`, `linux-tools-nvidia-hwe-24.04`
+
+On each fresh node (spark-6d90 first, then spark-6d24):
+
+```sh
+uname -r                                        # expect 7.* → downgrade required
+dpkg -l | grep -E 'linux-(image|modules|headers)-.*7\.'   # enumerate the 7.x set to remove
+sudo apt update
+
+# 1. install the known-good 6.17.0-1032 set
+sudo apt install -y \
+  linux-image-6.17.0-1032-nvidia linux-modules-6.17.0-1032-nvidia \
+  linux-modules-nvidia-580-open-6.17.0-1032-nvidia linux-modules-nvidia-fs-6.17.0-1032-nvidia \
+  linux-headers-6.17.0-1032-nvidia linux-tools-6.17.0-1032-nvidia
+
+# 2. point the hwe-24.04 metas at 6.17 so they stop pulling 7.x
+sudo apt install -y \
+  linux-nvidia-hwe-24.04=6.17.0-1032.32 \
+  linux-image-nvidia-hwe-24.04=6.17.0-1032.32 \
+  linux-headers-nvidia-hwe-24.04=6.17.0-1032.32
+
+# 3. remove the 7.x kernel set so GRUB boots 6.17 by default
+sudo apt purge -y <7.x packages enumerated above>
+
+# 4. hold everything so an update cannot reintroduce 7.x until NVIDIA fixes
+#    the regression (watch thread 383023; lift the hold only then)
+sudo apt-mark hold linux-nvidia-hwe-24.04 linux-image-nvidia-hwe-24.04 \
+  linux-headers-nvidia-hwe-24.04 linux-modules-nvidia-580-open-nvidia-hwe-24.04 \
+  linux-modules-nvidia-fs-nvidia-hwe-24.04
+
+# 5. driver-userspace checkpoint: must match the 580-open kernel modules
+nvidia-smi   # compare the driver version against spark-0f0b (580-series)
+# if the fresh install ships a newer userspace driver, align it with spark-0f0b's
+# nvidia-driver*/nvidia-utils* versions before rebooting — a mismatch breaks CUDA
+
+# 6. reboot and verify
+sudo reboot
+```
+
+After the reboot, verify on the node: `uname -r` = `6.17.0-1032-nvidia`, `nvidia-smi`
+works, `ibdev2netdev` shows the four CX-7 devices (two Up once the ring is cabled in
+Phase 3), and `ibv_devinfo` reports the HCAs. If the node fails to boot the 6.17 kernel,
+select it from the GRUB menu before assuming the purge failed.
+
+Expected: both fresh nodes boot `6.17.0-1032-nvidia` with a working `nvidia-smi` and
+visible CX-7 devices, packages held. Stop on any failure — do not continue to the preflight
+on a 7.x kernel.
 
 ### Phase 2 — get the recipe checkout (workstation)
 

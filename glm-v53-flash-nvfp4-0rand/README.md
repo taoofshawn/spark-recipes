@@ -16,9 +16,12 @@ into this repo's docker-compose house style.
   — supplies the **b12x MoE/linear backends** and the sparse-MLA attention
   default. DFlash2 k=5, CUDA graphs ≤16, async scheduling, `--kv-cache-dtype
   fp8`, block size 256, `--mamba-cache-mode align`.
-- **Default profile**: 0rand's **launch-verified 900K** (900,096 = 3,516×256):
-  GMU 0.88, explicit 9 GiB KV pin → ~1.08M-token pool (1.20× at full context),
-  seqs 4, batch 1024, estimator off.
+- **Default profile**: upstream's **launch-verified 1M** (1,048,576 tokens,
+  2026-09-22) — **locally validated 2026-09-23** as the A/B winner: GMU 0.88,
+  explicit 10.24 GB KV pin → 1,150,684-token pool (1.10× at full context;
+  1,172,644 at MNBT 1024), seqs 4, batch 4096 (0rand's post-82 daily-driver
+  batch; won the c2 A/B vs 1024), estimator off. The GMU 0.88 gate **passes on
+  this cluster** with the 10.24 GB pin (host free RAM ~117 GiB).
 - **Port** 8000 (repo convention); served name `glm-5.3-flash`; the model-name
   proxy serves clients `spark-llm` on :4000.
 - **Modalities**: text, tool calling (`glm47` parser) + reasoning (`glm45`),
@@ -30,7 +33,8 @@ into this repo's docker-compose house style.
 
 | profile | ctx | KV pool | quality (TEB hardmode) | speed | source |
 |---|---|---|---|---|---|
-| **900K (shipped default)** | 900,096 | 1,080,115 (1.20×) | **95/100** (167/176) — *independent replication* | boot ~980 s; pp1024/tg1024 c1 32.0 t/s; 40.3/28.8/33.7 t/s @ depth 0/2K/8K | 0rand README (launch) + forum post 41 (quality) |
+| **1M (shipped default)** | 1,048,576 | 1,150,684 (1.10×) @MNBT 4096 / 1,172,644 (1.12×) @1024 | not run here (upstream 900K row's 95/100 replication is the nearest quality receipt; hardmode was not re-run in the local A/B) | local A/B 2026-09-23 (temp-0 varied-prose, intra-matrix only): c1 tg1024 52.7/52.8; c2 2×tg512 66.1/77.2 agg (α 0.980) — **+14.5% c2 median vs the prior 700K default, c1 flat, ranges disjoint**; MNBT 4096 beat 1024 by +13.3% c2 at −21,960 pool tokens | upstream README 2026-09-22 (launch) + post 82 (daily driver) + this repo's 2026-09-23 A/B (research.md) |
+| 900K (prior upstream default) | 900,096 | 1,080,115 (1.20×) | **95/100** (167/176) — *independent replication* | boot ~980 s; pp1024/tg1024 c1 32.0 t/s; 40.3/28.8/33.7 t/s @ depth 0/2K/8K | 0rand README (launch) + forum post 41 (quality) |
 | 700K (prior, quality-verified) | 700,160 | 892,139 (1.27×) | **94/100** (166/176), Hard Mode 38/38, e2e 996 s | spec-bench: structured 49.7 / code 43.0 / filler 33.5 eff t/s | 0rand README + docs/FINDINGS.md |
 | 524K (jetspark's concurrency row) | 524,288 | 668,803 (6.5 GiB pin) | 90 (nvidia W4A4, k=7) | decode 19.6 t/s; **only 2 parallel clients fit** at batch 8192 | forum posts 17 / 39 |
 
@@ -87,7 +91,7 @@ load dominates). Never benchmark right after boot.
 
 ```bash
 curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8000/health   # 200 — /v1/models returns 200 even with a dead engine
-curl -s http://127.0.0.1:8000/v1/models        # "id":"glm-5.3-flash", max_model_len 900096
+curl -s http://127.0.0.1:8000/v1/models        # "id":"glm-5.3-flash", max_model_len 1048576
 ```
 
 End-to-end through the model-name proxy (clients use `spark-llm`):
@@ -108,7 +112,7 @@ docker logs glm53-nvfp4-0rand 2>&1 | grep -F "CUDA graph memory profiling"
 #   If it says "equivalent to --gpu-memory-utilization=0.86xx", the env did not
 #   take and you are paying ~2.1 GiB of KV for nothing.
 docker logs glm53-nvfp4-0rand 2>&1 | grep -F "GPU KV cache size"
-#   -> ~1,080,115 tokens @900K ctx (9 GiB pin)
+#   -> ~1,150,684 tokens @1M ctx (10.24 GB pin, MNBT 4096; 1,172,644 at MNBT 1024)
 docker logs glm53-nvfp4-0rand 2>&1 | grep -F "Graph capturing finished"
 docker logs glm53-nvfp4-0rand 2>&1 | grep -F "Application startup complete"
 ```
@@ -120,8 +124,9 @@ The engine names the largest context that fits if the pool is too small:
 
 | You want | Set | Effect / receipt |
 |---|---|---|
+| the prior 900K upstream demo profile | `MAX_LEN=900096 KV_CACHE_MEMORY=9663676416 MNBT=2048` | pool 1,027,894 measured locally (1.47×); upstream frames 900K/9 GiB as the conservative FIRST-BOOT demo; the 95/100 quality replication (post 41) was at this context family |
 | the quality-verified profile | `MAX_LEN=700160` | 94/100 (166/176, HM 38/38), pool 892,139 (1.27×) upstream |
-| upstream's launch-verified 1M profile (2026-09-22) | `MAX_LEN=1048576 KV_CACHE_MEMORY=10240000000` | pool 1,172,644 (1.12×); GMU 0.88, seqs 4, batch 1024 (README; post 82 reports batch 4096 on his daily driver), async ON; boot ~13 min; "stable, no oom, 30-35 t/s on mixed" (post 82). Upstream now frames 900K/9 GiB as the conservative FIRST-BOOT demo — raise the pin toward 10.24 GB only after your own boot proves the headroom (fatal GMU gate below) |
+| more KV pool at 1M (upstream README batch) | `MNBT=1024` | pool 1,172,644 (1.12×, the upstream 1M-row number); local A/B 2026-09-23: c1/c2 tie with the prior default — the shipped MNBT 4096 is the winner instead |
 | the experimental +18.4%-KV variant | see "Display-KV variant" below | pool 1,388,762 at 1M ctx (+216,118); concurrency 1.32× vs 1.12×; TEB hardmode 91/100, 0.0% error rate; requires sudo + runtime DRM reload — NOT wired into this compose recipe |
 | more concurrency | `MAX_LEN=524288 MAX_SEQS=2 MNBT=8192 KV_CACHE_MEMORY=6979321856` | jetspark's 524K row (post 39). **Activations ≈ MNBT × ~800 KiB/token** (8192 → ~6.4 GiB) — raise seqs only with a smaller batch |
 | faster decode (k=4) | `DFLASH_TOKENS=4` | ~20% faster decode than k=7, same tokens/step accepted (posts 17/39) |

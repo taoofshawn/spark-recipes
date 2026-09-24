@@ -173,6 +173,11 @@ ACROSS boots, c1/c2 track α (0.89–0.98) — the content-acceptance swing the
   async A/B's c1 (22–27) — different prompt/API shape (raw `/v1/completions`,
   ~2K varied prompt, no chat-template thinking segment), so only intra-matrix
   comparisons are meaningful; the 09-18 lane's shape was not reproduced.
+- Post-A/B (same day, user request): the winner config was made the shipped
+  default — README default-profile bullet, receipts table (1M row added,
+  900K demoted to prior default), verify/boot-marker examples (max_model_len
+  1048576, pool ~1,150,684 @MNBT 4096), and tuning rows (prior-900K and
+  MNBT-1024 rows added) all synced to `.env`.
 
 ### 2026-09-23 — update pass: adopt the 1M production profile as a tuning row + document the upstream display-KV variant (held)
 

@@ -19,23 +19,31 @@ infrastructure-as-code (`agent-preflight.sh`, `render-netplan.sh`, `bootstrap-no
 
 | node | role now | mgmt IP (`enP7s7`) | CX-7 ports | kernel |
 |---|---|---|---|---|
-| `spark-0f0b` | leader, rank 0, DeepSeek API server | `10.69.42.170` | `enp1s0f0np0` UP (192.168.0.170, crossover→6d14), `enP2p1s0f0np0` UP (192.168.1.170, crossover→6d14), `enp1s0f1np1` DOWN, `enP2p1s0f1np1` DOWN | `6.17.0-1032-nvidia` |
+| `spark-0f0b` | leader, rank 0, DeepSeek API server | `10.69.42.170` | **one** crossover cable → 6d14, plugged in the **left** QSFP port: `enp1s0f0np0` UP (192.168.0.170) + `enP2p1s0f0np0` UP (192.168.1.170) = the port's two PCIe views; `enp1s0f1np1` DOWN, `enP2p1s0f1np1` DOWN (right port, uncabled) | `6.17.0-1032-nvidia` |
 | `spark-6d14` | worker, rank 1 | `10.69.42.171` | same layout, 192.168.0.171 / 192.168.1.171 | `6.17.0-1032-nvidia` |
 | `spark-6d90` | **not up yet** — fresh install | expected `10.69.42.172` (confirm) | unknown | unknown |
 | `spark-6d24` | **not up yet** — fresh install | expected `10.69.42.173` (confirm) | unknown | unknown |
 
 Key facts established:
 
-- Each node exposes **two usable CX-7 cages** = `enp1s0f0np0` (`rocep1s0f0`) and
-  `enP2p1s0f0np0` (`roceP2p1s0f0`). The `f1` ports are Down with no cage cabled. Both cages
-  currently carry an independent working crossover to `spark-6d14` (192.168.0.x and 192.168.1.x
-  both ping). This is the DGX Spark port map.
-- ⚠️ **Template deviation:** the recipe's verified profile is ASUS Ascent GX10, where the two
-  addressed ports are `enp1s0f0np0` + `enp1s0f1np1` and `NCCL_IB_HCA=rocep1s0f0,rocep1s0f1`.
-  On our DGX Sparks the addressed ports are `enp1s0f0np0` + `enP2p1s0f0np0`, so
-  `FABRIC_IFACES` and `NCCL_IB_HCA` **must** be changed in `cluster.env` (values in §5).
-  `agent-preflight.sh` proposes values from sysfs discovery and blocks on ambiguity — it is
-  the authority; the values below are the expected ones.
+- **Port map (per the [NVIDIA DGX Spark clustering doc](https://docs.nvidia.com/dgx/dgx-spark/spark-clustering.html)):**
+  each Spark has **two QSFP ports** (left = closest to the ethernet port, right), each
+  capped at 200 Gb/s and appearing as **two** Linux interfaces — one per PCIe Gen5 x4 link
+  from the NIC into the SoC: left port = `enp1s0f0np0`/`rocep1s0f0` + `enP2p1s0f0np0`/
+  `roceP2p1s0f0`; right port = `enp1s0f1np1`/`rocep1s0f1` + `enP2p1s0f1np1`/`roceP2p1s0f1`.
+- The **existing single crossover** is in the left port on both nodes: that is why
+  `enp1s0f0np0` (192.168.0.x) and `enP2p1s0f0np0` (192.168.1.x) are both UP to the same
+  peer. The right port is uncabled (both `f1` netdevs Down). The current 2-node DeepSeek
+  recipes use **both** PCIe views of the left port (`IB_PORTS=rocep1s0f0,roceP2p1s0f0`);
+  the 4-node recipe uses **one view per port** and leaves the P2 views UP/MTU-9000 but
+  unaddressed.
+- **No template deviation:** the DGX Spark port map matches the recipe's verified GX10
+  convention exactly — addressed ports are one PCIe view per QSFP port
+  (`enp1s0f0np0` + `enp1s0f1np1` → `NCCL_IB_HCA=rocep1s0f0,rocep1s0f1`), and the second
+  PCIe views are the excluded duplicates. `FABRIC_IFACES`/`NCCL_IB_HCA` keep the template
+  values (§5). `enp1s0f1np1` only comes Up once the right port is cabled.
+  `agent-preflight.sh` proposes values from sysfs discovery and blocks on ambiguity — it
+  remains the authority.
 - Existing nodes run kernel `6.17.0-1032-nvidia` — the **known-good** kernel. The newer
   `7.0.0-1019-nvidia` breaks switchless-ring NCCL/RoCE (`ibv_reg_mr_iova2` ENOMEM,
   forum thread 383023). Fresh installs may ship the bad kernel → Phase 4 checkpoint.
@@ -45,8 +53,8 @@ Key facts established:
 
 ## 2. Final state
 
-Four GB10 nodes in a closed switchless ConnectX-7 ring (4 DACs, 2 ports per node, MTU 9000),
-running the upstream E22b recipe as-is:
+Four GB10 nodes in a closed switchless ConnectX-7 ring — **4 DACs, one per QSFP port**
+(both ports on every node, MTU 9000), running the upstream E22b recipe as-is:
 
 - GLM-5.3-Flash FP8 (`zai-org/GLM-5.3-Flash` @ `690b7052`), vLLM TP4, 262,144-token context,
   DFlash2 speculative decoding, SparkCache + SIRCL transport, patched NCCL 2.30.7
@@ -70,27 +78,42 @@ netplan (`40-cx7.yaml`) — they do not survive this build (restorable by revert
 
 ## 3. Cabling map (physical)
 
-Port convention (DGX Spark): **port A** = `enp1s0f0np0`, **port B** = `enP2p1s0f0np0`,
-identical on every node. A = "up-ring" end, B = "down-ring" end.
+Port convention (identical on every node, per the NVIDIA doc): **left port** = the QSFP
+port closest to the ethernet port (`enp1s0f0np0`/`enP2p1s0f0np0` when cabled), **right
+port** = `enp1s0f1np1`/`enP2p1s0f1np1`. Each ring link uses one cable into one QSFP port;
+the recipe addresses one PCIe view per port (`enp1s0f0np0` = left, `enp1s0f1np1` = right)
+and leaves the `P2` views UP with MTU 9000 but unaddressed.
+
+Cable pull-tab faces up, insert smoothly without force. Approved cables: Amphenol
+NJAAKK-N911 (0.4 m; NJAAKK0006 = 0.5 m) or Luxshare LMTQF022-SD-R, ≥200 Gb/s,
+Ethernet-only config.
 
 | step | action | cable |
 |---|---|---|
-| 1 | spark-0f0b port A ↔ spark-6d14 port A — **already cabled (192.168.0.x crossover); leave in place** → this is L1 | existing |
-| 2 | **unplug** spark-6d14's port B from spark-0f0b's port B (the 192.168.1.x crossover) and move the spark-0f0b end to **spark-6d24 port B** → this is L4 | re-plug existing |
-| 3 | spark-6d14 port B ↔ spark-6d90 port A → L2 | new DAC |
-| 4 | spark-6d90 port B ↔ spark-6d24 port A → L3 | new DAC |
+| 1 | spark-0f0b **left** port ↔ spark-6d14 **left** port — **already cabled (the current crossover); leave in place** → this is L1 | existing |
+| 2 | spark-6d14 **right** port ↔ spark-6d90 **left** port → L2 | new DAC |
+| 3 | spark-6d90 **right** port ↔ spark-6d24 **left** port → L3 | new DAC |
+| 4 | spark-6d24 **right** port ↔ spark-0f0b **right** port → L4 | new DAC |
 
-All four DACs must link at 200 Gb/s, MTU 9000 (jumbo pings in Phase 9 verify all eight
-directed edges). **Carrier state alone cannot identify the peer** — confirm each edge with
-cable EEPROM serials read at both ends:
+Every node ends with exactly one cable per QSFP port: left port faces one ring neighbor,
+right port the other (L1 stays on the left ports of both 0f0b and 6d14, which is where the
+existing crossover already sits). This matches the recipe's ring convention — the left
+(addressed `enp1s0f0np0`) port faces the node's first-listed `FABRIC_TARGETS` peer, the
+right (`enp1s0f1np1`) port the second.
+
+All four DACs must link at their rated speed, MTU 9000 (jumbo pings in Phase 9 verify all
+eight directed edges). **Carrier state alone cannot identify the peer** — confirm each edge
+with cable EEPROM serials read at both ends:
 
 ```sh
 ssh <node> 'sudo -n ethtool -m <fabric-iface> | grep "Vendor SN"'
 ```
 
-Both ends of one cable must report the same serial. On the two fresh nodes, identify which
-netdev is which cage the same way (do not assume `enp1s0f0np0` = port A until the serials
-agree with the map). Stop before addressing if any edge is ambiguous.
+Both ends of one cable must report the same serial. On the two fresh nodes, identify left
+vs right the same way (left = closest to the ethernet port; the cabled port's two netdevs
+come Up while the other pair stays Down). After cabling, `ip -br link` must show exactly
+two netdev pairs Up (`enp1s0f0np0`+`enP2p1s0f0np0`, `enp1s0f1np1`+`enP2p1s0f1np1`) on
+every node. Stop before addressing if any edge is ambiguous.
 
 ## 4. Prerequisites
 
@@ -138,12 +161,13 @@ FABRIC_TARGETS=(
   "10.10.3.3 10.10.4.1"
 )
 
-# ⚠ DGX Spark port map (differs from the ASUS GX10 template default):
-# addressed ports first, then the two excluded (Down) f1 netdevs
-FABRIC_IFACES="enp1s0f0np0 enP2p1s0f0np0 enp1s0f1np1 enP2p1s0f1np1"
+# Fabric interfaces — the DGX Spark map matches the template values as-is:
+# addressed = one PCIe view per QSFP port (left enp1s0f0np0, right enp1s0f1np1),
+# excluded = the second PCIe views (enP2p1s0f0np0, enP2p1s0f1np1)
+FABRIC_IFACES="enp1s0f0np0 enp1s0f1np1 enP2p1s0f0np0 enP2p1s0f1np1"
 
-# ⚠ DGX Spark HCA (template default rocep1s0f0,rocep1s0f1 is the GX10 map)
-NCCL_IB_HCA="rocep1s0f0,roceP2p1s0f0"
+# HCA — the two addressed RoCE devices, one per QSFP port
+NCCL_IB_HCA="rocep1s0f0,rocep1s0f1"
 NCCL_IB_GID_INDEX=-1
 
 NETPLAN_RENDERER=NetworkManager
@@ -162,7 +186,7 @@ that is the "recipe as-is" part.
 1. Ensure no DeepSeek/2-node model containers run:
    `ssh spark-0f0b.shawndo.intra 'docker ps'` and same on 6d14 (sudo password required on
    the nodes — run interactively, not with `BatchMode`).
-2. Leave the 2-node crossover cables in place until Phase 3 re-cables them; the DeepSeek
+2. Leave the existing crossover cable in place (it becomes L1) until Phase 3; the DeepSeek
    recipes stay in `~/code/spark-recipes` as rollback (they will not work after re-cabling
    until the netplan is reverted).
 
@@ -183,8 +207,8 @@ pip install 'Jinja2==3.1.6' && ./scripts/check.sh   # offline check, no GPU need
 
 ### Phase 3 — cable the ring (§3 table)
 
-Unplug/re-plug/new-cable per the table. Verify serials at both ends of every edge before
-addressing.
+Add the three new DACs per the table (the existing crossover stays as L1). Verify serials
+at both ends of every edge before addressing.
 
 ### Phase 4 — read-only preflight
 
@@ -195,8 +219,9 @@ TP4_HOSTS='sdrew@spark-0f0b sdrew@spark-6d14 sdrew@spark-6d90 sdrew@spark-6d24' 
 
 Expected: `result: ready`, one GB10 + two active RDMA ports per node, proposed
 HCA/GID/render values match §5, no foreign workload. **Verify the proposed
-`FABRIC_IFACES`/`NCCL_IB_HCA` are the DGX Spark map (`enp1s0f0np0 enP2p1s0f0np0 …`,
-`rocep1s0f0,roceP2p1s0f0`) — if the preflight proposes the GX10 map, stop and reconcile.**
+`FABRIC_IFACES`/`NCCL_IB_HCA` are the template map (`enp1s0f0np0 enp1s0f1np1
+enP2p1s0f0np0 enP2p1s0f1np1`, `rocep1s0f0,rocep1s0f1`) — anything else, stop and
+reconcile.**
 Report stays at `/tmp`, mode 0600, outside the checkout.
 
 ### Phase 5 — site config
@@ -208,6 +233,12 @@ Fill `cluster.env` per §5, then:
 ./scripts/render-netplan.sh --check      # all eight generated files match
 ./scripts/deploy-host.sh --check         # shows the intended network drift (old crossover netplan replaced)
 ```
+
+**Cable-map checkpoint:** before applying, read the generated
+`scripts/node/etc/<alias>/40-cx7.yaml` for each rank and confirm the port↔IP mapping
+matches the §3 cable map (left port = first-listed `FABRIC_TARGETS` peer, right port =
+second). If a node's mapping is flipped relative to its physical cables, re-cable or stop
+and reconcile — do not hand-edit the generated file.
 
 ### Phase 6 — bootstrap hosts
 
@@ -318,4 +349,7 @@ curl http://10.69.42.170:8000/v1/chat/completions -H 'Content-Type: application/
   (`docs/install-from-zero.md`, `docs/fabric.md`, `docs/operations.md`,
   `cluster.env.example`, `scripts/node/nccl/README.md`)
 - Kernel regression: https://forums.developer.nvidia.com/t/dgx-spark-regression-kernel-7-0-0-1019-nvidia-causes-nccl-roce-ibv-reg-mr-iova2-enomem-6-17-0-1032-works/383023
+- Port mapping / cabling: https://docs.nvidia.com/dgx/dgx-spark/spark-clustering.html
+  (left port = closest to ethernet port; each QSFP port appears as two interfaces, one per
+  PCIe Gen5 x4 link; approved cables Amphenol NJAAKK-N911 / Luxshare LMTQF022-SD-R)
 - Local context: `glm-4spark.md` (4x topology research, untracked)

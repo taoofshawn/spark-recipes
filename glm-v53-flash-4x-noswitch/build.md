@@ -470,6 +470,22 @@ checkout at `~/code/glm-4x-noswitch` (WSL workstation) — cluster.env and the r
 - Kernel/driver/holds unchanged: 6.17.0-1032-nvidia + 580.173.02, everything held on all
   four (lift holds only when NVIDIA ships a fixed kernel for the 7.0.0-1019 regression).
 
+## 7d. Log growth control (2026-09-26, post-build)
+
+The E20 memory probe (mounted `gpu_worker.py` override, unconditional, no env knob) emits
+a ~4 KB JSON line **every second per rank** — ~1.5-2 GB/day per node into docker's
+json-file log. Not a disk risk (1.6-3.5 TB free per node) but unbounded by default.
+Fix applied cluster-wide: `daemon.json` now carries
+`"log-driver": "json-file", "log-opts": {"max-size": "256m", "max-file": "4"}`
+(per-node settings preserved: nvidia runtime on ranks 0-1, containerd-snapshotter=false
+on ranks 2-3). Applied via `scripts/docker-log-rotation.sh` + `tp4ctl down`, docker
+restarts (rank0 last), `tp4ctl up`. Re-verified after the cycle: verify-node
+157 PASS / 0 FAIL, both functional gates pass again (Rome + Milan). New containers report
+`LogConfig {json-file map[max-file:4 max-size:256m]}` — ~1 GB retained per node.
+If you ever want the probe silenced entirely, that is a recipe change (edit the mounted
+`gpu_worker.py` override `interval_seconds=1.0` and re-deploy) — not done, it is a
+measured recipe diagnostic.
+
 ## 8. Source references
 
 - Thread: https://forums.developer.nvidia.com/t/glm-5-3-flash-on-tp4-dgx-sparks-switchless/382459

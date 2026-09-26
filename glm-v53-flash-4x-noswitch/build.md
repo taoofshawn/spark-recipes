@@ -455,6 +455,21 @@ checkout at `~/code/glm-4x-noswitch` (WSL workstation) — cluster.env and the r
 11. **Time skew**: rank 2/3 clocks ran ~4 h behind rank 0/1 at build time — check NTP
     before serving (chrony/timesyncd) if TLS/rendezvous oddities appear.
 
+## 7c. Final state (2026-09-26, build complete)
+
+- **Serving:** `http://10.69.42.170:8000/v1` — `glm-5.3-flash` (GLM-5.3-Flash FP8,
+  vLLM TP4, 262,144-token context, DFlash2 k=7/3, SparkCache + SIRCL, patched NCCL).
+  `verify-node`: **157 PASS / 0 FAIL**. `check-f0.py`: **2026-09-25-e29 CHECK PASS**.
+  `fabric-check`: 8/8 jumbo. Both post-boot gates passed (Rome response, Milan tool call).
+- **NCCL candidate adopted**: SHA256SUMS now pins `afe5f486…` (shape-verified rebuild,
+  61,581,280 bytes / 165 symbols); recipe `CHANGELOG.md` carries the dated entry.
+- **Autostart:** rank-0 systemd unit launches ranks 3→2→1→0 on boot; `/health` 200 was
+  reached ~10 min after boot (weights load + B12X/FlashInfer warmup + CUDA graph capture).
+- **Clocks:** the fresh nodes' initial ~4 h skew self-corrected at the IOMMU reboots
+  (17:25 UTC identical on all four).
+- Kernel/driver/holds unchanged: 6.17.0-1032-nvidia + 580.173.02, everything held on all
+  four (lift holds only when NVIDIA ships a fixed kernel for the 7.0.0-1019 regression).
+
 ## 8. Source references
 
 - Thread: https://forums.developer.nvidia.com/t/glm-5-3-flash-on-tp4-dgx-sparks-switchless/382459

@@ -407,6 +407,54 @@ curl http://10.69.42.170:8000/v1/chat/completions -H 'Content-Type: application/
 - The old 2-node DeepSeek recipes remain usable only if the crossover netplan is restored.
 - `gpu_memory_utilization=0.85` and the 15 GiB KV pool are measured values — do not tune.
 
+## 7b. Build log — executed deviations & lessons (2026-09-26)
+
+Recorded during the live build; these supersede the generic phases above where they
+differ. Site files live in `site/` of this directory (committed) and in the recipe
+checkout at `~/code/glm-4x-noswitch` (WSL workstation) — cluster.env and the re-pinned
+`scripts/node/bootstrap/versions.env`.
+
+1. **Driver unification = 580.173.02 + module `6.17.0-1032.32`** (not 178.04): the
+   hwe module meta at the 6.17 line exists only as the `.32` build (exact-pinned to
+   580.173.02); the `.32+1` build (paired with 178.04) has no 6.17-era meta, so
+   upgrading the old nodes would have dragged the 7.x kernel back in. Fresh nodes
+   downgraded all 580.178.04 components (`scripts/driver-align-173.sh`).
+2. **Fresh nodes skip the `nvidia-driver-580-open` metapackage and all hwe metas**:
+   purging the 7.x module packages cascades them away; reinstalling the metapackage
+   would pull the 7.x-tracking module meta (candidate = 7.x) back. The 173.02 driver
+   components alone are a complete working userspace (verified vs 0f0b).
+3. **Holds on all four** (site freeze until NVIDIA fixes the 7.x kernel): versioned
+   1032 kernel packages + (old nodes) hwe metas + all 580.173.02 driver components.
+   Deviation from the recipe's "never hold metas" advice, deliberate.
+4. **Upstream `scripts/node/nccl/build.sh` bug fixed in our checkout**: cluster.env's
+   `PATCH_FILE` clobbered the vendored NCCL patch path (checked on the workstation
+   unexpanded) — re-asserted after `tp4_load_env`.
+5. **Rank-0 manifest layout**: deploy.sh puts manifests at `~/tp4/node/model-manifests/`
+   but `fetch-fp8-weights.sh` (rank-0 leg) expects `~/tp4/scripts/node/model-manifests/`
+   — fixed with a symlink on rank 0 (`~/tp4/scripts/node/model-manifests ->
+   ~/tp4/node/model-manifests`).
+6. **hf CLI 2.0**: rejects absolute `--local-dir`; use `cd ~ && hf download …
+   --local-dir <relative>` (weights fetch on rank 0 works via its own helper).
+7. **EEPROM serials are CROSSED on the fresh nodes** (24.04.5): `ethtool -m` reads the
+   other cage's module, so serial-based peer verification lied — the "correct-looking"
+   serial map at 6d24 actually had both cables swapped (found via ARP/LLDP signatures:
+   6d24-f0 received "tell 10.10.4.1" from 0f0b and LLDP from 0f0b). **Use ARP/LLDP
+   signatures, not serials, to verify peers on fresh nodes.**
+8. **Ring port convention (netplan)**: odd links (L1, L3) on the left port (f0), even
+   links (L2, L4) on the right port (f1) — per rank. Two physical swaps were needed:
+   at 6d90 (L2/L3 connectors) and at 6d24 (same op). `build.md` §3's original map was
+   wrong for ranks 2 and 3.
+9. **WSL workstation quirks**: background jobs started inside `wsl -e bash -lc` die
+   with the session — run long jobs node-side under `nohup` (fetch, pulls, drafter) or
+   as harness background jobs (NCCL build). `/tmp` in WSL is wiped when the VM idles
+   out; keep reports on /mnt/c. WSL DNS/ssh occasionally returns "No route to host"
+   transiently — retry.
+10. **NCCL candidate**: sha `afe5f486…` (size/symbol shape match), installed
+    identically on all four ranks via `install-nccl.sh --force`; adoption of the new
+    SHA256SUMS happens only after the full-stack window passes (README flow).
+11. **Time skew**: rank 2/3 clocks ran ~4 h behind rank 0/1 at build time — check NTP
+    before serving (chrony/timesyncd) if TLS/rendezvous oddities appear.
+
 ## 8. Source references
 
 - Thread: https://forums.developer.nvidia.com/t/glm-5-3-flash-on-tp4-dgx-sparks-switchless/382459

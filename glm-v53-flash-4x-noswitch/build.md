@@ -264,10 +264,15 @@ on a 7.x kernel.
 
 ### Phase 2 — get the recipe checkout (workstation)
 
+(E29 build) The checkout now lives inside this branch directory:
+`/mnt/c/Users/sdrew/code/github.com/taoofshawn/spark-recipes/glm-v53-flash-4x-noswitch/upstream`
+(moved there from `~/code/glm-4x-noswitch` during the reorganization; its upstream
+`.git` was detached — adopt upstream changes periodically instead).
+
 ```sh
 git clone https://github.com/jnardiello/GLM-5.3-Flash-FP8-4-DGX-Spark-Switchless.git \
-  ~/code/glm-4x-noswitch
-cd ~/code/glm-4x-noswitch
+  <checkout-dir>
+cd <checkout-dir>
 pip install 'Jinja2==3.1.6' && ./scripts/check.sh   # offline check, no GPU needed
 ```
 
@@ -411,7 +416,9 @@ curl http://10.69.42.170:8000/v1/chat/completions -H 'Content-Type: application/
 
 Recorded during the live build; these supersede the generic phases above where they
 differ. Site files live in `site/` of this directory (committed) and in the recipe
-checkout at `~/code/glm-4x-noswitch` (WSL workstation) — cluster.env and the re-pinned
+checkout at
+`/mnt/c/Users/sdrew/code/github.com/taoofshawn/spark-recipes/glm-v53-flash-4x-noswitch/upstream`
+(moved into this branch directory during the workstation reorganization) — cluster.env and the re-pinned
 `scripts/node/bootstrap/versions.env`.
 
 1. **Driver unification = 580.173.02 + module `6.17.0-1032.32`** (not 178.04): the

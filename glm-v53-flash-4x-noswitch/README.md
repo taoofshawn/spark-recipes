@@ -34,7 +34,7 @@ All paths below are relative to the **repo root** (the `spark-recipes` checkout)
 
 | path (from repo root) | what it is |
 |---|---|
-| `glm-v53-flash-4x-noswitch\` | this recipe's branch dir: `build.md`, `README.md`, `scripts\` (9 build/ops helpers), `site\` (`cluster.env`, `versions.env`, `sircl\rank0-3.env` + `SHA256SUMS`, `preflight-report.json`) |
+| `glm-v53-flash-4x-noswitch\` | this recipe's branch dir: `build.md`, `README.md`, `noswitch-prep\` (this site's config + prep/ops scripts: `cluster.env`, `versions.env`, `sircl\rank0-3.env` + `SHA256SUMS`, `preflight-report.json`, `scripts\` — 9 build/ops helpers) |
 | `glm-v53-flash-4x-noswitch\upstream\` | the **live recipe checkout** (jnardiello @ `080fe09`, vendored during the reorg, upstream `.git` detached). All tp4ctl/verify/deploy scripts run from here (`upstream/scripts/`). Carries 4 uncommitted site modifications: `upstream/scripts/node/bootstrap/versions.env`, `upstream/scripts/node/nccl/SHA256SUMS` (adopted `afe5f486…`), `upstream/scripts/node/nccl/build.sh` (PATCH_FILE fix), `upstream/CHANGELOG.md` |
 
 **Sparks:**
@@ -53,7 +53,7 @@ All paths below are relative to the **repo root** (the `spark-recipes` checkout)
 | `github.com/jnardiello/GLM-5.3-Flash-FP8-4-DGX-Spark-Switchless` | upstream reference @ `080fe09`; our checkout is detached — adopt upstream changes periodically by diffing against it |
 
 ⚠ Uncommitted right now (workstation only): the `upstream/` vendored tree (untracked),
-this README/build.md path updates, `site/preflight-report.json`, and the 4 upstream
+this README/build.md path updates, `noswitch-prep/preflight-report.json`, and the 4 upstream
 local modifications listed above.
 
 ## Everyday commands (from the workstation checkout)
@@ -127,7 +127,7 @@ OOM (`NV_ERR_NO_MEMORY`), or a rank container exiting while others stay up.
   before starting anything else.
 - **Never hand-edit generated files**: per-node netplan/iptables (`upstream/scripts/node/etc/*`,
   rendered by `render-netplan.sh`) and `~/tp4/*` on the nodes (pushed by
-  `deploy.sh`). Edit `upstream/cluster.env` (mirrored in `site/cluster.env`), then re-render/deploy.
+  `deploy.sh`). Edit `upstream/cluster.env` (mirrored in `noswitch-prep/cluster.env`), then re-render/deploy.
 - **Measured knobs are not shared tuning knobs**: `GPU_MEM_UTIL=0.85`, the 16 GiB KV
   pool (`--kv-cache-memory-bytes`), `MAX_NUM_SEQS=6`, KV dtype, backend flags, spec
   schedule (k=7/3). Don't tune them casually; every one has a measured baseline and a

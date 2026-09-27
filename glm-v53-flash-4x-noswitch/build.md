@@ -415,7 +415,8 @@ curl http://10.69.42.170:8000/v1/chat/completions -H 'Content-Type: application/
 ## 7b. Build log — executed deviations & lessons (2026-09-26)
 
 Recorded during the live build; these supersede the generic phases above where they
-differ. Site files live in `site/` of this directory (committed) and in the recipe
+differ. Site files live in `noswitch-prep/` of this directory (committed; `site/` +
+top-level `scripts/` were consolidated there during the workstation reorganization) and in the recipe
 checkout at
 `glm-v53-flash-4x-noswitch/upstream` (repo-root relative; moved into this branch
 directory during the workstation reorganization) — cluster.env and the re-pinned
@@ -425,7 +426,7 @@ directory during the workstation reorganization) — cluster.env and the re-pinn
    hwe module meta at the 6.17 line exists only as the `.32` build (exact-pinned to
    580.173.02); the `.32+1` build (paired with 178.04) has no 6.17-era meta, so
    upgrading the old nodes would have dragged the 7.x kernel back in. Fresh nodes
-   downgraded all 580.178.04 components (`scripts/driver-align-173.sh`).
+   downgraded all 580.178.04 components (`noswitch-prep/scripts/driver-align-173.sh`).
 2. **Fresh nodes skip the `nvidia-driver-580-open` metapackage and all hwe metas**:
    purging the 7.x module packages cascades them away; reinstalling the metapackage
    would pull the 7.x-tracking module meta (candidate = 7.x) back. The 173.02 driver
@@ -485,7 +486,7 @@ json-file log. Not a disk risk (1.6-3.5 TB free per node) but unbounded by defau
 Fix applied cluster-wide: `daemon.json` now carries
 `"log-driver": "json-file", "log-opts": {"max-size": "256m", "max-file": "4"}`
 (per-node settings preserved: nvidia runtime on ranks 0-1, containerd-snapshotter=false
-on ranks 2-3). Applied via `scripts/docker-log-rotation.sh` + `tp4ctl down`, docker
+on ranks 2-3). Applied via `noswitch-prep/scripts/docker-log-rotation.sh` + `tp4ctl down`, docker
 restarts (rank0 last), `tp4ctl up`. Re-verified after the cycle: verify-node
 157 PASS / 0 FAIL, both functional gates pass again (Rome + Milan). New containers report
 `LogConfig {json-file map[max-file:4 max-size:256m]}` — ~1 GB retained per node.

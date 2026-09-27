@@ -50,11 +50,10 @@ All paths below are relative to the **repo root** (the `spark-recipes` checkout)
 | repo | role |
 |---|---|
 | `taoofshawn/spark-recipes` (origin) | canonical for the branch; branch pushed through `40b8d22` |
-| `github.com/jnardiello/GLM-5.3-Flash-FP8-4-DGX-Spark-Switchless` | upstream reference @ `080fe09`; our checkout is detached — adopt upstream changes periodically by diffing against it |
+| `github.com/jnardiello/GLM-5.3-Flash-FP8-4-DGX-Spark-Switchless` | upstream reference @ `080fe09`; our checkout is detached — adopt upstream changes periodically by diffing against it (see `research.md` §2: 4 local mods in `upstream/` that must survive an update) |
 
-⚠ Uncommitted right now (workstation only): the `upstream/` vendored tree (untracked),
-this README/build-record.md path updates, `noswitch-prep/preflight-report.json`, and the 4 upstream
-local modifications listed above.
+Update playbook: `research.md` (what not to overwrite, update procedure, changelog).
+Build history: `noswitch-prep/build-record.md`.
 
 ## Everyday commands (from the workstation checkout)
 

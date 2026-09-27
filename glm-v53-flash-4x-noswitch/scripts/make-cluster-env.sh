@@ -2,7 +2,7 @@
 # glm-v53-flash-4x-noswitch — create the site cluster.env from the recipe template.
 # Run from anywhere; paths are fixed for this workstation setup.
 set -euo pipefail
-REPO=/mnt/c/Users/sdrew/code/github.com/taoofshawn/spark-recipes/glm-v53-flash-4x-noswitch/upstream
+REPO="$(cd "$(dirname "$0")/../upstream" && pwd)"
 cd "$REPO"
 cp cluster.env.example cluster.env
 sed -i \

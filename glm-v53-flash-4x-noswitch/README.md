@@ -30,14 +30,12 @@ at full context (6 dies — memory is tight by design).
 
 ## Locations (post-reorganization, 2026-09-26)
 
-**Workstation (Windows `C:\Users\sdrew\code\`; WSL sees the same files under
-`/mnt/c/Users/sdrew/code/`):**
+All paths below are relative to the **repo root** (the `spark-recipes` checkout).
 
-| path | what it is |
+| path (from repo root) | what it is |
 |---|---|
-| `github.com\taoofshawn\spark-recipes\` | this repo, branch `glm-v53-flash-4x-noswitch` |
-| `github.com\taoofshawn\spark-recipes\glm-v53-flash-4x-noswitch\` | this recipe's branch dir: `build.md`, `README.md`, `scripts\` (9 build/ops helpers), `site\` (`cluster.env`, `versions.env`, `sircl\rank0-3.env` + `SHA256SUMS`, `preflight-report.json`) |
-| `github.com\taoofshawn\spark-recipes\glm-v53-flash-4x-noswitch\upstream\` | the **live recipe checkout** (jnardiello @ `080fe09`, vendored during the reorg, upstream `.git` detached). All tp4ctl/verify/deploy scripts run from here (`…/upstream/scripts/`). Carries 4 uncommitted site modifications: `scripts/node/bootstrap/versions.env`, `scripts/node/nccl/SHA256SUMS` (adopted `afe5f486…`), `scripts/node/nccl/build.sh` (PATCH_FILE fix), `CHANGELOG.md` |
+| `glm-v53-flash-4x-noswitch\` | this recipe's branch dir: `build.md`, `README.md`, `scripts\` (9 build/ops helpers), `site\` (`cluster.env`, `versions.env`, `sircl\rank0-3.env` + `SHA256SUMS`, `preflight-report.json`) |
+| `glm-v53-flash-4x-noswitch\upstream\` | the **live recipe checkout** (jnardiello @ `080fe09`, vendored during the reorg, upstream `.git` detached). All tp4ctl/verify/deploy scripts run from here (`upstream/scripts/`). Carries 4 uncommitted site modifications: `upstream/scripts/node/bootstrap/versions.env`, `upstream/scripts/node/nccl/SHA256SUMS` (adopted `afe5f486…`), `upstream/scripts/node/nccl/build.sh` (PATCH_FILE fix), `upstream/CHANGELOG.md` |
 
 **Sparks:**
 
@@ -51,7 +49,7 @@ at full context (6 dies — memory is tight by design).
 
 | repo | role |
 |---|---|
-| `github.com/taoofshawn/spark-recipes` (origin) | canonical for the branch; branch pushed through `40b8d22` |
+| `taoofshawn/spark-recipes` (origin) | canonical for the branch; branch pushed through `40b8d22` |
 | `github.com/jnardiello/GLM-5.3-Flash-FP8-4-DGX-Spark-Switchless` | upstream reference @ `080fe09`; our checkout is detached — adopt upstream changes periodically by diffing against it |
 
 ⚠ Uncommitted right now (workstation only): the `upstream/` vendored tree (untracked),
@@ -61,7 +59,7 @@ local modifications listed above.
 ## Everyday commands (from the workstation checkout)
 
 ```sh
-cd /mnt/c/Users/sdrew/code/github.com/taoofshawn/spark-recipes/glm-v53-flash-4x-noswitch/upstream
+cd <repo>/glm-v53-flash-4x-noswitch/upstream   # <repo> = the spark-recipes checkout (WSL: /mnt/c/.../spark-recipes)
 
 ./scripts/tp4ctl status          # per-rank container state + endpoint probe
 ./scripts/tp4ctl health          # /health + live smoke chat completion

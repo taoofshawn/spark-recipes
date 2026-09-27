@@ -32,7 +32,7 @@ EOF
 # checkout that has no cluster.env yet.
 case "${1:-}" in -h|--help) usage; exit 0 ;; esac
 
-SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
+SCRIPT_DIR=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
 # NOTE: tp4ctl is SELF-CONTAINED on purpose. scripts/deploy.sh copies this single file to
 # ~/.local/tp4/tp4ctl on every node and scripts/node/tp4-autostart.service.example runs it from there
 # (`ExecStart=.../tp4/tp4ctl up`), where scripts/lib/common.sh does not exist. Never make

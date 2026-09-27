@@ -72,7 +72,7 @@ say gpu_name "$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | 
 say driver "$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null | head -1)"
 say ram_gib "$(awk '/MemTotal:/{printf "%d", $2/1024/1024}' /proc/meminfo 2>/dev/null)"
 say disk_gib "$(df -Pk "$HOME" 2>/dev/null | awk 'NR==2{printf "%d", $4/1024/1024}')"
-if [ -f "$HOME/glm53-flash-fp8-zai/config.json" ]; then say default_model_present yes; else say default_model_present no; fi
+if [ -f "$HOME/.cache/huggingface/hub/models--zai-org--GLM-5.3-Flash/snapshots/690b705278a3a58e538fcb37c2ca8b5f9511213c/config.json" ]; then say default_model_present yes; else say default_model_present no; fi
 if sudo -n -l >/dev/null 2>&1; then sudo_n=available; else sudo_n=unavailable; fi
 say sudo_n "$sudo_n"
 docker_prefix=""

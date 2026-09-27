@@ -89,7 +89,7 @@ RELAY_DEST=operator@192.0.2.23
     for name, bad in {
         "no-parent": delta,
         "e03-only": (E03 / "candidate.env").read_text() + delta,
-        "duplicate": parent + "\nEXTRA_DOCKER_ENV+=' -v $HOME/patches/adaptive_k_scheduler.py:/opt/tp4/adaptive_k_scheduler.py:ro'\n" + delta,
+        "duplicate": parent + "\nEXTRA_DOCKER_ENV+=' -v $HOME/.local/lib/patches/adaptive_k_scheduler.py:/opt/tp4/adaptive_k_scheduler.py:ro'\n" + delta,
         "existing-flag": parent + "\nEXTRA_DOCKER_ENV+=' -e VLLM_ADAPTIVE_K_RESPECT_DRAFT_BUDGET=0'\n" + delta,
     }.items():
         (root / "bad.env").write_text(bad)

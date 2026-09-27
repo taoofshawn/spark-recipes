@@ -275,7 +275,7 @@ prepare_remote() {
   dst_host="${HOSTS[$r]}"
   marker="$MODEL_DIR_RAW/$MARKER_NAME"
   REMOTE_PLAN=$(ssh "${SSH_OPTS[@]}" "$dst_host" \
-    "python3 \$HOME/tp4/scripts/model_manifest.py plan \$HOME/tp4/node/model-manifests/$MODEL_REV.json $MODEL_DIR_RAW") \
+    "python3 \$HOME/.local/tp4/scripts/model_manifest.py plan \$HOME/.local/tp4/node/model-manifests/$MODEL_REV.json $MODEL_DIR_RAW") \
     || return 1
   have_remote=$(ssh "${SSH_OPTS[@]}" "$dst_host" "cat $marker 2>/dev/null" || true)
   installed_remote=$(ssh "${SSH_OPTS[@]}" "$dst_host" \
@@ -340,7 +340,7 @@ verify_remote_delta() {
   local host="$1"
   if [ -n "$REMOTE_PATHS" ]; then
     printf '%s\n' "$REMOTE_PATHS" | ssh "${SSH_OPTS[@]}" "$host" \
-      "python3 \$HOME/tp4/scripts/model_manifest.py verify \$HOME/tp4/node/model-manifests/$MODEL_REV.json $MODEL_DIR_RAW --paths-from-stdin" \
+      "python3 \$HOME/.local/tp4/scripts/model_manifest.py verify \$HOME/.local/tp4/node/model-manifests/$MODEL_REV.json $MODEL_DIR_RAW --paths-from-stdin" \
       || return 1
   fi
   log "$host · complete manifest verified (unchanged files before transfer; delta after it)"

@@ -249,6 +249,15 @@ Versions and releases are created only at the owner's explicit request.
 
 ### Changed
 
+- Site path relocation (shawndo 4x site): the deployed runtime directory moved from
+  `$HOME/tp4` to `$HOME/.local/tp4`, the patched NCCL library from `~/nccl-patched` to
+  `~/.local/lib/nccl-patched`, and the vLLM/JIT cache from `~/vllm-cache` to
+  `~/.cache/tp4-vllm-cache`. The model and drafter now live in the default HF cache
+  (`~/.cache/huggingface/hub/models--zai-org--GLM-5.3-Flash/snapshots/690b705…` and
+  `models--incoai--GLM-5.3-Flash-DFlash2/snapshots/bf582e4e…`), so plain
+  `hf download <repo> --revision <rev>` verifies them in place. All path references in
+  `scripts/`, `cluster.env` and `cluster.env.example` follow; the user's home keeps no
+  recipe-owned directories. This is a documented site modification (research.md §2 #5).
 - CREDITS, the README prerequisites, installation step 8 and the production recipe now
   link SparkCache and SparkRing SIRCL directly and state their Apache-2.0 licenses. They
   replace the earlier "no license notice" wording, which described only the archived copies.

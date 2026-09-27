@@ -62,7 +62,7 @@ done
 
 # Site configuration is needed for installation, but not for displaying help.
 tp4_load_env "$REPO" --require
-: "${NCCL_DIR:?set NCCL_DIR in cluster.env (e.g. '\$HOME/nccl-patched')}"
+: "${NCCL_DIR:?set NCCL_DIR in cluster.env (e.g. '\$HOME/.local/lib/nccl-patched')}"
 : "${NODES:?set NODES in cluster.env (the ssh aliases, rank order)}"
 read -r -a _nodes <<<"$NODES"
 if [ -z "$FROM" ]; then

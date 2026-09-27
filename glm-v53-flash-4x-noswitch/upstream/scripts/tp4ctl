@@ -34,7 +34,7 @@ case "${1:-}" in -h|--help) usage; exit 0 ;; esac
 
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 # NOTE: tp4ctl is SELF-CONTAINED on purpose. scripts/deploy.sh copies this single file to
-# ~/tp4/tp4ctl on every node and scripts/node/tp4-autostart.service.example runs it from there
+# ~/.local/tp4/tp4ctl on every node and scripts/node/tp4-autostart.service.example runs it from there
 # (`ExecStart=.../tp4/tp4ctl up`), where scripts/lib/common.sh does not exist. Never make
 # it source that library — the same rule the launcher and the flusher follow.
 #
@@ -140,9 +140,9 @@ NNODES=${#HOSTS[@]}
 SSH_OPTS=(-o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10)
 # The tilde stays literal on purpose: the remote shell expands it over ssh.
 # shellcheck disable=SC2088
-REMOTE_DIR="~/tp4"
+REMOTE_DIR="~/.local/tp4"
 # systemd-run wants an absolute ExecStart: $HOME is expanded by the remote shell.
-REMOTE_FLUSHER='$HOME/tp4/flusher-unconditional.sh'
+REMOTE_FLUSHER='$HOME/.local/tp4/flusher-unconditional.sh'
 
 # macOS has no timeout(1): without the binary the guard degrades instead of breaking.
 if command -v timeout >/dev/null 2>&1; then TIMEOUT_BIN=timeout

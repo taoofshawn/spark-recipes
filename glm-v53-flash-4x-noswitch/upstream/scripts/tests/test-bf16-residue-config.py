@@ -401,7 +401,7 @@ RELAY_DEST=operator@192.0.2.23
 
             bad = {
                 "on-c5": e03 + c5 + "\n" + delta,
-                "duplicate-hook": e03 + "EXTRA_DOCKER_ENV+=' -v $HOME/tp4/overrides/vllm/models/glm5next/nvidia/e20_kda_w8a16.py:/usr/local/lib/python3.12/dist-packages/vllm/models/glm5next/nvidia/e20_kda_w8a16.py:ro'\n" + delta,
+                "duplicate-hook": e03 + "EXTRA_DOCKER_ENV+=' -v $HOME/.local/tp4/overrides/vllm/models/glm5next/nvidia/e20_kda_w8a16.py:/usr/local/lib/python3.12/dist-packages/vllm/models/glm5next/nvidia/e20_kda_w8a16.py:ro'\n" + delta,
                 "flag-present": e03 + "EXTRA_DOCKER_ENV+=' -e VLLM_E21_BF16_RESIDUE_W8A16=0'\n" + delta,
                 "residue-present": e03 + "EXTRA_DOCKER_ENV+=' -v $HOME/x/e21_bf16_residue.py:/tmp/e21_bf16_residue.py:ro'\n" + delta,
                 "kv-changed": e03 + 'EXTRA_VLLM_ARGS="${EXTRA_VLLM_ARGS/--kv-cache-memory-bytes=16106127360/--kv-cache-memory-bytes=12884901888}"\n' + delta,

@@ -34,11 +34,11 @@ set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 PARENT=$(cd "$HERE/.." && pwd)
-# On the node the launcher sits in ~/tp4/, next to cluster.env; in the repo it sits in
+# On the node the launcher sits in ~/.local/tp4/, next to cluster.env; in the repo it sits in
 # scripts/launcher/, two levels below it. ENV_DIR is where the env files are, so TP4_DRY_RUN can be
 # exercised from a checkout. On a node the first branch always wins: no behaviour change.
 # The fallback is restricted to a checkout (the script sits in scripts/launcher/): on a node
-# ~/tp4/cluster.env must exist, and a missing one has to fail loudly instead of silently
+# ~/.local/tp4/cluster.env must exist, and a missing one has to fail loudly instead of silently
 # picking up $HOME/cluster.env.
 if [ -f "$HERE/cluster.env" ]; then
   ENV_DIR=$HERE

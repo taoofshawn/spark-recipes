@@ -203,17 +203,17 @@ def identity():
 before=identity()
 
 base_files=[
-    ("$HOME/tp4/cluster.env",True,True),
-    ("$HOME/tp4/"+p["launcher"],True,True),
-    ("$HOME/tp4/launch-glm53-tp4.sh",True,False),
-    ("$HOME/tp4/launch-glm53-tp4-f0-20260906.sh",True,False),
-    ("$HOME/tp4/tp4ctl",True,True),
-    ("$HOME/tp4/tp4ctl-e04-window-6cb6f07c",True,False),
-    ("$HOME/tp4/flusher-unconditional.sh",True,False),
-    ("$HOME/tp4/scripts/lib/common.sh",True,False),
-    ("$HOME/tp4/scripts/render_chat_template.py",True,False),
-    ("$HOME/patches/adaptive_k_scheduler.py",True,True),
-    ("$HOME/patches/sparse_attn_indexer_kpool.py",True,True),
+    ("$HOME/.local/tp4/cluster.env",True,True),
+    ("$HOME/.local/tp4/"+p["launcher"],True,True),
+    ("$HOME/.local/tp4/launch-glm53-tp4.sh",True,False),
+    ("$HOME/.local/tp4/launch-glm53-tp4-f0-20260906.sh",True,False),
+    ("$HOME/.local/tp4/tp4ctl",True,True),
+    ("$HOME/.local/tp4/tp4ctl-e04-window-6cb6f07c",True,False),
+    ("$HOME/.local/tp4/flusher-unconditional.sh",True,False),
+    ("$HOME/.local/tp4/scripts/lib/common.sh",True,False),
+    ("$HOME/.local/tp4/scripts/render_chat_template.py",True,False),
+    ("$HOME/.local/lib/patches/adaptive_k_scheduler.py",True,True),
+    ("$HOME/.local/lib/patches/sparse_attn_indexer_kpool.py",True,True),
     (p["moe_path"],True,True),
     (p["model_dir"]+"/.glm53-fp8-synced",True,True),
     (p["model_dir"]+"/config.json",True,True),
@@ -789,7 +789,7 @@ def capture(args: argparse.Namespace, collector: Callable = collect_rank) -> int
             problems.extend(f"rank {rank}: {item}" for item in value.get("problems") or [])
             if value.get("capture_status") != "complete": problems.append(f"rank {rank}: capture incomplete")
         rank0_cluster = next((item for item in ranks[0].get("files") or []
-                              if item.get("requested") == "$HOME/tp4/cluster.env"), {})
+                              if item.get("requested") == "$HOME/.local/tp4/cluster.env"), {})
         rank0_path = Path(rank0_cluster.get("path", ""))
         if len(rank0_path.parts) < 4 or rank0_path.name != "cluster.env":
             problems.append("rank 0: cannot render private autostart controller path")
@@ -1108,7 +1108,7 @@ def plan_restore(args: argparse.Namespace, collector: Callable = collect_rank) -
         for rank in range(4):
             receipt = json.loads((archive / f"ranks/rank-{rank}/receipt.json").read_text())
             installed = next((item for item in receipt.get("files") or []
-                              if item.get("requested") == "$HOME/tp4/cluster.env"), {})
+                              if item.get("requested") == "$HOME/.local/tp4/cluster.env"), {})
             rank_homes.append(str(Path(installed.get("path", "/missing/tp4/cluster.env")).parent.parent))
     deploy_user = Path(rank_homes[0]).name if rank_homes else "<unresolved>"
     ssh_targets = recipe.get("hosts", "").split()

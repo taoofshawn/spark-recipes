@@ -1,7 +1,7 @@
 # Host controls
 
 `tp4-iommu.sh` manages the host IOMMU setting outside the container.
-`scripts/deploy-host.sh` copies it to `~/tp4/host/` with SHA-256 and shell-syntax
+`scripts/deploy-host.sh` copies it to `~/.local/tp4/host/` with SHA-256 and shell-syntax
 verification. It never reboots a node.
 
 ```sh

@@ -13,7 +13,7 @@ arrays. Callers set `TP4_LOG_TAG` before sourcing the file.
 
 Do not source this library from files deployed as self-contained node entry points.
 `tp4ctl`, the launcher, flusher, autostart target, and host scripts carry their own
-minimal guards because they may run without `~/tp4/scripts/lib/common.sh`.
+minimal guards because they may run without `~/.local/tp4/scripts/lib/common.sh`.
 
 Configuration and overlay rules are in
 [`docs/operations.md`](../../docs/operations.md).

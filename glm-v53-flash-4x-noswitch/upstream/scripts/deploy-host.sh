@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Deploy the HOST assets (things that live outside ~/tp4 and outside the container) to
+# Deploy the HOST assets (things that live outside ~/.local/tp4 and outside the container) to
 # every node in NODES: the host tuning scripts, the sysctl drop-in and the grub drop-ins.
 # Sibling of scripts/deploy.sh, same contract: it only copies and verifies (sha256 +
 # remote `bash -n`), it never touches a running container and it NEVER reboots a node.
@@ -17,7 +17,7 @@ set -euo pipefail
 # deliberately does not perform.
 #
 # The managed /etc set (--etc, on by default) travels the same way: staged in
-# ~/tp4/host/, installed with `sudo -n install` and verified by sha256 against the repo
+# ~/.local/tp4/host/, installed with `sudo -n install` and verified by sha256 against the repo
 # source. It stays ADDITIVE: this script never runs `netplan apply`, `sysctl --system` or
 # `systemctl restart/enable` — scripts/bootstrap-node.sh owns activation.
 #
@@ -81,7 +81,7 @@ $USAGE
                    (--status is read-only, requires --no-push, and supports only
                    tp4-iommu.sh; other host-script status paths may mutate local state)
 
-Managed files: scripts/node/host/*.sh -> ~/tp4/host/, scripts/node/etc/common/{98-tp4-fabric.conf,
+Managed files: scripts/node/host/*.sh -> ~/.local/tp4/host/, scripts/node/etc/common/{98-tp4-fabric.conf,
 99-tp4-vm.conf,tp4-fabric-iptables.sh,tp4-fabric-iptables.service}, the per-node netplan
 scripts/node/etc/<alias>/{40-cx7.yaml,tp4-fabric-iptables.env}, /etc/sudoers.d/99-tp4-nopasswd rendered from
 scripts/node/etc/common/99-tp4-nopasswd.example, and scripts/node/etc/default/grub.d/*.cfg.
@@ -220,7 +220,7 @@ fi
 # Rendered sudoers files live here for the duration of the run only (0700).
 TMPD=$(mktemp -d "${TMPDIR:-/tmp}/tp4-deploy-host.XXXXXX")
 
-# A staged copy in ~/tp4/host/ and a not-yet-moved /etc/<dir>/.<name>.new must never
+# A staged copy in ~/.local/tp4/host/ and a not-yet-moved /etc/<dir>/.<name>.new must never
 # survive a failure or an interrupt: they are tracked here and removed by clear_stage,
 # which the EXIT trap also calls.
 STAGE_HOST=""; STAGE_PATH=""; NEW_HOST=""; NEW_PATH=""
@@ -385,17 +385,17 @@ check_file() {   # $1 src, $2 remote path, $3 label, [$4 expected mode | "x"], [
   esac
 }
 
-# /etc drop-ins: staged in ~/tp4/host/, installed as a sibling .<name>.new (which netplan,
+# /etc drop-ins: staged in ~/.local/tp4/host/, installed as a sibling .<name>.new (which netplan,
 # sysctl, systemd, grub and sudo all ignore), validated there, then moved into place with
 # an atomic `mv -f`. Nothing is ever written over a live /etc file in place: a truncated
 # sudoers or netplan would lock sudo out or take the fabric down.
 install_etc() {   # $1 src, $2 dst, $3 mode, [$4 = visudo]
   local src=$1 dst=$2 mode=$3 validate=${4:-} base stage new
   base=${dst##*/}
-  stage="\$HOME/tp4/host/.stage-$base"
+  stage="\$HOME/.local/tp4/host/.stage-$base"
   new="${dst%/*}/.$base.new"
   STAGE_HOST=$host; STAGE_PATH=$stage; NEW_HOST=$host; NEW_PATH=""
-  if ! scp -p "${SSH_OPTS[@]}" -q "$src" "$host:~/tp4/host/.stage-$base"; then
+  if ! scp -p "${SSH_OPTS[@]}" -q "$src" "$host:~/.local/tp4/host/.stage-$base"; then
     warn "$host: scp failed for $dst"; state FAIL "$host" "$dst" "scp"; fail; clear_stage; return
   fi
   NEW_PATH=$new
@@ -489,7 +489,7 @@ if [ "$CHECK" = 1 ]; then
     for src in ${HOST_SCRIPTS[@]+"${HOST_SCRIPTS[@]}"}; do
       base=${src##*/}
       # shellcheck disable=SC2088  # the third argument is a display label, not a path
-      check_file "$src" "\$HOME/tp4/host/$base" "~/tp4/host/$base" x
+      check_file "$src" "\$HOME/.local/tp4/host/$base" "~/.local/tp4/host/$base" x
     done
     if [ "$ETC" = 1 ]; then
       etc_phase check
@@ -520,7 +520,7 @@ for host in "${HOSTS[@]}"; do
   log "=== $host ==="
   push_rc=0
 
-  if ! ssh -n "${SSH_OPTS[@]}" "$host" 'mkdir -p $HOME/tp4/host'; then
+  if ! ssh -n "${SSH_OPTS[@]}" "$host" 'mkdir -p $HOME/.local/tp4/host'; then
     warn "$host: unreachable, skipping"
     rc=1
     continue
@@ -528,19 +528,19 @@ for host in "${HOSTS[@]}"; do
 
   for src in ${HOST_SCRIPTS[@]+"${HOST_SCRIPTS[@]}"}; do
     base=${src##*/}
-    if ! scp "${SSH_OPTS[@]}" -q "$src" "$host:~/tp4/host/$base"; then
+    if ! scp "${SSH_OPTS[@]}" -q "$src" "$host:~/.local/tp4/host/$base"; then
       warn "$host: scp failed for scripts/node/host/$base"; rc=1; push_rc=1; continue
     fi
-    ssh -n "${SSH_OPTS[@]}" "$host" "chmod +x \"\$HOME/tp4/host/$base\"" \
+    ssh -n "${SSH_OPTS[@]}" "$host" "chmod +x \"\$HOME/.local/tp4/host/$base\"" \
       || { warn "$host: chmod +x failed for $base"; rc=1; push_rc=1; }
     want=$(sha_of "$src")
-    got=$(ssh -n "${SSH_OPTS[@]}" "$host" "sha256sum \"\$HOME/tp4/host/$base\" | awk '{print \$1}'" || echo MISSING)
+    got=$(ssh -n "${SSH_OPTS[@]}" "$host" "sha256sum \"\$HOME/.local/tp4/host/$base\" | awk '{print \$1}'" || echo MISSING)
     if [ "$want" = "$got" ]; then
       printf '  OK   %-40s %s\n' "tp4/host/$base" "${want:0:12}…"
     else
       printf '  DIFF %-40s want=%s got=%s\n' "tp4/host/$base" "${want:0:12}…" "${got:0:12}…" >&2; rc=1; push_rc=1
     fi
-    if ssh -n "${SSH_OPTS[@]}" "$host" "bash -n \"\$HOME/tp4/host/$base\""; then
+    if ssh -n "${SSH_OPTS[@]}" "$host" "bash -n \"\$HOME/.local/tp4/host/$base\""; then
       printf '  OK   bash -n %s\n' "tp4/host/$base"
     else
       printf '  FAIL bash -n %s\n' "tp4/host/$base" >&2; rc=1; push_rc=1
@@ -576,7 +576,7 @@ done
 # RESULT: line it printed, and rolls a partial --apply back.
 run_host() {   # $1 host, $2 mode; echoes the last RESULT: line, returns the remote code
   local host=$1 mode=$2 out code=0 result
-  out=$(ssh "${SSH_OPTS[@]}" "$host" "\"\$HOME/tp4/host/$RUN_SCRIPT\" $mode" 2>&1) || code=$?
+  out=$(ssh "${SSH_OPTS[@]}" "$host" "\"\$HOME/.local/tp4/host/$RUN_SCRIPT\" $mode" 2>&1) || code=$?
   printf '%s\n' "$out"
   result=$(printf '%s\n' "$out" | grep 'RESULT:' | tail -1)
   RUN_RESULT=${result:-(no RESULT line)}

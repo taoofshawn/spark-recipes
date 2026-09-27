@@ -8,7 +8,7 @@ pkill -f 'fetch-fp8-weights.sh$' 2>/dev/null || true
 sleep 1
 pgrep -fa fetch-fp8-weights | grep -v pgrep || echo "no fetch running"
 
-cd ~/tp4
+cd ~/.local/tp4
 nohup env \
   HF_BIN="$HOME/.hfenv/bin/hf" \
   TP4_HOSTS="sdrew@10.69.42.170 sdrew@10.69.42.171 sdrew@10.69.42.172 sdrew@10.69.42.173" \

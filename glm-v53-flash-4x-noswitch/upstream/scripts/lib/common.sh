@@ -4,7 +4,7 @@
 #
 # Most node-side runtime files stay self-contained. The operator-run
 # fetch-fp8-weights.sh is the exception: deploy.sh installs it together with this library
-# under ~/tp4/scripts. The controller, launcher, flusher, host and /etc assets never source it.
+# under ~/.local/tp4/scripts. The controller, launcher, flusher, host and /etc assets never source it.
 #
 # Contract: set TP4_LOG_TAG (e.g. TP4_LOG_TAG='[deploy]') BEFORE sourcing, so log/warn/die
 # carry that script's own prefix. Callers that need a different exit code (bootstrap-node.sh)

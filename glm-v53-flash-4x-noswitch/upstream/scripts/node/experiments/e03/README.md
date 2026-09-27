@@ -51,7 +51,7 @@ return before stopping. Complete the coordinated `down`, then start the followin
 on all four nodes concurrently, replacing `<rank>` with 0 through 3:
 
 ```sh
-python3 "$HOME/tp4/experiments/e03/gpu-launch.py" <rank>
+python3 "$HOME/.local/tp4/experiments/e03/gpu-launch.py" <rank>
 ```
 
 This derives networking, NCCL and mounts from the native launcher, refuses an active

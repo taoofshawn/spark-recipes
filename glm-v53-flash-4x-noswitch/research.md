@@ -20,9 +20,9 @@ the authority on how.
 
 **Exception to the repo's usual rule.** For every *other* recipe, `upstream/` is a
 pristine pinned mirror and the recipe dir is the customization layer. **This recipe
-is different**: its `upstream/` is a *detached live checkout* that carries four
+is different**: its `upstream/` is a *detached live checkout* that carries five
 deliberate site modifications. When re-syncing against a newer jnardiello commit
-(`git diff 080fe09..<new>` or re-vendoring), these four files must be **kept
+(`git diff 080fe09..<new>` or re-vendoring), these files must be **kept
 ours** — merge upstream's structural changes if any, but never take the upstream
 version wholesale:
 
@@ -66,6 +66,23 @@ their fix handles the cluster.env clobber the same way.)
 The dated section `## 2026-09-26 — shawndo 4x DGX Spark site` at the bottom is ours.
 On update: keep our site section(s), take upstream's new entries above it.
 
+### 2.5 Site path relocation (2026-09-27) — mechanical, applies across `scripts/`
+
+This site keeps no runtime directories in `$HOME`: the deployed runtime lives at
+`$HOME/.local/tp4` (upstream default: `~/tp4`), the patched NCCL at
+`$HOME/.local/lib/nccl-patched` (upstream: `~/nccl-patched`), the vLLM/JIT cache at
+`$HOME/.cache/tp4-vllm-cache` (upstream: `~/vllm-cache`), and the model/drafter
+weights live inside the default HF cache
+(`~/.cache/huggingface/hub/models--zai-org--GLM-5.3-Flash/snapshots/690b705278a3…` /
+`~/.cache/huggingface/hub/models--incoai--GLM-5.3-Flash-DFlash2/snapshots/bf582e4ea…`,
+upstream: flat `~/glm53-*-…` dirs). These are literal rewrites of the `~/tp4`,
+`$HOME/patches/`, `$HOME/glm53-flash-fp8-zai`, `$HOME/glm53-dflash2-draft`,
+`$HOME/nccl-patched` and `$HOME/vllm-cache` strings across `upstream/scripts/**`,
+`upstream/cluster.env(.example)` and `noswitch-prep/cluster.env` (48 files). On an
+upstream update, any NEW occurrences of the upstream paths in adopted files must be
+rewritten the same way; `grep -rnE '\$HOME/tp4|~/tp4|glm53-flash-fp8-zai'` must
+return nothing. `tp4ctl` is on the node PATH via `~/.local/bin/tp4ctl → ~/.local/tp4/tp4ctl`.
+
 ## 3. Files outside `upstream/` an update must not touch
 
 All of `noswitch-prep/` is site-owned, not upstream-owned:
@@ -81,7 +98,7 @@ All of `noswitch-prep/` is site-owned, not upstream-owned:
 
 ## 4. Update procedure (the `update-recipe` loop applied to this recipe)
 
-1. **Snapshot**: note the pin (`080fe09`), the 4 mods (§2), current branch
+1. **Snapshot**: note the pin (`080fe09`), the 5 mods (§2), current branch
    (`glm-v53-flash-4x-noswitch` — stay on it; this recipe's work never merges to
    `main` without the user), and the served identity (E29, `check-f0.py` default).
 2. **Sources**: jnardiello repo commits/PRs/issues; NVIDIA forum (categories 721/723)
@@ -89,7 +106,8 @@ All of `noswitch-prep/` is site-owned, not upstream-owned:
    date (this file's changelog dates are the last-review markers).
 3. **Diff**: `git ls-remote` the upstream repo; diff `080fe09..HEAD`. Classify each
    change: adoptable (new knobs, fixes), inapplicable (their cluster's site values),
-   or conflicting with §2/§3 (keep ours).
+   or conflicting with §2/§3 (keep ours) — §2.5 paths included: re-apply the path
+   rewrite to any newly adopted file referencing the old locations.
 4. **Adopt surgically**: apply upstream changes to `upstream/` only where they are
    genuinely upstream (code, docs, third_party, reference recipes). Re-verify the
    4 mods survived. Recipe-**site** changes belong in `noswitch-prep/` or this
@@ -109,6 +127,21 @@ All of `noswitch-prep/` is site-owned, not upstream-owned:
    its own documented flow — see `build-record.md` and upstream docs.
 
 ## 5. Changelog
+
+- **2026-09-27 — Home-directory cleanup: runtime relocated out of `$HOME` (mod §2.5).**
+  All recipe-owned runtime assets moved out of the node home dirs: `~/tp4` →
+  `~/.local/tp4` (deployed runtime; on PATH via `~/.local/bin/tp4ctl`), `~/nccl-patched`
+  → `~/.local/lib/nccl-patched`, `~/vllm-cache` → `~/.cache/tp4-vllm-cache`, weights →
+  `~/.cache/huggingface/hub/models--zai-org--GLM-5.3-Flash/snapshots/690b705278a3…`
+  (converted in place from the flat `--local-dir` download into proper HF cache layout:
+  blobs + `snapshots/<rev>` symlinks, `hf download` now only verifies) and the drafter
+  repointed to the already-cached
+  `models--incoai--GLM-5.3-Flash-DFlash2/snapshots/bf582e4ea…` (identical pinned
+  revision; flat draft copy deleted). 48 files in `upstream/` + the site mirror had
+  their path literals rewritten; `./scripts/check.sh` PASS. E03 benchmark artifacts and
+  the one-off bench scripts moved into `noswitch-prep/benchmarks/` / `bench-scripts/`;
+  scratch logs, `~/sparkinit`, stale duplicates and the 6d14 NCCL build tree deleted.
+  Paths deployed to the nodes and the repo updated together before bring-up.
 
 - **2026-09-27 — First silent TP-step hang (root cause unknown), recovered by full restart.**
   ~13:45 node time: ~25 min after a normal request completed (SparkCache committed clean,

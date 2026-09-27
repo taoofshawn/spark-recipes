@@ -24,6 +24,11 @@ Full details and the update procedure: `../research.md` §2.
    `PATCH_FILE` after `tp4_load_env` (cluster.env's PATCH_FILE clobbers it).
 4. `CHANGELOG.md` — dated site section `2026-09-26 — shawndo 4x DGX Spark site`
    at the bottom.
+5. `scripts/**`, `cluster.env`, `cluster.env.example` — SITE PATHS: `$HOME/tp4` →
+   `$HOME/.local/tp4`, `~/nccl-patched` → `$HOME/.local/lib/nccl-patched`,
+   `~/vllm-cache` → `$HOME/.cache/tp4-vllm-cache`, weights → HF-cache snapshot paths
+   (details: `../research.md` §2.5). Rewrites are mechanical; re-apply to any file an
+   update touches that references the old paths.
 
 ## Refresh procedure
 

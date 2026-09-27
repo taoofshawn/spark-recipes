@@ -10,8 +10,8 @@ set -euo pipefail
 #   rank<N>.env   SPARK_TP4_PEER0/1, SPARK_TP4_DEVICE0/1 and SPARK_TP4_GID0/1 of rank N
 #   SHA256SUMS    every file the entrypoint mounts, checked by it before `vllm serve`
 #
-# scripts/deploy.sh copies <out>/site/* to ~/tp4/sircl/runtime/ and SHA256SUMS.site to
-# ~/tp4/sircl/. Slot 0 is the first fabric port (f0) and slot 1 the second (f1); a peer's
+# scripts/deploy.sh copies <out>/site/* to ~/.local/tp4/sircl/runtime/ and SHA256SUMS.site to
+# ~/.local/tp4/sircl/. Slot 0 is the first fabric port (f0) and slot 1 the second (f1); a peer's
 # slot follows the ring plan of scripts/render-netplan.sh: odd links on f0, even on f1.
 #
 # INPUTS (cluster.env): FABRIC_TARGETS, NCCL_IB_HCA[_BY_RANK], NCCL_IB_GID_INDEX[_BY_RANK],

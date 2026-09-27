@@ -225,7 +225,7 @@ fi
 say rdma "$(dpkg-query -W -f='${Version}' rdma-core 2>/dev/null)"
 say holds "$(apt-mark showhold 2>/dev/null | tr '\n' ' ')"
 say mgmt "$(ip -4 -o addr show dev "$P_MGMT_IF" 2>/dev/null | awk '{print $4}' | tr '\n' ' ')"
-gid_checker="$HOME/tp4/scripts/nccl_gid_check.py"
+gid_checker="$HOME/.local/tp4/scripts/nccl_gid_check.py"
 gid_checker_sha=$(sha256sum "$gid_checker" 2>/dev/null | awk '{print $1}')
 if [ "$gid_checker_sha" != "$P_GID_CHECK_SHA" ]; then
   say rdma_selection "GID checker missing or drifted"
@@ -263,7 +263,7 @@ done
 say nics "${bad:-ok} seen=$seen"
 if ss -ltn 2>/dev/null | grep -q ':22 '; then say sshd ok; else say sshd fail; fi
 say autostart "$(systemctl is-enabled tp4-autostart 2>&1 | tail -1)"
-say iommu "$( [ -x "$HOME/tp4/host/tp4-iommu.sh" ] && "$HOME/tp4/host/tp4-iommu.sh" --status 2>/dev/null | sed -n 's/.*state: //p' || echo no-script )"
+say iommu "$( [ -x "$HOME/.local/tp4/host/tp4-iommu.sh" ] && "$HOME/.local/tp4/host/tp4-iommu.sh" --status 2>/dev/null | sed -n 's/.*state: //p' || echo no-script )"
 shards=0; expect=0
 if [ -d "$MODEL" ]; then
   shards=$(ls "$MODEL"/model-*-of-*.safetensors 2>/dev/null | wc -l | tr -d ' ')
@@ -318,11 +318,11 @@ say psline "$(sudo -n docker ps --filter "name=$P_CONTAINER" --format '{{.Names}
 # SHA256SUMS pins portable files; an optional SHA256SUMS.site pins site-generated files
 # (SIRCL per-rank peer/GID env) and is required for sircl.
 for d in sparkcache sircl; do
-  mf="SHA256SUMS"; [ -f "$HOME/tp4/$d/SHA256SUMS.site" ] && mf="SHA256SUMS SHA256SUMS.site"
-  if [ ! -f "$HOME/tp4/$d/SHA256SUMS" ]; then say "payload_$d" no-manifest
-  elif [ "$d" = sircl ] && [ ! -f "$HOME/tp4/$d/SHA256SUMS.site" ]; then say "payload_$d" no-site-manifest
-  elif (cd "$HOME/tp4/$d" && cat $mf | sha256sum --check --strict --quiet - >/dev/null 2>&1); then say "payload_$d" ok
-  else say "payload_$d" "mismatch:$(cd "$HOME/tp4/$d" && cat $mf | sha256sum --check --strict - 2>/dev/null | grep -vc ': OK$')"; fi
+  mf="SHA256SUMS"; [ -f "$HOME/.local/tp4/$d/SHA256SUMS.site" ] && mf="SHA256SUMS SHA256SUMS.site"
+  if [ ! -f "$HOME/.local/tp4/$d/SHA256SUMS" ]; then say "payload_$d" no-manifest
+  elif [ "$d" = sircl ] && [ ! -f "$HOME/.local/tp4/$d/SHA256SUMS.site" ]; then say "payload_$d" no-site-manifest
+  elif (cd "$HOME/.local/tp4/$d" && cat $mf | sha256sum --check --strict --quiet - >/dev/null 2>&1); then say "payload_$d" ok
+  else say "payload_$d" "mismatch:$(cd "$HOME/.local/tp4/$d" && cat $mf | sha256sum --check --strict - 2>/dev/null | grep -vc ': OK$')"; fi
 done
 REMOTE
 
@@ -588,9 +588,9 @@ check_node() {   # check_node <host> <rank>
       row "$host" "$d payload" SKIP "SPARKCACHE_MODE is not on (${v:-no-manifest})"
     else
       case "$v" in
-        ok) row "$host" "$d payload" PASS "every file in ~/tp4/$d manifests present and unchanged" ;;
-        no-manifest) row "$host" "$d payload" FAIL "~/tp4/$d/SHA256SUMS missing (run scripts/deploy.sh)" ;;
-        no-site-manifest) row "$host" "$d payload" FAIL "~/tp4/$d/SHA256SUMS.site missing (create it in the checkout, then scripts/deploy.sh)" ;;
+        ok) row "$host" "$d payload" PASS "every file in ~/.local/tp4/$d manifests present and unchanged" ;;
+        no-manifest) row "$host" "$d payload" FAIL "~/.local/tp4/$d/SHA256SUMS missing (run scripts/deploy.sh)" ;;
+        no-site-manifest) row "$host" "$d payload" FAIL "~/.local/tp4/$d/SHA256SUMS.site missing (create it in the checkout, then scripts/deploy.sh)" ;;
         *) row "$host" "$d payload" FAIL "${v:-probe failed}: run scripts/deploy.sh (and scripts/sircl-site-files.sh for SIRCL; docs/install-from-zero.md)" ;;
       esac
     fi
@@ -614,7 +614,7 @@ check_node() {   # check_node <host> <rank>
       row "$host" "model manifest" SKIP "MODEL_REV is not pinned"
     else
       out=$(bounded "$MODEL_VERIFY_TIMEOUT" ssh "${SSH_OPTS[@]}" "$host" \
-        "python3 \$HOME/tp4/scripts/model_manifest.py verify \$HOME/tp4/node/model-manifests/$MODEL_REV.json $MODEL_DIR" 2>&1) \
+        "python3 \$HOME/.local/tp4/scripts/model_manifest.py verify \$HOME/.local/tp4/node/model-manifests/$MODEL_REV.json $MODEL_DIR" 2>&1) \
         && rc=0 || rc=$?
       verdict "$host" "model manifest" $rc \
         "$([ "$rc" = 0 ] && echo "$out · full SHA-256" || echo "exit $rc: ${out:-no output}")"

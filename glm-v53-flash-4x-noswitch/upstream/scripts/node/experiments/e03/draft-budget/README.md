@@ -76,7 +76,7 @@ baseline module remains at its original source and hash for rollback.
 
 The existing additive deploy selector includes this directory's Python module,
 manifest and `SHA256SUMS`. Within the newly authorized window, verify its
-`sha256sum -c SHA256SUMS` under `~/tp4/experiments/e03/draft-budget` on every rank
+`sha256sum -c SHA256SUMS` under `~/.local/tp4/experiments/e03/draft-budget` on every rank
 before startup, as well as the unchanged E03 manifest and operator replay payload.
 Deployment of the new defaults selects this module for the next boot; it does not
 prove activation in an already running process.

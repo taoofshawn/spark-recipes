@@ -1,0 +1,23 @@
+[bench] label=before tier=1 out=/home/sdrew/benchmarks/20260919-dflash-before
+[bench] /health 200
+[bench] kv: (EngineCore pid=582) INFO 09-19 10:19:06 [kv_cache_utils.py:2274] GPU KV cache size: 1,867,536 tokens, Maximum concurrency for 1,048,576 tokens per request: 1.78x
+[bench] spec: (APIServer pid=1) INFO 09-19 10:12:50 [api_utils.py:273] non-default args: {'model_tag': '/models/intel-gptq-surgery', 'chat_template': '/models/chat_template_mm.jinja', 'default_chat_template_kwargs': {'enable_thinking': True, 'reasoning_effort': 'high'}, 'enable_auto_tool_choice': True, 'tool_call_parser': 'glm47', 'enable_prompt_tokens_details': True, 'host': '0.0.0.0', 'model': '/models/intel-gptq-surgery', 'trust_remote_code': True, 'max_model_len': 1048576, 'served_model_name': ['glm-5.3-flash'], 'generation_config': 'vllm', 'override_generation_config': {'temperature': 1.0, 'top_p': 0.95}, 'reasoning_parser': 'glm45', 'distributed_executor_backend': 'mp', 'master_addr': '192.168.0.170', 'master_port': 29521, 'nnodes': 2, 'tensor_parallel_size': 2, 'block_size': 2304, 'gpu_memory_utilization': 0.85, 'kv_cache_memory_bytes': 13500000000, 'kv_cache_dtype': 'fp8_e4m3', 'enable_prefix_caching': True, 'prefix_match_unit': 128, 'max_num_batched_tokens': 8192, 'max_num_seqs': 6, 'enable_flashinfer_autotune': False, 'moe_backend': 'marlin', 'speculative_config': {'method': 'dflash', 'model': '/cache/huggingface/hub/models--incoai--GLM-5.3-Flash-DFlash2/snapshots/bf582e4eacc1810f76656d1811693ff6c6737d2a', 'num_speculative_tokens': 7, 'disable_eagle_block_drop': True}}
+[bench] warm-up (3 generations, temp 0)...
+  [c1_prose_short] round 0: agg=65.9 tok/s  (512tok/7.769s)
+  [c1_prose_short] round 1: agg=68.22 tok/s  (512tok/7.505s)
+  [c1_prose_short] round 2: agg=68.3 tok/s  (512tok/7.496s)
+  [c1_code_short] round 0: agg=61.35 tok/s  (512tok/8.346s)
+  [c1_code_short] round 1: agg=68.86 tok/s  (512tok/7.435s)
+  [c1_code_short] round 2: agg=68.72 tok/s  (512tok/7.451s)
+  [c1_prose_medium] round 0: agg=22.74 tok/s  (256tok/11.26s)
+  [c1_prose_medium] round 1: agg=62.17 tok/s  (256tok/4.118s)
+  [c1_prose_long] round 0: agg=10.37 tok/s  (256tok/24.675s)
+  [c1_prose_long] round 1: agg=50.08 tok/s  (256tok/5.112s)
+  [c4_prose_short] round 0: agg=193.99 tok/s  (384tok/7.918s, 384tok/7.764s, 384tok/7.918s, 384tok/7.917s)
+  [c4_prose_short] round 1: agg=193.45 tok/s  (384tok/7.94s, 384tok/7.94s, 384tok/7.939s, 384tok/7.784s)
+  [c4_prose_short] round 2: agg=202.56 tok/s  (384tok/7.583s, 384tok/7.583s, 384tok/7.582s, 384tok/7.582s)
+  [pmu_replay_long] round 0: agg=12.78 tok/s  (8tok/0.626s)
+[bench] MemAvailable: 2.04 GiB
+[bench] spec-decode acceptance (delta): 0.9799
+[bench] PMU replay: cached_tokens=43904 / expected≈43904 -> PASS
+[bench] done -> /home/sdrew/benchmarks/20260919-dflash-before

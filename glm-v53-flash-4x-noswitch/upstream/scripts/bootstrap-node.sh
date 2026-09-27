@@ -37,13 +37,13 @@ set -euo pipefail
 #                 a second --apply.
 #   3 /etc        the managed set, pushed by `scripts/deploy-host.sh --etc --host <alias>`, which
 #                 installs (additively, sha256-verified, no activation): the host scripts into
-#                 ~/tp4/host/, the grub drop-ins into /etc/default/grub.d/, the per-node netplan
+#                 ~/.local/tp4/host/, the grub drop-ins into /etc/default/grub.d/, the per-node netplan
 #                 into /etc/netplan/40-cx7.yaml (0600), its rank-local interface environment into
 #                 /etc/default/tp4-fabric-iptables (0644), 98-tp4-fabric.conf and 99-tp4-vm.conf
 #                 into /etc/sysctl.d/ (0644), tp4-fabric-iptables.sh into /usr/local/sbin/ (0755),
 #                 its unit into /etc/systemd/system/ (0644) and the rendered sudoers into
 #                 /etc/sudoers.d/99-tp4-nopasswd (0440, visudo -cf on the node first). It stages
-#                 through ~/tp4/host/ and needs passwordless sudo.
+#                 through ~/.local/tp4/host/ and needs passwordless sudo.
 #                 Activation (`netplan apply`, `sysctl --system`, and daemon-reload plus
 #                 enable/restart of tp4-fabric-iptables) belongs to THIS script, happens only under --apply, is
 #                 announced as DISRUPTIVE, and is GATED: every /etc destination must match the
@@ -52,7 +52,7 @@ set -euo pipefail
 #                 all four nodes (rank 0 INCLUDED, deduplicated on the key blob), the four mgmt
 #                 host keys in rank 0's known_hosts, BatchMode login, and the same login user on
 #                 every node (the autostart unit hard-codes one user for all four ranks).
-#   5 layout      ~/tp4 ~/tp4/host ~/tp4/moe-configs ~/patches ~/nccl-patched ~/vllm-cache
+#   5 layout      ~/.local/tp4 ~/.local/tp4/host ~/.local/tp4/moe-configs ~/patches ~/nccl-patched ~/vllm-cache
 #   6 autostart   rank 0 only: scripts/node/tp4-autostart.service.example rendered into
 #                 /etc/systemd/system/tp4-autostart.service, daemon-reload, enable (NOT start).
 #
@@ -560,7 +560,7 @@ phase_etc() {
     got=$(printf '%s\n' "$out" | awk -v f="$GRUB_DST" '$2 == f { print $1; exit }')
     if [ "$sentinel" = yes ]; then
       add FAIL etc "$GRUB_DST (reverted on this node)" etc-zz-tp4-perf.cfg \
-        "ssh $ALIAS \"\$HOME/tp4/host/tp4-iommu.sh --apply\"  # clears the sentinel and runs update-grub; needs an OWNER-DRIVEN reboot"
+        "ssh $ALIAS \"\$HOME/.local/tp4/host/tp4-iommu.sh --apply\"  # clears the sentinel and runs update-grub; needs an OWNER-DRIVEN reboot"
     elif [ "$want" = "$got" ]; then
       add PASS etc "$GRUB_DST" etc-zz-tp4-perf.cfg -
     else
@@ -763,7 +763,7 @@ echo "missing=$m"
 '
   if ! cap "$ALIAS" "$remote"; then
     add FAIL layout "state unreadable" layout-dirs \
-      "ssh $ALIAS \"ls -d ~/tp4\"  # probe failed: $(cap_diag)"
+      "ssh $ALIAS \"ls -d ~/.local/tp4\"  # probe failed: $(cap_diag)"
     return
   fi
   missing=$(printf '%s\n' "$CAP_OUT" | awk 'index($0, "missing=") == 1 { print substr($0, 9); exit }')

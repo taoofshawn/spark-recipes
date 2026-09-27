@@ -33,34 +33,34 @@ reference's later capture.
 
 | Repository source | Node destination | Owner |
 | --- | --- | --- |
-| launcher, controller, flusher, model and NCCL GID helpers | `~/tp4/` and `~/tp4/scripts/` | `scripts/deploy.sh` |
+| launcher, controller, flusher, model and NCCL GID helpers | `~/.local/tp4/` and `~/.local/tp4/scripts/` | `scripts/deploy.sh` |
 | `scripts/node/patches/*.py` except tests | `~/patches/` | `scripts/deploy.sh` |
 | sparse-attention patch | `~/patches/sparse_attn_indexer_kpool.py` | `scripts/deploy.sh` |
-| `scripts/node/moe-configs/*.json` | `~/tp4/moe-configs/` | `scripts/deploy.sh` |
-| `scripts/node/model-manifests/*.json` | `~/tp4/node/model-manifests/` | `scripts/deploy.sh` |
-| `scripts/node/host/*.sh` | `~/tp4/host/` | `scripts/deploy-host.sh` |
+| `scripts/node/moe-configs/*.json` | `~/.local/tp4/moe-configs/` | `scripts/deploy.sh` |
+| `scripts/node/model-manifests/*.json` | `~/.local/tp4/node/model-manifests/` | `scripts/deploy.sh` |
+| `scripts/node/host/*.sh` | `~/.local/tp4/host/` | `scripts/deploy-host.sh` |
 | generated `scripts/node/etc/<alias>/40-cx7.yaml` | `/etc/netplan/40-cx7.yaml` | bootstrap/deploy-host |
 | generated fabric iptables environment | `/etc/default/tp4-fabric-iptables` | bootstrap/deploy-host |
 | shared `scripts/node/etc/common/` files | `/etc/sysctl.d/`, `/etc/sudoers.d/`, `/usr/local/sbin/`, `/etc/systemd/system/` | bootstrap/deploy-host |
 | GRUB drop-in | `/etc/default/grub.d/zz-tp4-perf.cfg` | bootstrap/deploy-host and `tp4-iommu.sh` |
 | built NCCL library | `$NCCL_DIR/libnccl.so.2` | `scripts/node/nccl/install-nccl.sh` |
-| E27c reference overlay selected through `TP4_ENV` (immediate rollback) | `~/tp4/scripts/node/reference/baseline-20260925-e27c.env` | `scripts/deploy.sh` |
-| E27 reference overlay selected through `TP4_ENV` | `~/tp4/scripts/node/reference/baseline-20260924-e27.env` | `scripts/deploy.sh` |
-| E22b reference overlay selected through `TP4_ENV` | `~/tp4/scripts/node/reference/baseline-20260924-e22b.env` | `scripts/deploy.sh` |
-| E21 reference overlay selected through `TP4_ENV` | `~/tp4/scripts/node/reference/baseline-20260923-e21.env` | `scripts/deploy.sh` |
-| E03 reference overlay selected through `TP4_ENV` | `~/tp4/scripts/node/reference/baseline-20260919-e03.env` | `scripts/deploy.sh` |
-| September 19 reference overlay selected through `TP4_ENV` | `~/tp4/scripts/node/reference/baseline-20260919.env` | `scripts/deploy.sh` |
-| September 18 reference overlay selected through `TP4_ENV` | `~/tp4/scripts/node/reference/baseline-20260918.env` | `scripts/deploy.sh` |
-| `reference/model-20260918.py` and `reference/sparkcache-20260918.json` | `~/tp4/reference/` | `scripts/deploy.sh` |
-| September 11 reference overlay selected through `TP4_ENV` | `~/tp4/scripts/node/reference/f0-20260912.env` | `scripts/deploy.sh` |
-| Frozen `reference/tp4ctl-f0-20260912.sh` controller | `~/tp4/tp4ctl-f0-reference` | `scripts/deploy.sh` |
-| `scripts/node/experiments/e03/` Python, JSON and source manifests | `~/tp4/experiments/e03/` (same relative layout) | `scripts/deploy.sh` |
-| `scripts/node/overrides/**/*.py` | `~/tp4/overrides/…` (same relative layout) | `scripts/deploy.sh` |
-| `scripts/node/sparkcache/kv-transfer-config.json` and `SHA256SUMS` | `~/tp4/sparkcache/` | `scripts/deploy.sh` |
-| `scripts/node/sircl/SHA256SUMS` and the gitignored per-site `SHA256SUMS.site` | `~/tp4/sircl/` | `scripts/deploy.sh` |
-| `third_party/sparkcache/*.py` (current and rollback connectors, encoder) | `~/tp4/sparkcache/` | `scripts/deploy.sh`; pinned by configuration and manifest |
-| `third_party/sparkring-sircl/{bundle,runtime}/*` and `scripts/sircl_gid_check.py` | `~/tp4/sircl/{bundle,runtime}/` | `scripts/deploy.sh`; verified by `verify-node.sh` and the launcher |
-| generated `scripts/node/sircl/site/*` (ignored) | `~/tp4/sircl/runtime/` | `scripts/deploy.sh` after [`scripts/sircl-site-files.sh`](../../docs/install-from-zero.md#8-prepare-the-sparkcache-and-sircl-payload) |
+| E27c reference overlay selected through `TP4_ENV` (immediate rollback) | `~/.local/tp4/scripts/node/reference/baseline-20260925-e27c.env` | `scripts/deploy.sh` |
+| E27 reference overlay selected through `TP4_ENV` | `~/.local/tp4/scripts/node/reference/baseline-20260924-e27.env` | `scripts/deploy.sh` |
+| E22b reference overlay selected through `TP4_ENV` | `~/.local/tp4/scripts/node/reference/baseline-20260924-e22b.env` | `scripts/deploy.sh` |
+| E21 reference overlay selected through `TP4_ENV` | `~/.local/tp4/scripts/node/reference/baseline-20260923-e21.env` | `scripts/deploy.sh` |
+| E03 reference overlay selected through `TP4_ENV` | `~/.local/tp4/scripts/node/reference/baseline-20260919-e03.env` | `scripts/deploy.sh` |
+| September 19 reference overlay selected through `TP4_ENV` | `~/.local/tp4/scripts/node/reference/baseline-20260919.env` | `scripts/deploy.sh` |
+| September 18 reference overlay selected through `TP4_ENV` | `~/.local/tp4/scripts/node/reference/baseline-20260918.env` | `scripts/deploy.sh` |
+| `reference/model-20260918.py` and `reference/sparkcache-20260918.json` | `~/.local/tp4/reference/` | `scripts/deploy.sh` |
+| September 11 reference overlay selected through `TP4_ENV` | `~/.local/tp4/scripts/node/reference/f0-20260912.env` | `scripts/deploy.sh` |
+| Frozen `reference/tp4ctl-f0-20260912.sh` controller | `~/.local/tp4/tp4ctl-f0-reference` | `scripts/deploy.sh` |
+| `scripts/node/experiments/e03/` Python, JSON and source manifests | `~/.local/tp4/experiments/e03/` (same relative layout) | `scripts/deploy.sh` |
+| `scripts/node/overrides/**/*.py` | `~/.local/tp4/overrides/…` (same relative layout) | `scripts/deploy.sh` |
+| `scripts/node/sparkcache/kv-transfer-config.json` and `SHA256SUMS` | `~/.local/tp4/sparkcache/` | `scripts/deploy.sh` |
+| `scripts/node/sircl/SHA256SUMS` and the gitignored per-site `SHA256SUMS.site` | `~/.local/tp4/sircl/` | `scripts/deploy.sh` |
+| `third_party/sparkcache/*.py` (current and rollback connectors, encoder) | `~/.local/tp4/sparkcache/` | `scripts/deploy.sh`; pinned by configuration and manifest |
+| `third_party/sparkring-sircl/{bundle,runtime}/*` and `scripts/sircl_gid_check.py` | `~/.local/tp4/sircl/{bundle,runtime}/` | `scripts/deploy.sh`; verified by `verify-node.sh` and the launcher |
+| generated `scripts/node/sircl/site/*` (ignored) | `~/.local/tp4/sircl/runtime/` | `scripts/deploy.sh` after [`scripts/sircl-site-files.sh`](../../docs/install-from-zero.md#8-prepare-the-sparkcache-and-sircl-payload) |
 
 `scripts/deploy.sh` and `scripts/deploy-host.sh` are additive. They copy and verify
 managed content but do not delete stray files or restart containers. The bootstrap

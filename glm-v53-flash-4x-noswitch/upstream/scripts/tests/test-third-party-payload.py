@@ -64,7 +64,7 @@ class SparkCacheTest(unittest.TestCase):
     def test_default_recipe_selects_vendored_files(self):
         recipe = (REPO / "cluster.env.example").read_text()
         for key in ("CONNECTOR", "ENCODER"):
-            path = re.search(rf"^SPARKCACHE_{key}='\$HOME/tp4/sparkcache/([^']+)'$", recipe, re.M).group(1)
+            path = re.search(rf"^SPARKCACHE_{key}='\$HOME/.local/tp4/sparkcache/([^']+)'$", recipe, re.M).group(1)
             pin = re.search(rf"^SPARKCACHE_{key}_SHA256=([0-9a-f]{{64}})$", recipe, re.M).group(1)
             self.assertEqual(sha(SPARKCACHE / path), pin, key)
 

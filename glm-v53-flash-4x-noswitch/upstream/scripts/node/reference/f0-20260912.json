@@ -20,14 +20,14 @@
   "nccl": {
     "version": "v2.30.7-1",
     "commit": "73cf112295c33aee2b895f329f592f2a9b4b0f97",
-    "path": "$HOME/nccl-patched/libnccl.so.2",
+    "path": "$HOME/.local/lib/nccl-patched/libnccl.so.2",
     "size": 61581280,
     "sha256": "1ddc3240396a9b3a1e4fa3e54e129d099261106ce3b9263ac3fdc3e070713bd5"
   },
   "artifacts": [
     {
       "path": "scripts/node/reference/f0-20260912.env",
-      "destination": "$HOME/tp4/scripts/node/reference/f0-20260912.env",
+      "destination": "$HOME/.local/tp4/scripts/node/reference/f0-20260912.env",
       "mode": "0644",
       "sha256": "0837ea1a359509cdc0cb27164265b5bd37ac9d46198d34ad0af7e9503eff59b7"
     },
@@ -39,43 +39,43 @@
     },
     {
       "path": "scripts/node/reference/launch-glm53-tp4-f0-20260912.sh",
-      "destination": "$HOME/tp4/launch-glm53-tp4.sh",
+      "destination": "$HOME/.local/tp4/launch-glm53-tp4.sh",
       "mode": "0755",
       "sha256": "4ee95668acba3aa7693c7cf1efa584499fead443cbb9498eeb18f18587d36401"
     },
     {
       "path": "scripts/node/reference/tp4ctl-f0-20260912.sh",
-      "destination": "$HOME/tp4/tp4ctl-f0-reference",
+      "destination": "$HOME/.local/tp4/tp4ctl-f0-reference",
       "mode": "0700",
       "sha256": "6cb6f07cc60a13c86dfed8c01156c13d3f1fb88ca611bd499989841f96688a82"
     },
     {
       "path": "scripts/node/patches/adaptive_k_scheduler.py",
-      "destination": "$HOME/patches/adaptive_k_scheduler.py",
+      "destination": "$HOME/.local/lib/patches/adaptive_k_scheduler.py",
       "mode": "0644",
       "sha256": "4cea8f55fa51b0371a52a4dd6eb5511ccb0bccbd81e435e6840f68f4ba641518"
     },
     {
       "path": "scripts/node/moe-configs/E=288,N=512,device_name=NVIDIA_GB10,dtype=fp8_w8a8,block_shape=[128,128].json",
-      "destination": "$HOME/tp4/moe-configs/E=288,N=512,device_name=NVIDIA_GB10,dtype=fp8_w8a8,block_shape=[128,128].json",
+      "destination": "$HOME/.local/tp4/moe-configs/E=288,N=512,device_name=NVIDIA_GB10,dtype=fp8_w8a8,block_shape=[128,128].json",
       "mode": "0644",
       "sha256": "e2d2f68d34ba9d0011c0b2ef48170781b4c7e609885cd4fb16d23221e795968b"
     },
     {
       "path": "scripts/node/sparse_attn_indexer_kpool_sm121.py",
-      "destination": "$HOME/patches/sparse_attn_indexer_kpool.py",
+      "destination": "$HOME/.local/lib/patches/sparse_attn_indexer_kpool.py",
       "mode": "0644",
       "sha256": "8a3ecfb0bab2441dd7417ed00a10d142191496149f88e5fe79fcfaea4b160980"
     },
     {
       "path": "scripts/render_chat_template.py",
-      "destination": "$HOME/tp4/scripts/render_chat_template.py",
+      "destination": "$HOME/.local/tp4/scripts/render_chat_template.py",
       "mode": "0755",
       "sha256": "2db3481f8c3df20374ae29e793a55846575a9e3828fbda818091d915eeeecaf1"
     },
     {
       "path": "scripts/node/model-manifests/690b705278a3a58e538fcb37c2ca8b5f9511213c.json",
-      "destination": "$HOME/tp4/node/model-manifests/690b705278a3a58e538fcb37c2ca8b5f9511213c.json",
+      "destination": "$HOME/.local/tp4/node/model-manifests/690b705278a3a58e538fcb37c2ca8b5f9511213c.json",
       "mode": "0644",
       "sha256": "a54618efecd3d0d9afbfd13e858b4217d2150c05dffa95caf8165e8e8cf5cca0"
     },

@@ -4,7 +4,7 @@ set -euo pipefail
 # Deploy cluster.env, runtime assets and the pinned model fetch/manifest tooling to all
 # NODES. Idempotent: it always recopies and verifies the source<->destination sha256.
 # With TP4_ENV=<relative path> the configuration overlay is pushed too, at the same
-# relative path under ~/tp4/ (see docs/operations.md). Host assets (sysctl, grub, host scripts)
+# relative path under ~/.local/tp4/ (see docs/operations.md). Host assets (sysctl, grub, host scripts)
 # are NOT handled here: scripts/deploy-host.sh does that.
 #
 # usage:
@@ -311,11 +311,11 @@ for host in "${HOSTS[@]}"; do
 done
 
 log "--- summary ---"
-log "recipe: cluster.env${TP4_ENV:+ + overlay $TP4_ENV -> ~/tp4/$TP4_ENV}"
-log "model manifests: $manifest_count release(s) + fetch/integrity helper -> ~/tp4/"
+log "recipe: cluster.env${TP4_ENV:+ + overlay $TP4_ENV -> ~/.local/tp4/$TP4_ENV}"
+log "model manifests: $manifest_count release(s) + fetch/integrity helper -> ~/.local/tp4/"
 log "patches: $patch_count runtime file(s) -> ~/patches/ (test_*.py not pushed)"
 if [ "$moe_count" -gt 0 ]; then
-  log "moe-configs: $moe_count file(s) -> ~/tp4/moe-configs/"
+  log "moe-configs: $moe_count file(s) -> ~/.local/tp4/moe-configs/"
 else
   log "moe-configs: none in scripts/node/moe-configs (nothing pushed)"
 fi

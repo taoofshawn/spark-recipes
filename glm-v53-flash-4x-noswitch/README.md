@@ -25,8 +25,11 @@ at full context (6 dies — memory is tight by design).
 - Container: `glm53_fp8_dflash_tp4`, image
   `ghcr.io/fujitsupolycom/sparkring-glm53-sparkcache@sha256:0d4029b3…` (content ID
   `5e32aaa1…` — verified on every node by `verify-node.sh`).
-- Node paths: `~/tp4` (runtime assets), `~/glm53-flash-fp8-zai` (306 GiB FP8 weights),
-  `~/glm53-dflash2-draft`, `~/nccl-patched`, `~/vllm-cache`.
+- Node paths (2026-09-27 cleanup — nothing recipe-owned in `$HOME`): `~/.local/tp4`
+  (deployed runtime; `tp4ctl` on PATH via `~/.local/bin`), weights + drafter in the
+  default HF cache (`~/.cache/huggingface/hub/models--zai-org--GLM-5.3-Flash/…`,
+  `models--incoai--GLM-5.3-Flash-DFlash2/…`), `~/.local/lib/nccl-patched`,
+  `~/.cache/tp4-vllm-cache` (container `/cache`).
 
 ## Locations (post-reorganization, 2026-09-26)
 
@@ -35,22 +38,22 @@ All paths below are relative to the **repo root** (the `spark-recipes` checkout)
 | path (from repo root) | what it is |
 |---|---|
 | `glm-v53-flash-4x-noswitch\` | this recipe's branch dir: `README.md`, `noswitch-prep\` (this site's config + prep/ops material: `build-record.md` (build log + deviations), `cluster.env`, `versions.env`, `sircl\rank0-3.env` + `SHA256SUMS`, `preflight-report.json`, `scripts\` — 9 build/ops helpers) |
-| `glm-v53-flash-4x-noswitch\upstream\` | the **live recipe checkout** (jnardiello @ `080fe09`, vendored during the reorg, upstream `.git` detached). All tp4ctl/verify/deploy scripts run from here (`upstream/scripts/`). Carries 4 uncommitted site modifications: `upstream/scripts/node/bootstrap/versions.env`, `upstream/scripts/node/nccl/SHA256SUMS` (adopted `afe5f486…`), `upstream/scripts/node/nccl/build.sh` (PATCH_FILE fix), `upstream/CHANGELOG.md` |
+| `glm-v53-flash-4x-noswitch\upstream\` | the **live recipe checkout** (jnardiello @ `080fe09`, vendored during the reorg, upstream `.git` detached). All tp4ctl/verify/deploy scripts run from here (`upstream/scripts/`). Carries 5 site modifications: `upstream/scripts/node/bootstrap/versions.env`, `upstream/scripts/node/nccl/SHA256SUMS` (adopted `afe5f486…`), `upstream/scripts/node/nccl/build.sh` (PATCH_FILE fix), `upstream/CHANGELOG.md`, plus the site path rewrites across `upstream/scripts/` (research.md §2.5) |
 
 **Sparks:**
 
 | node | git clones | per-node runtime assets |
 |---|---|---|
-| spark-0f0b | `~/code/spark-recipes` — on branch `glm-v53-flash-4x-noswitch` (kept current) | `~/tp4/`, `~/glm53-flash-fp8-zai/`, `~/glm53-dflash2-draft/`, `~/nccl-patched/`, `~/patches/`, `~/vllm-cache/` |
-| spark-6d14 | `~/code/spark-recipes` — ⚠ on **`main` @ 28f7f2e** (stale 2-node-era copy; update or retire at will). Also `~/nccl-build-repro/nccl/` — the NCCL build tree (deletable, rebuildable) | same as 0f0b |
-| spark-6d90, spark-6d24 | none | same as 0f0b (no clones needed — nodes only consume `~/tp4`) |
+| spark-0f0b | `~/code/spark-recipes` — on branch `glm-v53-flash-4x-noswitch` (kept current) | `~/.local/tp4/`, HF cache (weights + drafter), `~/.local/lib/nccl-patched/`, `~/.cache/tp4-vllm-cache/` |
+| spark-6d14 | `~/code/spark-recipes` — on branch `glm-v53-flash-4x-noswitch` (switched from stale `main` on 2026-09-27) | same as 0f0b |
+| spark-6d90, spark-6d24 | `~/code/spark-recipes` — cloned on branch `glm-v53-flash-4x-noswitch` (2026-09-27) | same as 0f0b (nodes consume `~/.local/tp4`) |
 
 **Remote repos:**
 
 | repo | role |
 |---|---|
 | `taoofshawn/spark-recipes` (origin) | canonical for the branch; branch pushed through `40b8d22` |
-| `github.com/jnardiello/GLM-5.3-Flash-FP8-4-DGX-Spark-Switchless` | upstream reference @ `080fe09`; our checkout is detached — adopt upstream changes periodically by diffing against it (see `research.md` §2: 4 local mods in `upstream/` that must survive an update) |
+| `github.com/jnardiello/GLM-5.3-Flash-FP8-4-DGX-Spark-Switchless` | upstream reference @ `080fe09`; our checkout is detached — adopt upstream changes periodically by diffing against it (see `research.md` §2: 5 local mods in `upstream/` that must survive an update) |
 
 Update playbook: `research.md` (what not to overwrite, update procedure, changelog).
 Build history: `noswitch-prep/build-record.md`.
@@ -125,7 +128,7 @@ OOM (`NV_ERR_NO_MEMORY`), or a rank container exiting while others stay up.
 - **One model at a time.** All recipes use every reserved GPU; run `tp4ctl down`
   before starting anything else.
 - **Never hand-edit generated files**: per-node netplan/iptables (`upstream/scripts/node/etc/*`,
-  rendered by `render-netplan.sh`) and `~/tp4/*` on the nodes (pushed by
+  rendered by `render-netplan.sh`) and `~/.local/tp4/*` on the nodes (pushed by
   `deploy.sh`). Edit `upstream/cluster.env` (mirrored in `noswitch-prep/cluster.env`), then re-render/deploy.
 - **Measured knobs are not shared tuning knobs**: `GPU_MEM_UTIL=0.85`, the 16 GiB KV
   pool (`--kv-cache-memory-bytes`), `MAX_NUM_SEQS=6`, KV dtype, backend flags, spec

@@ -287,7 +287,7 @@ say image_digest "$(sudo -n docker image inspect --format '{{index .RepoDigests 
 say model_commit "$(head -1 "$MODEL/.cache/huggingface/download/config.json.metadata" 2>/dev/null)"
 say draft_commit "$(head -1 "$DRAFT/.cache/huggingface/download/config.json.metadata" 2>/dev/null)"
 say nccl "$(sha256sum "$NCCL/libnccl.so.2" 2>/dev/null | awk '{print $1}')"
-say patches "$(ls "$HOME"/patches/*.py 2>/dev/null | wc -l | tr -d ' ')"
+say patches "$(ls "$HOME"/.local/lib/patches/*.py 2>/dev/null | wc -l | tr -d ' ')"
 mmiss=""
 # Sources may be written as $HOME/... or ~/... (single-quoted in cluster.env); expand them
 # here exactly as the launcher does before Docker sees them.
@@ -656,7 +656,7 @@ check_node() {   # check_node <host> <rank>
   verdict "$host" "patched NCCL sha" $rc "${v:0:12}… (expected ${NCCL_SHA:0:12}…, from $NCCL_SHA_SRC)"
 
   v=$(pv patches); rc=1; [ "${v:-0}" -gt 0 ] 2>/dev/null && rc=0
-  verdict "$host" "patches/*.py" $rc "${v:-0} file(s) in \$HOME/patches"
+  verdict "$host" "patches/*.py" $rc "${v:-0} file(s) in \$HOME/.local/lib/patches"
 
   if [ -z "$MOUNT_SRCS" ]; then
     row "$host" "EXTRA_DOCKER_ENV -v" SKIP "no -v mount in EXTRA_DOCKER_ENV"

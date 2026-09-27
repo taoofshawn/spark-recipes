@@ -110,6 +110,27 @@ All of `noswitch-prep/` is site-owned, not upstream-owned:
 
 ## 5. Changelog
 
+- **2026-09-27 — First silent TP-step hang (root cause unknown), recovered by full restart.**
+  ~13:45 node time: ~25 min after a normal request completed (SparkCache committed clean,
+  `failed=0B`), the engine core wedged: `shm_broadcast.py:801` "No available shared memory
+  broadcast block found in 60 seconds" repeating every minute with no recovery. `/health`
+  stayed 200 the whole time (API process independent), so outwardly the endpoint looked
+  alive while nothing generated — agents saw request timeouts with zero tokens. Evidence:
+  no error on ANY rank (1–3 logs clean), no NCCL/fabric message, no OOM (E20 probe clean,
+  `num_ooms:0`), `num_requests_running: 1` frozen — a stuck generation holding the engine
+  step while everything behind it queued. This message is in the recipe's known/benign list
+  only when transient; **non-transient (looping for minutes) = wedged engine**.
+  Diagnosis key: the engine core is the *victim* (it cannot broadcast a step) — look at
+  *worker* process state first; here all workers looked alive but none advanced.
+  **Recovery**: `tp4ctl restart` (full-cluster procedure, per the single-rank invariant).
+  Cold boot ~13 min (checkpoint load + flashinfer autotune + graph capture), `/health` 200
+  at 775 s, smoke gate passed, `check-f0.py` → 2026-09-25-e29 CHECK PASS.
+  **If it recurs**: capture worker stack state (py-spy or SIGQUIT) BEFORE restarting, and
+  instrument the E29 end-drain scheduler + async-scheduling path as prime suspects; also
+  note the last completed SparkCache ticket/request-id from the logs (this time
+  `chatcmpl-a78184e6c18fa28c`, ticket `e216673e`) as the boundary marker. First such wedge
+  on this cluster; no pattern yet.
+
 - **2026-09-26** — Initial vendoring of jnardiello `080fe09` into `upstream/`
   (detached checkout, committed at `9cd37a0`); created this research.md documenting
   the 4 local mods (§2), site-owned files (§3), and the update procedure (§4).

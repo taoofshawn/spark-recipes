@@ -11,7 +11,7 @@ Source: NVIDIA forum thread
 
 This is intentionally **not** a spark-recipes recipe adoption: we use the upstream repo's own
 infrastructure-as-code (`agent-preflight.sh`, `render-netplan.sh`, `bootstrap-node.sh`,
-`tp4ctl`) verbatim. `build.md` here is the site-customized runbook for *our* four nodes.
+`tp4ctl`) verbatim. `build-record.md` here is the site-customized runbook for *our* four nodes.
 
 ---
 
@@ -450,7 +450,7 @@ directory during the workstation reorganization) — cluster.env and the re-pinn
    signatures, not serials, to verify peers on fresh nodes.**
 8. **Ring port convention (netplan)**: odd links (L1, L3) on the left port (f0), even
    links (L2, L4) on the right port (f1) — per rank. Two physical swaps were needed:
-   at 6d90 (L2/L3 connectors) and at 6d24 (same op). `build.md` §3's original map was
+   at 6d90 (L2/L3 connectors) and at 6d24 (same op). `build-record.md` §3's original map was
    wrong for ranks 2 and 3.
 9. **WSL workstation quirks**: background jobs started inside `wsl -e bash -lc` die
    with the session — run long jobs node-side under `nohup` (fetch, pulls, drafter) or

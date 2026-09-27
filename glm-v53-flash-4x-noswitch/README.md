@@ -4,7 +4,7 @@ GLM-5.3-Flash FP8 served on the **4-node switchless ConnectX-7 ring** with vLLM 
 DFlash2 speculative decoding, SparkCache + SIRCL, and patched NCCL — using the
 [jnardiello recipe](https://github.com/jnardiello/GLM-5.3-Flash-FP8-4-DGX-Spark-Switchless)
 (E29 @ `080fe09`) **as-is**, site-configured for this cluster. Full build history and
-deviations: [build.md](build.md).
+deviations: [build-record.md](noswitch-prep/build-record.md).
 
 **Endpoint:** `http://10.69.42.170:8000/v1` — model name `glm-5.3-flash`,
 262,144-token context, **no auth/TLS — trusted LAN only**. Concurrency ≈ 5 sessions
@@ -34,7 +34,7 @@ All paths below are relative to the **repo root** (the `spark-recipes` checkout)
 
 | path (from repo root) | what it is |
 |---|---|
-| `glm-v53-flash-4x-noswitch\` | this recipe's branch dir: `build.md`, `README.md`, `noswitch-prep\` (this site's config + prep/ops scripts: `cluster.env`, `versions.env`, `sircl\rank0-3.env` + `SHA256SUMS`, `preflight-report.json`, `scripts\` — 9 build/ops helpers) |
+| `glm-v53-flash-4x-noswitch\` | this recipe's branch dir: `README.md`, `noswitch-prep\` (this site's config + prep/ops material: `build-record.md` (build log + deviations), `cluster.env`, `versions.env`, `sircl\rank0-3.env` + `SHA256SUMS`, `preflight-report.json`, `scripts\` — 9 build/ops helpers) |
 | `glm-v53-flash-4x-noswitch\upstream\` | the **live recipe checkout** (jnardiello @ `080fe09`, vendored during the reorg, upstream `.git` detached). All tp4ctl/verify/deploy scripts run from here (`upstream/scripts/`). Carries 4 uncommitted site modifications: `upstream/scripts/node/bootstrap/versions.env`, `upstream/scripts/node/nccl/SHA256SUMS` (adopted `afe5f486…`), `upstream/scripts/node/nccl/build.sh` (PATCH_FILE fix), `upstream/CHANGELOG.md` |
 
 **Sparks:**
@@ -53,7 +53,7 @@ All paths below are relative to the **repo root** (the `spark-recipes` checkout)
 | `github.com/jnardiello/GLM-5.3-Flash-FP8-4-DGX-Spark-Switchless` | upstream reference @ `080fe09`; our checkout is detached — adopt upstream changes periodically by diffing against it |
 
 ⚠ Uncommitted right now (workstation only): the `upstream/` vendored tree (untracked),
-this README/build.md path updates, `noswitch-prep/preflight-report.json`, and the 4 upstream
+this README/build-record.md path updates, `noswitch-prep/preflight-report.json`, and the 4 upstream
 local modifications listed above.
 
 ## Everyday commands (from the workstation checkout)
@@ -151,7 +151,7 @@ OOM (`NV_ERR_NO_MEMORY`), or a rank container exiting while others stay up.
 - Ring cabling: 4 DACs, one per QSFP port; **left port = odd links (L1, L3), right =
   even (L2, L4)**. Serial-based peer checks are unreliable on the fresh nodes (EEPROM
   reads are crossed between PCIe views) — verify with ARP/LLDP signatures if a link is
-  suspect (see build.md §7b).
+  suspect (see build-record.md §7b).
 - Docker on ranks 2-3 uses the **classic overlay2 store** (containerd snapshotter
   disabled in daemon.json so the image ID matches the recipe pin on all nodes).
 - IOMMU passthrough is active (`iommu.passthrough=1` in the kernel cmdline).
@@ -168,7 +168,7 @@ OOM (`NV_ERR_NO_MEMORY`), or a rank container exiting while others stay up.
 5. Full restart before deeper surgery: `tp4ctl down` → `tp4ctl up`. Stop and report
    anything that survives that.
 
-References: [build.md](build.md) (build log + deviations) · upstream
+References: [build-record.md](noswitch-prep/build-record.md) (build log + deviations) · upstream
 [operations.md](https://github.com/jnardiello/GLM-5.3-Flash-FP8-4-DGX-Spark-Switchless/blob/main/docs/operations.md)
 · [fabric.md](https://github.com/jnardiello/GLM-5.3-Flash-FP8-4-DGX-Spark-Switchless/blob/main/docs/fabric.md)
 · forum thread

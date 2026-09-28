@@ -373,6 +373,13 @@ Versions and releases are created only at the owner's explicit request.
 
 ### Fixed
 
+- Fixed `scripts/deploy.sh` remote paths on this site: since the `~/tp4` → `~/.local/tp4`
+  relocation the script still built remote destinations as `$HOME/<relative>` (`~/tp4/…`,
+  `~/patches/…`), so `--check` reported every managed file MISSING on all four ranks and a
+  push would have landed outside the runtime directory the launcher mounts. Remote paths are
+  now mapped in one place (`tp4/*` → `.local/tp4/*`, `patches/*` → `.local/lib/patches/*`)
+  for push, probe, sha256 verification, remote `bash -n` and exec-bit fixes; `--check`
+  passes against the deployed installation again.
 - Enforced `tool_choice="required"` and named function choice on the GLM-4.7 engine parser
   path (tool-eval-bench TC-45). The image's parser manager discards the registered tool
   parser's `structural_tag_model` when both parser roles resolve to one engine class, so

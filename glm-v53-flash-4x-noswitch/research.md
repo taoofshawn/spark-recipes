@@ -83,6 +83,17 @@ upstream update, any NEW occurrences of the upstream paths in adopted files must
 rewritten the same way; `grep -rnE '\$HOME/tp4|~/tp4|glm53-flash-fp8-zai'` must
 return nothing. `tp4ctl` is on the node PATH via `~/.local/bin/tp4ctl → ~/.local/tp4/tp4ctl`.
 
+**Addendum (2026-09-29):** the relocation sed rewrote the literal path strings but missed
+`deploy.sh`'s *relative* remote-path construction — `FILES`/`REMOTE_DIRS` destinations
+(`tp4/…`, `patches/…`) are prefixed with `$HOME` at push/probe/verify time, so after the
+relocation `deploy.sh --check` reported every managed file MISSING (they live under
+`~/.local/tp4`, not `~/tp4`) and a full push would have recreated a stray `~/tp4` tree the
+launcher never reads. Fixed with a single `remote_rel()` mapping (`tp4/* → .local/tp4/*`,
+`patches/* → .local/lib/patches/*`) applied at the ssh/scp/chmod/bash-n call sites; the
+launcher preflight (`-v` source existence) and `deploy.sh` now agree again. `--check` is
+green against the deployed tree except for intentionally changed files (cluster.env, the
+new §2.6 override).
+
 ### 2.6 `upstream/scripts/node/overrides/vllm/parser/glm47_moe.py` — required/named tool-choice enforcement (2026-09-29)
 
 Site mod 6-7 (mod 6 = the override file, mod 7 = its `EXTRA_DOCKER_ENV` mount +

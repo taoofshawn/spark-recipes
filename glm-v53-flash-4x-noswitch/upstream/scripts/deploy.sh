@@ -186,6 +186,19 @@ fi
 
 sha_of() { shasum -a 256 "$1" | awk '{print $1}'; }
 
+# Site layout (site mod 5, §2.5 relocation): the deployed runtime lives OUTSIDE $HOME
+# (`~/.local/tp4/`, `~/.local/lib/patches/`), while the FILES/REMOTE_DIRS entries below
+# keep the historical ~/ relative form. Map every remote destination through this single
+# point so push, --check, the sha256 verification and the remote bash -n all agree with
+# the launcher's own path resolution (~/.local/tp4) and the cluster.env -v mounts.
+remote_rel() {
+  case "$1" in
+    tp4/*)             printf '.local/%s' "$1" ;;
+    patches|patches/*) printf '.local/lib/%s' "$1" ;;
+    *)                 printf '%s' "$1" ;;
+  esac
+}
+
 # Nothing is copied before the whole list is known-good: a source that disappeared would
 # otherwise abort the run mid-node (sha_of on a missing file, `set -o pipefail`), and a
 # .py with a syntax error would reach the container. This covers every Python file that
@@ -236,7 +249,8 @@ if [ "$CHECK" = 1 ]; then
       src=${entry%%:*}
       dst=${entry#*:}
       want=$(sha_of "$REPO/$src") || { warn "cannot hash $REPO/$src"; rc=1; continue; }
-      out=$(ssh -n "${SSH_OPTS[@]}" "$host" "p=\$HOME/$dst; $probe" 2>/dev/null) || out=""
+      rdst=$(remote_rel "$dst")
+      out=$(ssh -n "${SSH_OPTS[@]}" "$host" "p=\$HOME/$rdst; $probe" 2>/dev/null) || out=""
       read -r pst got pmode <<<"${out:-ERROR -}"
       case "$pst" in
         PRESENT)
@@ -252,7 +266,7 @@ if [ "$CHECK" = 1 ]; then
         *)          st=UNREADABLE; rc=1 ;;
       esac
       # shellcheck disable=SC2088  # display label, not a path to expand
-      printf '  %-11s %-12s %s\n' "$st" "${host##*@}" "~/$dst"
+      printf '  %-11s %-12s %s\n' "$st" "${host##*@}" "~/$rdst"
     done
   done
   if [ $rc -eq 0 ]; then
@@ -267,7 +281,9 @@ rc=0
 for host in "${HOSTS[@]}"; do
   log "=== $host ==="
 
-  if ! ssh -n "${SSH_OPTS[@]}" "$host" "mkdir -p ${REMOTE_DIRS[*]/#/\$HOME/}"; then
+  mkdir_list=""
+  for d in "${REMOTE_DIRS[@]}"; do mkdir_list+=" \$HOME/$(remote_rel "$d")"; done
+  if ! ssh -n "${SSH_OPTS[@]}" "$host" "mkdir -p$mkdir_list"; then
     warn "$host: unreachable, skipping"
     rc=1
     continue
@@ -276,13 +292,17 @@ for host in "${HOSTS[@]}"; do
   for entry in "${FILES[@]}"; do
     src=${entry%%:*}
     dst=${entry#*:}
-    scp "${SSH_OPTS[@]}" -q "$REPO/$src" "$host:~/$dst" \
+    rdst=$(remote_rel "$dst")
+    scp "${SSH_OPTS[@]}" -q "$REPO/$src" "$host:~/$rdst" \
       || { warn "$host: scp failed for $src"; rc=1; continue; }
   done
 
-  ssh -n "${SSH_OPTS[@]}" "$host" "cd \"\$HOME\" && chmod +x $EXECUTABLES" \
+  mapped_execs=""; mapped_ref=""
+  for e in $EXECUTABLES; do mapped_execs+=" \$HOME/$(remote_rel "$e")"; done
+  for e in $REFERENCE_EXECUTABLES; do mapped_ref+=" \$HOME/$(remote_rel "$e")"; done
+  ssh -n "${SSH_OPTS[@]}" "$host" "chmod +x$mapped_execs" \
     || { warn "$host: chmod +x failed"; rc=1; }
-  ssh -n "${SSH_OPTS[@]}" "$host" "cd \"\$HOME\" && chmod 0700 $REFERENCE_EXECUTABLES" \
+  ssh -n "${SSH_OPTS[@]}" "$host" "chmod 0700$mapped_ref" \
     || { warn "$host: reference controller mode failed"; rc=1; }
 
   log "sha256 verification"
@@ -290,18 +310,19 @@ for host in "${HOSTS[@]}"; do
     src=${entry%%:*}
     dst=${entry#*:}
     want=$(sha_of "$REPO/$src") || { warn "cannot hash $REPO/$src"; rc=1; continue; }
-    got=$(ssh -n "${SSH_OPTS[@]}" "$host" "sha256sum \$HOME/$dst | awk '{print \$1}'" || echo "MISSING")
+    rdst=$(remote_rel "$dst")
+    got=$(ssh -n "${SSH_OPTS[@]}" "$host" "sha256sum \$HOME/$rdst | awk '{print \$1}'" || echo "MISSING")
     if [ "$want" = "$got" ]; then
-      printf '  OK   %-40s %s\n' "$dst" "${want:0:12}…"
+      printf '  OK   %-40s %s\n' "$rdst" "${want:0:12}…"
     else
-      printf '  DIFF %-40s want=%s got=%s\n' "$dst" "${want:0:12}…" "${got:0:12}…" >&2
+      printf '  DIFF %-40s want=%s got=%s\n' "$rdst" "${want:0:12}…" "${got:0:12}…" >&2
       rc=1
     fi
   done
 
   log "remote bash -n"
   for s in $SHELL_SCRIPTS; do
-    if ssh -n "${SSH_OPTS[@]}" "$host" "bash -n \$HOME/$s"; then
+    if ssh -n "${SSH_OPTS[@]}" "$host" "bash -n \$HOME/$(remote_rel "$s")"; then
       printf '  OK   %s\n' "$s"
     else
       printf '  FAIL %s\n' "$s" >&2

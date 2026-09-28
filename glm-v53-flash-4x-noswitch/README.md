@@ -37,8 +37,8 @@ All paths below are relative to the **repo root** (the `spark-recipes` checkout)
 
 | path (from repo root) | what it is |
 |---|---|
-| `glm-v53-flash-4x-noswitch\` | this recipe's branch dir: `README.md`, `noswitch-prep\` (this site's config + prep/ops material: `build-record.md` (build log + deviations), `cluster.env`, `versions.env`, `sircl\rank0-3.env` + `SHA256SUMS`, `preflight-report.json`, `scripts\` — 9 build/ops helpers) |
-| `glm-v53-flash-4x-noswitch\upstream\` | the **live recipe checkout** (jnardiello @ `080fe09`, vendored during the reorg, upstream `.git` detached). All tp4ctl/verify/deploy scripts run from here (`upstream/scripts/`). Carries 5 site modifications: `upstream/scripts/node/bootstrap/versions.env`, `upstream/scripts/node/nccl/SHA256SUMS` (adopted `afe5f486…`), `upstream/scripts/node/nccl/build.sh` (PATCH_FILE fix), `upstream/CHANGELOG.md`, plus the site path rewrites across `upstream/scripts/` (research.md §2.5) |
+| `glm-v53-flash-4x-noswitch\` | this recipe's branch dir — full tree annotated in "How this recipe fits together" below |
+| `glm-v53-flash-4x-noswitch\upstream\` | the **live recipe checkout** (jnardiello @ `080fe09`, detached). All tp4ctl/verify/deploy scripts run from here. Carries 5 site modifications: `upstream/scripts/node/bootstrap/versions.env`, `upstream/scripts/node/nccl/SHA256SUMS` (adopted `afe5f486…`), `upstream/scripts/node/nccl/build.sh` (PATCH_FILE fix), `upstream/CHANGELOG.md`, plus the site path rewrites across `upstream/scripts/` (research.md §2.5) |
 
 **Sparks:**
 
@@ -52,11 +52,106 @@ All paths below are relative to the **repo root** (the `spark-recipes` checkout)
 
 | repo | role |
 |---|---|
-| `taoofshawn/spark-recipes` (origin) | canonical for the branch; branch pushed through `40b8d22` |
+| `taoofshawn/spark-recipes` (origin) | canonical for the branch; tip: `3a0a1e2` |
 | `github.com/jnardiello/GLM-5.3-Flash-FP8-4-DGX-Spark-Switchless` | upstream reference @ `080fe09`; our checkout is detached — adopt upstream changes periodically by diffing against it (see `research.md` §2: 5 local mods in `upstream/` that must survive an update) |
 
 Update playbook: `research.md` (what not to overwrite, update procedure, changelog).
 Build history: `noswitch-prep/build-record.md`.
+
+## How this recipe fits together — read this first
+
+There are **three tiers**: the repo (source of truth, on the workstation + a clone on
+every spark), the deployed runtime (a copy the repo pushes onto each spark), and the
+serving container (built from a pinned image, assembled at launch from the runtime
+tier). Nothing runs out of the repo on the sparks; the repo only *produces* the
+runtime tier. Changing anything always flows: **repo edit → commit/push → pull on the
+node checkout → `deploy.sh` (copies into `~/.local/tp4/`) → `tp4ctl restart`.**
+
+### Tier 1 — repo layout (workstation, branch `glm-v53-flash-4x-noswitch`)
+
+```
+glm-v53-flash-4x-noswitch/
+├── README.md              ← this file: ops orientation only
+├── research.md            ← audit trail + UPDATE PLAYBOOK (read §2 before any update)
+├── noswitch-prep/         ← THIS SITE's material (not upstream's)
+│   ├── cluster.env        ← site config mirror (the live one is upstream/cluster.env)
+│   ├── versions.env       ← kernel/driver pins (mirror of the upstream re-pin)
+│   ├── build-record.md    ← closed historical build log (2026-09-26 bring-up)
+│   ├── sircl/             ← generated per-rank SIRCL peer files + checksums
+│   ├── benchmarks-e03/    ← archived pre-E29 benchmark results (reference only)
+│   ├── bench-scripts/     ← archived one-off benchmark scripts
+│   └── scripts/           ← 9 site build/ops helpers (kernel hold, hostkeys, relay…)
+└── upstream/              ← the LIVE recipe checkout (jnardiello @ 080fe09, detached)
+    ├── cluster.env        ← ACTIVE site config (gitignored — exists only where copied;
+    │                        see research.md §5 for why node clones need it re-copied)
+    ├── cluster.env.example← annotated public template; documents every knob
+    ├── scripts/
+    │   ├── tp4ctl         ← cluster controller: status/up/down/restart/health/logs
+    │   ├── deploy.sh      ← deploys runtime tier to every node's ~/.local/tp4/
+    │   ├── verify-node.sh ← static per-node verification (the 157-check gate)
+    │   ├── check-f0.py    ← live identity check vs the frozen E29 baseline
+    │   ├── launcher/launch-glm53-tp4.sh ← per-rank container assembly (docker run)
+    │   └── node/          ← node-side assets: bootstrap pins (versions.env), NCCL build,
+    │                        model manifests, moe-configs, vLLM override files,
+    │                        reference/ = TP4_ENV rollback baselines (E21→E29)
+    ├── third_party/       ← SparkCache connector/encoder + SIRCL bundle (vendored)
+    └── docs/              ← upstream ops/install/fabric docs + frozen benchmarks
+```
+
+### Tier 2 — deployed runtime on each spark: `~/.local/tp4/`
+
+`deploy.sh` copies this tree to every node (with SHA-256 manifests that
+`verify-node.sh` checks). The serving container is assembled from it at launch:
+
+```
+~/.local/tp4/
+├── tp4ctl                 ← the controller (also on PATH via ~/.local/bin/tp4ctl)
+├── cluster.env            ← the active recipe — defines NODES, image pin, all knobs,
+│                            and the -v mount list; changing it + restart = redeploy
+├── launch-glm53-tp4.sh    ← builds the docker command for one rank
+├── flusher-unconditional.sh ← page-cache flusher (runs while weights load)
+├── sparkcache/            ← KV-cache connector + encoder, mounted into the container
+├── sircl/                 ← SIRCL bundle + runtime incl. per-rank peer envs (rank0-3)
+├── moe-configs/           ← fused-MoE kernel config for E=288/N=512 on GB10
+├── overrides/             ← vLLM .py overrides, bind-mounted OVER the image's vLLM
+├── experiments/e03/       ← scheduler + drafter code + kv-transfer configs (E03→E29)
+├── reference/             ← frozen rollback recipes (TP4_ENV=.../baseline-*.env)
+└── node/model-manifests/  ← per-revision weight manifests for integrity verification
+```
+
+Weights/drafter are NOT in this tree — they live in the default HF cache
+(`~/.cache/huggingface/hub/models--…/snapshots/<rev>`, snapshot files hardlinked to
+their blobs so the bind mount works inside the container), plus the patched NCCL at
+`~/.local/lib/nccl-patched/` and the container's scratch/vLLM-JIT cache at
+`~/.cache/tp4-vllm-cache/` (mounted as `/cache`).
+
+### Tier 3 — the running stack, end to end
+
+1. `tp4ctl up` (leader, or autostart systemd unit on rank 0 after reboot):
+   fabric-check (2× MTU-9000 ports/rank, 8 jumbo pings) → cache flusher on →
+   teardown → **launch ranks 3→2→1→0** (workers first so the rendezvous/store is
+   listening when the head joins).
+2. Per rank, `launch-glm53-tp4.sh` sources `cluster.env`, verifies paths/payload
+   checksums, then `docker run`s the digest-pinned image with: the weights snapshot →
+   `/model`, drafter snapshot → `/draft`, patched NCCL → `/opt/patched-nccl`
+   (preloaded via `LD_PRELOAD`), cache → `/cache`, and every `overrides/`/
+   `experiments/` `.py` mounted over the image's vLLM install — that is how the
+   E21/E22b/E27/E29 features ship without rebuilding the image.
+3. Rank 0 runs the API server on host port 8000; ranks 1–3 run headless workers.
+   Health = `GET /health` 200 (never `/v1/models`). Boot to first token ≈ 10 min
+   (306 GiB weight load + autotune + CUDA-graph capture).
+4. Verify after any (re)start: both functional gates (below) within 2 min, then
+   `python3 scripts/check-f0.py` — compares the live ranks' container config, mounts,
+   env and boot receipts against the frozen E29 baseline (`docs/historical_benchmarks/
+   baselines/2026-09-25-e29/`). CHECK PASS = the cluster serves the exact measured
+   identity.
+
+Revision provenance: the weights snapshot carries `.glm53-fp8-synced` (the pinned
+model rev, written after manifest verification) and the drafter snapshot carries
+`.cache/huggingface/download/config.json.metadata` — `verify-node.sh` and
+`check-f0.py` read both; plain `hf download <repo> --revision <rev>` on any node
+re-verifies the cache in seconds without downloading.
+
 
 ## Everyday commands (from the workstation checkout)
 

@@ -128,6 +128,39 @@ All of `noswitch-prep/` is site-owned, not upstream-owned:
 
 ## 5. Changelog
 
+- **2026-09-27 — Migration completion: five bring-up failures after the path moves, all fixed; identity re-verified.**
+  After the §2.5 relocation, `tp4ctl up` failed until five issues were resolved:
+  1. **HF-cache snapshot symlinks dangle inside container mounts** — the launcher mounts the
+     snapshot dir itself (`/model`, `/draft`), so the hub-style `../../blobs/…` symlinks
+     resolved on the host but broke inside the container. Fix: converted every snapshot
+     symlink to a hardlink of its blob (both `models--zai-org--GLM-5.3-Flash` and
+     `models--incoai--GLM-5.3-Flash-DFlash2`, all 4 nodes). Serving requires hardlinked
+     snapshots; plain `hf download` still verifies them fine.
+  2. **Node clones lack `cluster.env`** (gitignored upstream — and absent from this repo's
+     commit because of that ignore rule). `check-f0.py` sources it from the repo checkout.
+     Copied the site `upstream/cluster.env` onto rank0's clone. **Update-playbook rule: after
+     re-cloning or a fresh deploy target, re-copy the site cluster.env into
+     `upstream/` and run `bash scripts/render-netplan.sh --write` (derived netplan/iptables
+     envs are also gitignored) before `verify-node.sh`/`check-f0.py`.**
+  3. **Exec bits lost**: the vendored scripts committed as 644; a node `git reset --hard`
+     restored 644 and `check-f0.py` died on `PermissionError: verify-node.sh`. Fixed by
+     tracking mode 755 (`git update-index --chmod=+x`, commit `c9ab389`).
+  4. **verify-node patches check** still pointed at `$HOME/patches` — the §2.5 sed missed it
+     because the literal is `"$HOME"/patches/*.py` (slash outside the quotes). Fixed in
+     commit `7d664d8`. Sed sweep lesson: also match `"$HOME"/<dir>` quoting variants.
+  5. **Revision-provenance markers were lost with the flat dirs** and are not part of the HF
+     hub layout: `.glm53-fp8-synced` (model rev, written by fetch-fp8-weights.sh after
+     manifest verification) and the drafter's
+     `.cache/huggingface/download/config.json.metadata` (line 1 = commit). Restored both with
+     their exact original contents on all 4 ranks after re-verification (72-file size check +
+     2-shard sha256 per node; drafter proven independently via fresh `hf download --revision`
+     on two ranks). `hf download` ignores the extra files.
+  Final state: `verify-node.sh --quick` 153 PASS / 0 FAIL (4 pre-existing tailscale WARNs),
+  `check-f0.py` → **2026-09-25-e29 CHECK PASS**, `tp4ctl health` smoke coherent, tool-call
+  gate returns correct arguments, `model-name-proxy` healthy (transient unhealthy flag during
+  the down window only). 6d14 now on branch `glm-v53-flash-4x-noswitch` (was stale `main`);
+  6d90/6d24 cloned on the branch; all 4 node clones at `7d664d8`.
+
 - **2026-09-27 — Home-directory cleanup: runtime relocated out of `$HOME` (mod §2.5).**
   All recipe-owned runtime assets moved out of the node home dirs: `~/tp4` →
   `~/.local/tp4` (deployed runtime; on PATH via `~/.local/bin/tp4ctl`), `~/nccl-patched`

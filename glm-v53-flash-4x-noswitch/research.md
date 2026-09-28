@@ -128,6 +128,36 @@ All of `noswitch-prep/` is site-owned, not upstream-owned:
 
 ## 5. Changelog
 
+- **2026-09-28 — "Hung again" report investigated: NO second wedge; recurring short TTFT stalls quantified instead.**
+  User reported the recipe hung again (~01:38 EDT / 05:38 UTC). The engine was NOT wedged:
+  generation probe + both functional gates passed on the spot, `/metrics` showed 0 running /
+  0 waiting, and the retained rank logs (covering since the 21:17 UTC restart — the recovery
+  boot from the 2026-09-27 incident) contain **zero** `shm_broadcast` "broadcast block"
+  messages, zero tracebacks / NCCL warns / aborts / errors on any of the 4 ranks. All 555+
+  requests since boot completed (486 stop / 69 length / **0 abort / 0 error**). What the
+  night actually shows (10-s engine stats timeline, 1137 ticks): agent-session bursts
+  00:08–02:44 and 04:00–05:24 UTC with a RECURRING single-tick stall signature —
+  `pp=0 tg=0 run=1` for one 10-s window between turns (KV-transfer/prefill barrier) — i.e.
+  the mild, self-recovering form of the 09-27 wedge signature (frozen `run` + zero
+  progress). Client cost since boot: mean TTFT 18.9 s (337/558 ≤10 s, 26 requests 80–160 s),
+  mean e2e 43.9 s, ~11 requests >4 min, none > ~16 min — agent turns genuinely "feel hung"
+  in the tail, but everything completed. `model-name-proxy` (OpenResty) logged "client
+  request body buffered to temporary file" ~every 45–90 s during the last burst,
+  correlating 1:1 with the agent's ~100K+-token turn bodies; agent traffic reaches vLLM via
+  that proxy (vLLM sees 127.0.0.1). Idle-period stats-tick gaps (2.4 h / 75 min) are the
+  logger going quiet with zero requests — NOT stalls (**refines the 09-27 lesson: judge
+  stats-line gaps only while requests are in-system**). Hardware/fabric exonerated: all 4
+  nodes P0, zero throttle counters, worker logs clean. Boundary marker if a real wedge
+  follows: last server-visible request completed 05:24:14 UTC (sparkcache failed=0B); first
+  probe after the report = `chatcmpl-875d4284a282190c` at 05:36:56 UTC.
+  **Runbook gap found:** py-spy is NOT installed on the nodes or in the container — the
+  "capture worker stacks BEFORE restarting" step of the 09-27 recurrence plan currently has
+  only the destructive SIGQUIT fallback. Watch item: the sparkcache capacity line has read
+  `healthy=no used=0.0/0.0GiB` on every emission since boot (entries 5337→6361, publications
+  460.9 GiB, failed=0B) — cosmetic vs unwired gauge unknown; correlate with the request
+  deferrals seen during bursts (`wait=1` at run≤2, below the MAX_NUM_SEQS=6 cap; reason
+  breakdown not captured live — likely the 'deferred'/KV-transfer reason).
+
 - **2026-09-27 — Migration completion: five bring-up failures after the path moves, all fixed; identity re-verified.**
   After the §2.5 relocation, `tp4ctl up` failed until five issues were resolved:
   1. **HF-cache snapshot symlinks dangle inside container mounts** — the launcher mounts the

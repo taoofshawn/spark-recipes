@@ -373,6 +373,18 @@ Versions and releases are created only at the owner's explicit request.
 
 ### Fixed
 
+- Enforced `tool_choice="required"` and named function choice on the GLM-4.7 engine parser
+  path (tool-eval-bench TC-45). The image's parser manager discards the registered tool
+  parser's `structural_tag_model` when both parser roles resolve to one engine class, so
+  `adjust_request` never applied the model's structural tag and `required` silently behaved
+  as `auto` (the model answered in content). The new site override
+  `scripts/node/overrides/vllm/parser/glm47_moe.py` mirrors
+  `DelegatingParser._apply_structural_tag`: requests with `required`/named tool choice get
+  the xgrammar `glm_4_7` structural tag (`TagsWithSeparatorFormat`, `at_least_one=True`),
+  forcing the tool-call envelope; plain `auto` with non-strict tools stays untouched. It is
+  mounted via `cluster.env` (`tp4/overrides/vllm/parser/`, deploy.sh site mod 7) behind the
+  `VLLM_ENFORCE_STRICT_TOOL_CALLING` gate.
+
 - Fixed a dead `IMAGE` assignment in the configuration template: the historical F0 rollback
   line had lost its comment marker, so it read as an active setting that the real
   digest-pinned `IMAGE` below silently overrode. Editing it had no effect. It is now marked

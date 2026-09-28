@@ -131,7 +131,7 @@ if [ -d "$REPO/scripts/node/overrides" ]; then
   done < <(cd "$REPO" && find scripts/node/overrides -type f -name '*.py' | sort)
 fi
 if [ "$override_count" -gt 0 ]; then
-  REMOTE_DIRS+=(tp4/overrides/vllm/v1/core tp4/overrides/vllm/v1/worker tp4/overrides/vllm/models/glm5next/nvidia/ops)
+  REMOTE_DIRS+=(tp4/overrides/vllm/v1/core tp4/overrides/vllm/v1/worker tp4/overrides/vllm/models/glm5next/nvidia/ops tp4/overrides/vllm/parser)
 fi
 # SHA256SUMS.site is the gitignored per-site manifest (SIRCL per-rank peer/GID files).
 for f in scripts/node/sparkcache/kv-transfer-config.json scripts/node/sparkcache/SHA256SUMS scripts/node/sircl/SHA256SUMS scripts/node/sircl/SHA256SUMS.site; do

@@ -83,6 +83,32 @@ upstream update, any NEW occurrences of the upstream paths in adopted files must
 rewritten the same way; `grep -rnE '\$HOME/tp4|~/tp4|glm53-flash-fp8-zai'` must
 return nothing. `tp4ctl` is on the node PATH via `~/.local/bin/tp4ctl → ~/.local/tp4/tp4ctl`.
 
+### 2.6 `upstream/scripts/node/overrides/vllm/parser/glm47_moe.py` — required/named tool-choice enforcement (2026-09-29)
+
+Site mod 6-7 (mod 6 = the override file, mod 7 = its `EXTRA_DOCKER_ENV` mount +
+`deploy.sh` `REMOTE_DIRS` entry `tp4/overrides/vllm/parser`). The file is an exact
+copy of the image's `vllm/parser/glm47_moe.py` (`ghcr.io/fujitsupolycom/sparkring-glm53-sparkcache`,
+vLLM `0.11.2.dev279+eldritch.final.fcc6141`, pristine copy kept at the workstation's
+`%TEMP%\glm47_moe.py.orig`) plus a SITE PATCH: `STRUCTURAL_TAG_MODEL = "glm_4_7"` and an
+`adjust_request`/`_apply_structural_tag` mirror of `DelegatingParser._apply_structural_tag`.
+
+Why: the image's `parser/parser_manager.py:142-143` returns the raw engine class when both
+parser roles resolve to `Glm47MoeParser`, discarding the registered tool parser's
+`structural_tag_model` — so `tool_choice="required"`/named never applies the xgrammar
+`glm_4_7` structural tag and silently behaves as `auto` (tool-eval-bench TC-45, −2 pts).
+The patch applies `TagsWithSeparatorFormat(tags=…, at_least_one=True)` for required/named
+requests behind the `VLLM_ENFORCE_STRICT_TOOL_CALLING` gate (defaults `True` in this build);
+plain `auto` with non-strict tools is a no-op (registry returns `None`). Do NOT overwrite
+this file wholesale on an image/upstream update — re-diff against the new image's
+`glm47_moe.py` and re-apply the patch. Rollback: drop the `-v` pair from `EXTRA_DOCKER_ENV`
+in `upstream/cluster.env(.example)` and `noswitch-prep/cluster.env`.
+
+Mounted as
+`-v $HOME/.local/tp4/overrides/vllm/parser/glm47_moe.py:/usr/local/lib/python3.12/dist-packages/vllm/parser/glm47_moe.py:ro`
+in `upstream/cluster.env.example` (comment block above line 342), `upstream/cluster.env`
+(gitignored site file) and `noswitch-prep/cluster.env`. The launcher preflight aborts a rank
+whose `-v` source is missing, so deploy.sh must push the file before any restart.
+
 ## 3. Files outside `upstream/` an update must not touch
 
 All of `noswitch-prep/` is site-owned, not upstream-owned:
@@ -127,6 +153,38 @@ All of `noswitch-prep/` is site-owned, not upstream-owned:
    its own documented flow — see `build-record.md` and upstream docs.
 
 ## 5. Changelog
+
+- **2026-09-29 — TC-45 fixed at recipe level: `tool_choice="required"`/named enforcement via glm_4_7 structural tag (new mod §2.6).**
+  Diagnosis (proven from the image's own source, extracted read-only on spark-0f0b via
+  `docker create`/`docker cp` from `glm53_fp8_dflash_tp4`): the image's parser manager
+  (`vllm/parser/parser_manager.py:142-143`) returns the raw engine class
+  `Glm47MoeParser` when both parser roles resolve to it, discarding the registered tool
+  parser's `structural_tag_model = "glm_4_7"`; the engine path's `adjust_request`
+  (`vllm/parser/engine/parser_engine.py:204-207`) only sets `skip_special_tokens=False`,
+  so no structural tag is ever applied and `required` behaves as `auto` — the model
+  answers in content. The grammar side was already ready: the image's xgrammar ships the
+  builtin `glm_4_7` structural tag (`builtin_structural_tag.py:1574`, required branch =
+  `TagsWithSeparatorFormat(tags=…, at_least_one=True)`). The env gate is NOT the problem:
+  `VLLM_ENFORCE_STRICT_TOOL_CALLING` defaults `True` (`envs.py:250,1793`) and the container
+  does not override it. The official 0.28.1 GLM-5.3-Flash base (intel recipe image) has
+  this wiring fixed, which is why intel runs pass TC-45.
+  Fix: new override `upstream/scripts/node/overrides/vllm/parser/glm47_moe.py` (exact image
+  copy + site patch: `STRUCTURAL_TAG_MODEL`, `adjust_request` → `_apply_structural_tag`
+  mirror of `DelegatingParser._apply_structural_tag`, `reasoning=False` matching the
+  intel-proven behavior; `auto` w/o strict tools = no-op) + `-v` mount appended to
+  `EXTRA_DOCKER_ENV` in `upstream/cluster.env.example`, `upstream/cluster.env` (gitignored)
+  and `noswitch-prep/cluster.env` + `deploy.sh` `REMOTE_DIRS` += `tp4/overrides/vllm/parser`.
+  Expected effect: tool-eval-bench `--hardmode` TC-45 −2 → pass, ~90 → ~92 (intel median ~93;
+  TC-43/68/80 are model-level on both stacks, TC-85 a coin-flip — not targeted).
+  Rollout: commit/push + `git pull` on the four node clones ONLY, then PAUSE until the
+  user switches the agent backend model; after go-ahead: copy gitignored `cluster.env`
+  into rank0's clone → `deploy.sh --check` → `deploy.sh` → full-cluster `tp4ctl restart`
+  → gates (coherent-response + tool-call + NEW `tool_choice:"required"` curl must return
+  `tool_calls`) within 2 min of `/health` 200. Cold boot ~13 min. `check-f0.py` will show a
+  mount/identity delta vs the frozen 2026-09-25-e29 baseline — expected consequence
+  needing an owner decision (new baseline record), not a bug; do NOT auto-remeasure.
+  Later (owner-authorized): rerun tool-eval-bench `--hardmode --seed 42` matched sampling
+  (t=0.2, top_p=0.95) ×3.
 
 - **2026-09-28 — "Hung again" report investigated: NO second wedge; recurring short TTFT stalls quantified instead.**
   User reported the recipe hung again (~01:38 EDT / 05:38 UTC). The engine was NOT wedged:

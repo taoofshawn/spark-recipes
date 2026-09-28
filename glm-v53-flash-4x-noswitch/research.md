@@ -120,6 +120,25 @@ in `upstream/cluster.env.example` (comment block above line 342), `upstream/clus
 (gitignored site file) and `noswitch-prep/cluster.env`. The launcher preflight aborts a rank
 whose `-v` source is missing, so deploy.sh must push the file before any restart.
 
+**Addendum (2026-09-29, post-restart):** the first rollout exposed a second layer of the
+same bug. `StreamingParserEngine._process_lex_tokens` runs in a "strict" mode once the
+stream carries token ids: any terminal matched purely by TEXT whose name is in
+`_token_id_terminal_names` (= the config's `token_id_terminals` keys) is demoted to plain
+content, because a text occurrence "didn't arrive as the special-token id". Under the
+forced xgrammar structural tag the model emits the tool tags as ordinary tokens (BPE
+pieces / added-token ids), NOT as the 4 mapped special ids — so `<tool_call>` text-matches were
+discarded, the state machine never left CONTENT, the arg tags became invalid, and the raw
+envelope leaked into `content` on ~half of `tool_choice:"required"` responses (both
+streaming and non-streaming; `finish_reason:"tool_calls"` masked it because serving sets
+that unconditionally for required+stop). Fix in the override's `glm47_moe_config`:
+`token_id_terminals` now keeps ONLY the THINK entries — THINK ids must stay because
+`is_reasoning_end`/`extract_content_ids` resolve them from the config; TOOL_START/TOOL_END
+are dropped so text-matched tool tags go through the normal state machine (adjust_request
+forces `skip_special_tokens=False`, so the literal text is always present). Validated
+in-container: non-stream with the actual generated id stream (the failing shape), streaming
+with real prompt ids, thinking-off envelope-only, auto regression, and reasoning-end id
+detection all pass.
+
 ## 3. Files outside `upstream/` an update must not touch
 
 All of `noswitch-prep/` is site-owned, not upstream-owned:

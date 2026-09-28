@@ -147,10 +147,19 @@ def glm47_moe_config(thinking: bool = True) -> ParserEngineConfig:
             "ARG_VALUE_START": ARG_VALUE_START,
             "ARG_VALUE_END": ARG_VALUE_END,
         },
+        # SITE PATCH (2026-09-29, TC-45 follow-up): TOOL_START/TOOL_END REMOVED from
+        # token_id_terminals. StreamingParserEngine._process_lex_tokens demotes any
+        # TEXT-matched terminal whose name is in _token_id_terminal_names to plain
+        # content once the stream has delivered token ids ("strict" mode): a text
+        # <tool_call> is treated as prose because it did not arrive as the special-token id.
+        # Under the forced structural tag (xgrammar) the tool tags arrive as ordinary
+        # tokens, so keeping them here made every forced tool call unparseable (raw
+        # <tool_call>…</tool_call> envelope leaked into `content`). The text lexer matches them fine
+        # (adjust_request forces skip_special_tokens=False). THINK ids stay: they drive
+        # is_reasoning_end/extract_content_ids and the scanner's THINK_END pre-lex; the
+        # (REASONING, TOOL_START) transition still yields an implicit reasoning end.
         token_id_terminals={
             **reasoning_token_id_terminals,
-            "TOOL_START": TOOL_CALL_START,
-            "TOOL_END": TOOL_CALL_END,
         },
         transitions={
             **reasoning_transitions,

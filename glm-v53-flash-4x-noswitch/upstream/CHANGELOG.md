@@ -390,7 +390,10 @@ Versions and releases are created only at the owner's explicit request.
   the xgrammar `glm_4_7` structural tag (`TagsWithSeparatorFormat`, `at_least_one=True`),
   forcing the tool-call envelope; plain `auto` with non-strict tools stays untouched. It is
   mounted via `cluster.env` (`tp4/overrides/vllm/parser/`, deploy.sh site mod 7) behind the
-  `VLLM_ENFORCE_STRICT_TOOL_CALLING` gate.
+  `VLLM_ENFORCE_STRICT_TOOL_CALLING` gate. Post-restart follow-up: the engine's
+  token-id "strict" lexing demotes text-matched tool terminals to content, which the
+  forced xgrammar tag always produces; the override's `token_id_terminals` now keeps only
+  the THINK entries so text-matched `<tool_call>`/arg tags reach the state machine.
 
 - Fixed a dead `IMAGE` assignment in the configuration template: the historical F0 rollback
   line had lost its comment marker, so it read as an active setting that the real

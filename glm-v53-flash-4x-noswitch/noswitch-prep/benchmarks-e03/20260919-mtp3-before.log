@@ -1,0 +1,24 @@
+WARN: no 'GPU KV cache size' line in the last 3000 log lines
+[bench] label=before tier=1 out=/home/sdrew/benchmarks/20260919-mtp3-before
+[bench] /health 200
+[bench] kv: None
+[bench] spec: None
+[bench] warm-up (3 generations, temp 0)...
+  [c1_prose_short] round 0: agg=38.64 tok/s  (512tok/13.252s)
+  [c1_prose_short] round 1: agg=39.67 tok/s  (512tok/12.907s)
+  [c1_prose_short] round 2: agg=39.69 tok/s  (512tok/12.901s)
+  [c1_code_short] round 0: agg=37.65 tok/s  (512tok/13.6s)
+  [c1_code_short] round 1: agg=39.54 tok/s  (512tok/12.95s)
+  [c1_code_short] round 2: agg=39.99 tok/s  (512tok/12.802s)
+  [c1_prose_medium] round 0: agg=19.25 tok/s  (256tok/13.296s)
+  [c1_prose_medium] round 1: agg=37.57 tok/s  (256tok/6.814s)
+  [c1_prose_long] round 0: agg=9.21 tok/s  (256tok/27.792s)
+  [c1_prose_long] round 1: agg=35.79 tok/s  (256tok/7.153s)
+  [c4_prose_short] round 0: agg=103.16 tok/s  (384tok/14.524s, 384tok/14.889s, 384tok/14.774s, 384tok/14.522s)
+  [c4_prose_short] round 1: agg=129.29 tok/s  (384tok/11.88s, 384tok/11.879s, 384tok/11.878s, 384tok/11.878s)
+  [c4_prose_short] round 2: agg=130.65 tok/s  (384tok/11.757s, 384tok/11.757s, 384tok/11.756s, 384tok/11.756s)
+  [pmu_replay_long] round 0: agg=13.79 tok/s  (8tok/0.58s)
+[bench] MemAvailable: 3.28 GiB
+[bench] spec-decode acceptance (delta): 0.9968
+[bench] PMU replay: cached_tokens=43904 / expected≈43904 -> PASS
+[bench] done -> /home/sdrew/benchmarks/20260919-mtp3-before

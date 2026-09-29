@@ -1,0 +1,371 @@
+{
+  "approvals_required": [
+    "bootstrap_and_downloads",
+    "host_network_and_rolling_reboots",
+    "serving_and_api_exposure",
+    "recipe_promotion"
+  ],
+  "blockers": [],
+  "nodes": [
+    {
+      "active_containers": 0,
+      "active_gpu_processes": 0,
+      "container_toolkit": "NVIDIA Container Toolkit CLI version 1.20.0",
+      "default_model_present": false,
+      "disk_free_gib": 1929,
+      "docker_runtimes": "io.containerd.runc.v2 nvidia runc",
+      "docker_version": "29.2.1",
+      "driver": "580.173.02",
+      "endpoint": "sdrew@spark-0f0b",
+      "gpu": "NVIDIA GB10",
+      "hostname": "spark-0f0b",
+      "kernel": "6.17.0-1032-nvidia",
+      "management_addresses": [
+        "10.69.42.170/16"
+      ],
+      "management_interface": "enP7s7",
+      "os": "Ubuntu 24.04.4 LTS",
+      "ram_gib": 121,
+      "rank": 0,
+      "rdma_links": [
+        {
+          "addresses": [
+            "192.168.0.170/24"
+          ],
+          "hca": "rocep1s0f0",
+          "mtu": 9000,
+          "netdev": "enp1s0f0np0",
+          "physical_state": "LINK_UP",
+          "port": "1",
+          "speed_mbps": 200000,
+          "state": "ACTIVE"
+        },
+        {
+          "addresses": [],
+          "hca": "rocep1s0f1",
+          "mtu": 1500,
+          "netdev": "enp1s0f1np1",
+          "physical_state": "LINK_UP",
+          "port": "1",
+          "speed_mbps": 200000,
+          "state": "ACTIVE"
+        },
+        {
+          "addresses": [
+            "192.168.1.170/24"
+          ],
+          "hca": "roceP2p1s0f0",
+          "mtu": 9000,
+          "netdev": "enP2p1s0f0np0",
+          "physical_state": "LINK_UP",
+          "port": "1",
+          "speed_mbps": 200000,
+          "state": "ACTIVE"
+        },
+        {
+          "addresses": [],
+          "hca": "roceP2p1s0f1",
+          "mtu": 1500,
+          "netdev": "enP2p1s0f1np1",
+          "physical_state": "LINK_UP",
+          "port": "1",
+          "speed_mbps": 200000,
+          "state": "ACTIVE"
+        }
+      ],
+      "renderer": "NetworkManager",
+      "rocev2_gid_candidates": {
+        "roceP2p1s0f0": [
+          "1",
+          "3"
+        ],
+        "roceP2p1s0f1": [
+          "1",
+          "3"
+        ],
+        "rocep1s0f0": [
+          "1",
+          "3"
+        ],
+        "rocep1s0f1": [
+          "1",
+          "3"
+        ]
+      },
+      "sudo_n": "available",
+      "user": "sdrew"
+    },
+    {
+      "active_containers": 0,
+      "active_gpu_processes": 0,
+      "container_toolkit": "NVIDIA Container Toolkit CLI version 1.20.0",
+      "default_model_present": false,
+      "disk_free_gib": 2144,
+      "docker_runtimes": "io.containerd.runc.v2 nvidia runc",
+      "docker_version": "29.2.1",
+      "driver": "580.173.02",
+      "endpoint": "sdrew@spark-6d14",
+      "gpu": "NVIDIA GB10",
+      "hostname": "spark-6d14",
+      "kernel": "6.17.0-1032-nvidia",
+      "management_addresses": [
+        "10.69.42.171/16"
+      ],
+      "management_interface": "enP7s7",
+      "os": "Ubuntu 24.04.4 LTS",
+      "ram_gib": 121,
+      "rank": 1,
+      "rdma_links": [
+        {
+          "addresses": [
+            "192.168.0.171/24"
+          ],
+          "hca": "rocep1s0f0",
+          "mtu": 9000,
+          "netdev": "enp1s0f0np0",
+          "physical_state": "LINK_UP",
+          "port": "1",
+          "speed_mbps": 200000,
+          "state": "ACTIVE"
+        },
+        {
+          "addresses": [],
+          "hca": "rocep1s0f1",
+          "mtu": 1500,
+          "netdev": "enp1s0f1np1",
+          "physical_state": "LINK_UP",
+          "port": "1",
+          "speed_mbps": 200000,
+          "state": "ACTIVE"
+        },
+        {
+          "addresses": [
+            "192.168.1.171/24"
+          ],
+          "hca": "roceP2p1s0f0",
+          "mtu": 9000,
+          "netdev": "enP2p1s0f0np0",
+          "physical_state": "LINK_UP",
+          "port": "1",
+          "speed_mbps": 200000,
+          "state": "ACTIVE"
+        },
+        {
+          "addresses": [],
+          "hca": "roceP2p1s0f1",
+          "mtu": 1500,
+          "netdev": "enP2p1s0f1np1",
+          "physical_state": "LINK_UP",
+          "port": "1",
+          "speed_mbps": 200000,
+          "state": "ACTIVE"
+        }
+      ],
+      "renderer": "NetworkManager",
+      "rocev2_gid_candidates": {
+        "roceP2p1s0f0": [
+          "1",
+          "3"
+        ],
+        "roceP2p1s0f1": [
+          "1",
+          "3"
+        ],
+        "rocep1s0f0": [
+          "1",
+          "3"
+        ],
+        "rocep1s0f1": [
+          "1",
+          "3"
+        ]
+      },
+      "sudo_n": "available",
+      "user": "sdrew"
+    },
+    {
+      "active_containers": 0,
+      "active_gpu_processes": 0,
+      "container_toolkit": "NVIDIA Container Toolkit CLI version 1.20.1",
+      "default_model_present": false,
+      "disk_free_gib": 3529,
+      "docker_runtimes": "io.containerd.runc.v2 runc",
+      "docker_version": "29.6.2",
+      "driver": "580.173.02",
+      "endpoint": "sdrew@spark-6d90",
+      "gpu": "NVIDIA GB10",
+      "hostname": "spark-6d90",
+      "kernel": "6.17.0-1032-nvidia",
+      "management_addresses": [
+        "10.69.42.172/16"
+      ],
+      "management_interface": "enP7s7",
+      "os": "Ubuntu 24.04.5 LTS",
+      "ram_gib": 121,
+      "rank": 2,
+      "rdma_links": [
+        {
+          "addresses": [],
+          "hca": "rocep1s0f0",
+          "mtu": 1500,
+          "netdev": "enp1s0f0np0",
+          "physical_state": "LINK_UP",
+          "port": "1",
+          "speed_mbps": 200000,
+          "state": "ACTIVE"
+        },
+        {
+          "addresses": [],
+          "hca": "rocep1s0f1",
+          "mtu": 1500,
+          "netdev": "enp1s0f1np1",
+          "physical_state": "LINK_UP",
+          "port": "1",
+          "speed_mbps": 200000,
+          "state": "ACTIVE"
+        },
+        {
+          "addresses": [],
+          "hca": "roceP2p1s0f0",
+          "mtu": 1500,
+          "netdev": "enP2p1s0f0np0",
+          "physical_state": "LINK_UP",
+          "port": "1",
+          "speed_mbps": 200000,
+          "state": "ACTIVE"
+        },
+        {
+          "addresses": [],
+          "hca": "roceP2p1s0f1",
+          "mtu": 1500,
+          "netdev": "enP2p1s0f1np1",
+          "physical_state": "LINK_UP",
+          "port": "1",
+          "speed_mbps": 200000,
+          "state": "ACTIVE"
+        }
+      ],
+      "renderer": "NetworkManager",
+      "rocev2_gid_candidates": {
+        "roceP2p1s0f0": [
+          "1",
+          "3"
+        ],
+        "roceP2p1s0f1": [
+          "1",
+          "3"
+        ],
+        "rocep1s0f0": [
+          "1",
+          "3"
+        ],
+        "rocep1s0f1": [
+          "1",
+          "3"
+        ]
+      },
+      "sudo_n": "available",
+      "user": "sdrew"
+    },
+    {
+      "active_containers": 0,
+      "active_gpu_processes": 0,
+      "container_toolkit": "NVIDIA Container Toolkit CLI version 1.20.1",
+      "default_model_present": false,
+      "disk_free_gib": 3529,
+      "docker_runtimes": "io.containerd.runc.v2 runc",
+      "docker_version": "29.6.2",
+      "driver": "580.173.02",
+      "endpoint": "sdrew@spark-6d24",
+      "gpu": "NVIDIA GB10",
+      "hostname": "spark-6d24",
+      "kernel": "6.17.0-1032-nvidia",
+      "management_addresses": [
+        "10.69.42.173/16"
+      ],
+      "management_interface": "enP7s7",
+      "os": "Ubuntu 24.04.5 LTS",
+      "ram_gib": 121,
+      "rank": 3,
+      "rdma_links": [
+        {
+          "addresses": [],
+          "hca": "rocep1s0f0",
+          "mtu": 1500,
+          "netdev": "enp1s0f0np0",
+          "physical_state": "LINK_UP",
+          "port": "1",
+          "speed_mbps": 200000,
+          "state": "ACTIVE"
+        },
+        {
+          "addresses": [],
+          "hca": "rocep1s0f1",
+          "mtu": 1500,
+          "netdev": "enp1s0f1np1",
+          "physical_state": "LINK_UP",
+          "port": "1",
+          "speed_mbps": 200000,
+          "state": "ACTIVE"
+        },
+        {
+          "addresses": [],
+          "hca": "roceP2p1s0f0",
+          "mtu": 1500,
+          "netdev": "enP2p1s0f0np0",
+          "physical_state": "LINK_UP",
+          "port": "1",
+          "speed_mbps": 200000,
+          "state": "ACTIVE"
+        },
+        {
+          "addresses": [],
+          "hca": "roceP2p1s0f1",
+          "mtu": 1500,
+          "netdev": "enP2p1s0f1np1",
+          "physical_state": "LINK_UP",
+          "port": "1",
+          "speed_mbps": 200000,
+          "state": "ACTIVE"
+        }
+      ],
+      "renderer": "NetworkManager",
+      "rocev2_gid_candidates": {
+        "roceP2p1s0f0": [
+          "1",
+          "3"
+        ],
+        "roceP2p1s0f1": [
+          "1",
+          "3"
+        ],
+        "rocep1s0f0": [
+          "1",
+          "3"
+        ],
+        "rocep1s0f1": [
+          "1",
+          "3"
+        ]
+      },
+      "sudo_n": "available",
+      "user": "sdrew"
+    }
+  ],
+  "profile": "asus-reference",
+  "proposed_config": {
+    "FABRIC_IFACES": "enp1s0f0np0 enp1s0f1np1 enP2p1s0f0np0 enP2p1s0f1np1",
+    "FABRIC_IFACES_BY_RANK": [],
+    "MGMT_IF": "enP7s7",
+    "MGMT_IF_BY_RANK": [],
+    "NCCL_IB_GID_INDEX": "3",
+    "NCCL_IB_GID_INDEX_BY_RANK": [],
+    "NCCL_IB_HCA": "rocep1s0f0,rocep1s0f1",
+    "NCCL_IB_HCA_BY_RANK": [],
+    "NETPLAN_RENDERER": "NetworkManager",
+    "NETPLAN_RENDERER_BY_RANK": []
+  },
+  "result": "ready",
+  "schema_version": "1.0.0",
+  "warnings": []
+}

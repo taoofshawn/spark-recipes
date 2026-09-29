@@ -1,0 +1,508 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<EOF
+usage: tp4ctl [-h|--help] <command>
+
+  status         per-node container status + endpoint health
+  fabric-check   fabric interface MTU/IP + jumbo ping matrix (8 directions).
+                 Exit 0 = every fabric interface present and all jumbo pings OK,
+                 1 = any degradation; \`tp4ctl up\` refuses to start on 1.
+  up             wait-peers, fabric-check, flusher, teardown, launch 3->2->1->0, wait for health
+  down           flusher off + teardown on every node
+  poweroff       down + physical power off (interactive confirmation)
+  restart        down + up
+  logs [node]    follow the container logs (default: \${HOSTS[0]:-rank 0})
+  health         health check + smoke chat completion
+
+Host override: TP4_HOSTS="user@ip user@ip ..." (in rank order), to be used when
+tp4ctl runs on rank 0 and the workstation's ssh aliases do not exist there.
+
+Configuration overlay: TP4_ENV=path/to/file.env is sourced after cluster.env and
+forwarded to the per-node launcher. Every subcommand of a window needs the same value.
+
+Fabric prefix: fabric-check derives its interface filter from the first two octets of
+FABRIC_TARGETS[0] in cluster.env, i.e. one /16 on the octet boundary. An addressing plan
+that does not fit that assumption sets FABRIC_PREFIX_RE to an awk regex, e.g.
+FABRIC_PREFIX_RE='172\\.2[0-9]\\.'
+EOF
+}
+# -h/--help is answered BEFORE the recipe is sourced: `--help` has to work in a fresh
+# checkout that has no cluster.env yet.
+case "${1:-}" in -h|--help) usage; exit 0 ;; esac
+
+SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
+# NOTE: tp4ctl is SELF-CONTAINED on purpose. scripts/deploy.sh copies this single file to
+# ~/.local/tp4/tp4ctl on every node and scripts/node/tp4-autostart.service.example runs it from there
+# (`ExecStart=.../tp4/tp4ctl up`), where scripts/lib/common.sh does not exist. Never make
+# it source that library — the same rule the launcher and the flusher follow.
+#
+# Installed, the controller is next to cluster.env. In a checkout it lives in scripts/
+# and uses the repository-root cluster.env one level above. File presence selects the
+# layout; public checkouts without a local config still retain working --help.
+if [ -f "$SCRIPT_DIR/cluster.env" ]; then
+  HERE=$SCRIPT_DIR
+elif [ "$(basename "$SCRIPT_DIR")" = scripts ] && [ -f "$SCRIPT_DIR/../cluster.env" ]; then
+  HERE=$(cd "$SCRIPT_DIR/.." && pwd)
+else
+  echo "[tp4ctl] ERROR: cluster.env missing: create it from cluster.env.example — see README § Start here" >&2
+  exit 1
+fi
+# cluster.env is ALWAYS sourced first: it is the production recipe. TP4_ENV, when set,
+# names a DELTA overlay relative to HERE, sourced AFTER it, so a window only carries the
+# keys it changes. Every subcommand of a window needs the same TP4_ENV, `down` included.
+# shellcheck source=cluster.env
+. "$HERE/cluster.env"
+
+# MINIMAL recipe guard. tp4ctl is SELF-CONTAINED (see the note above): it cannot use
+# scripts/lib/common.sh, which carries the full key-by-key validation. Validate the base
+# recipe before an overlay, then validate the effective recipe again after it: an overlay
+# must not be able to expand this fixed four-rank lane.
+validate_recipe_shape() {
+  local scope=$1 fabric_count=0
+  local -a guard_nodes guard_mgmt
+  case "${NODES:-} ${MGMT_IPS:-} ${MASTER_IP:-} ${RELAY_DEST:-}" in
+    *'<'*'>'*)
+      echo "[tp4ctl] ERROR: $scope: a <...> placeholder is still unfilled — see README § Start here" >&2
+      exit 1 ;;
+  esac
+  if [ -z "${NODES:-}" ] || [ -z "${MGMT_IPS:-}" ] || [ -z "${MASTER_IP:-}" ]; then
+    echo "[tp4ctl] ERROR: $scope: NODES, MGMT_IPS and MASTER_IP must all be set — see README § Start here" >&2
+    exit 1
+  fi
+  if [ "$NODES" = "gx10-a gx10-b gx10-c gx10-d" ] \
+     || [ "$MGMT_IPS" = "192.0.2.11 192.0.2.12 192.0.2.13 192.0.2.14" ] \
+     || [ "$MASTER_IP" = "192.0.2.11" ]; then
+    echo "[tp4ctl] ERROR: $scope: NODES/MGMT_IPS/MASTER_IP still have the example values — see README § Start here" >&2
+    exit 1
+  fi
+  read -r -a guard_nodes <<<"$NODES"
+  read -r -a guard_mgmt <<<"$MGMT_IPS"
+  if [ "${#guard_nodes[@]}" -ne 4 ] || [ "${#guard_mgmt[@]}" -ne 4 ]; then
+    echo "[tp4ctl] ERROR: $scope: NODES (${#guard_nodes[@]} entries) and MGMT_IPS (${#guard_mgmt[@]}) must have 4 entries each, one per rank — see README § Start here" >&2
+    exit 1
+  fi
+  if [ "$MASTER_IP" != "${guard_mgmt[0]}" ]; then
+    echo "[tp4ctl] ERROR: $scope: MASTER_IP must be MGMT_IPS[0] (the rendez-vous runs on rank 0) — see README § Start here" >&2
+    exit 1
+  fi
+  if ! [[ "${CONTAINER:-}" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]]; then
+    echo "[tp4ctl] ERROR: $scope: CONTAINER is not a valid Docker container name" >&2
+    exit 1
+  fi
+  if declare -p FABRIC_TARGETS >/dev/null 2>&1; then
+    fabric_count=${#FABRIC_TARGETS[@]}
+  fi
+  if [ "$fabric_count" -ne 4 ]; then
+    echo "[tp4ctl] ERROR: $scope: FABRIC_TARGETS has $fabric_count entries, expected exactly 4 (one per rank) — see README § Start here" >&2
+    exit 1
+  fi
+}
+
+validate_recipe_shape "cluster.env"
+BASE_CONTAINER=${CONTAINER-}
+# Prefix prepended to the remote launcher call, so the nodes source the same overlay.
+LAUNCH_ENV_PREFIX=""
+if [ -n "${TP4_ENV:-}" ]; then
+  case "$TP4_ENV" in
+    /*)   echo "[tp4ctl] ERROR: TP4_ENV must be a relative path (got: $TP4_ENV)" >&2; exit 1 ;;
+    *..*) echo "[tp4ctl] ERROR: TP4_ENV must not contain '..' (got: $TP4_ENV)" >&2; exit 1 ;;
+  esac
+  [[ "$TP4_ENV" =~ ^[A-Za-z0-9._/-]+$ ]] \
+    || { echo "[tp4ctl] ERROR: TP4_ENV has invalid characters, allowed [A-Za-z0-9._/-] (got: $TP4_ENV)" >&2; exit 1; }
+  if [ ! -f "$HERE/$TP4_ENV" ]; then
+    echo "[tp4ctl] ERROR: overlay env file missing: $HERE/$TP4_ENV" >&2
+    echo "[tp4ctl]        overlays never change CONTAINER, so down/status/logs can be run" >&2
+    echo "[tp4ctl]        without TP4_ENV: they see the same single stack." >&2
+    exit 1
+  fi
+  # shellcheck disable=SC1090
+  . "$HERE/$TP4_ENV"
+  LAUNCH_ENV_PREFIX="TP4_ENV=$TP4_ENV "
+fi
+
+[ "${CONTAINER-}" = "$BASE_CONTAINER" ] \
+  || { echo "[tp4ctl] ERROR: TP4_ENV must not change CONTAINER" >&2; exit 1; }
+validate_recipe_shape "effective configuration after TP4_ENV"
+# Docker's name filter is a regular expression. Docker container names allow only one
+# regex metacharacter, '.', so escape it before constructing an exact-name filter.
+CONTAINER_NAME_RE=${CONTAINER//./\\.}
+
+# Reachable hosts: ssh aliases from the workstation, or TP4_HOSTS (space-separated, e.g.
+# user@ip) when tp4ctl runs on rank 0 and those aliases do not exist there.
+read -r -a HOSTS <<<"${TP4_HOSTS:-$NODES}"
+read -r -a MGMT <<<"$MGMT_IPS"
+NNODES=${#HOSTS[@]}
+[ "$NNODES" -eq 4 ] \
+  || { echo "[tp4ctl] ERROR: TP4_HOSTS resolves to $NNODES entries, expected exactly 4 (one per rank)" >&2; exit 1; }
+
+SSH_OPTS=(-o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10)
+# The tilde stays literal on purpose: the remote shell expands it over ssh.
+# shellcheck disable=SC2088
+REMOTE_DIR="~/.local/tp4"
+# systemd-run wants an absolute ExecStart: $HOME is expanded by the remote shell.
+REMOTE_FLUSHER='$HOME/.local/tp4/flusher-unconditional.sh'
+
+# macOS has no timeout(1): without the binary the guard degrades instead of breaking.
+if command -v timeout >/dev/null 2>&1; then TIMEOUT_BIN=timeout
+elif command -v gtimeout >/dev/null 2>&1; then TIMEOUT_BIN=gtimeout
+else TIMEOUT_BIN=""; fi
+
+HEALTH_URL="http://$MASTER_IP:$API_PORT/health"
+MODELS_URL="http://$MASTER_IP:$API_PORT/v1/models"
+CHAT_URL="http://$MASTER_IP:$API_PORT/v1/chat/completions"
+
+log()  { echo "[tp4ctl] $*"; }
+warn() { echo "[tp4ctl] $*" >&2; }
+die()  { echo "[tp4ctl] ERROR: $*" >&2; exit 1; }
+
+# The fabric ring matrix comes from cluster.env (FABRIC_TARGETS): the array index is the
+# rank, and each entry lists the fabric IPs of that rank's two direct ring peers, so
+# fabric-check pings all 8 directions. Keep it in sync with the per-node netplan files
+# under scripts/node/etc/ — see docs/fabric.md.
+[ "${#FABRIC_TARGETS[@]}" -eq "$NNODES" ] || die "FABRIC_TARGETS in cluster.env must have one entry per rank"
+
+# Fabric addressing, derived from the recipe instead of hard-coded here: the first two
+# octets of the first ring peer (e.g. 10.10.) filter the fabric interfaces on the nodes.
+# That ASSUMES one /16 on the octet boundary — see docs/fabric.md. A plan that does not
+# fit it exports FABRIC_PREFIX_RE (an awk regex) and skips the derivation entirely.
+if [ -n "${FABRIC_PREFIX_RE:-}" ]; then
+  FABRIC_FILTER_DESC="matching FABRIC_PREFIX_RE=$FABRIC_PREFIX_RE"
+else
+  _fab_peer=${FABRIC_TARGETS[0]%% *}
+  FABRIC_PREFIX="${_fab_peer%%.*}."
+  _fab_peer=${_fab_peer#*.}
+  FABRIC_PREFIX="$FABRIC_PREFIX${_fab_peer%%.*}."
+  unset _fab_peer
+  [[ "$FABRIC_PREFIX" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.$ ]] \
+    || die "cannot derive the fabric prefix from FABRIC_TARGETS[0] in cluster.env (got: ${FABRIC_TARGETS[0]}); set FABRIC_PREFIX_RE to override"
+  FABRIC_PREFIX_RE=${FABRIC_PREFIX//./\\.}
+  FABRIC_FILTER_DESC="in ${FABRIC_PREFIX}0.0/16"
+fi
+
+# rsht <seconds> <host> <cmd>: seconds=0 disables the guard (e.g. logs -f).
+rsht() {
+  local t=$1 host=$2; shift 2
+  if [ -n "$TIMEOUT_BIN" ] && [ "$t" != 0 ]; then
+    "$TIMEOUT_BIN" "$t" ssh -n "${SSH_OPTS[@]}" "$host" "$@"
+  else
+    ssh -n "${SSH_OPTS[@]}" "$host" "$@"
+  fi
+}
+
+rsh() { rsht 60 "$@"; }
+
+# ---------------------------------------------------------------- status
+
+cmd_status() {
+  local i host status code rc=0
+  for i in $(seq 0 $((NNODES - 1))); do
+    host=${HOSTS[$i]}
+    log "--- rank $i · $host (${MGMT[$i]}) ---"
+    if ! status=$(rsh "$host" "sudo docker ps --filter 'name=^/$CONTAINER_NAME_RE$' --format '{{.Names}}  {{.Status}}  {{.Image}}'"); then
+      warn "$host: cannot verify the configured running container"
+      rc=1
+    elif [ -z "$status" ]; then
+      warn "$host: configured container $CONTAINER is not running"
+      rc=1
+    elif [ "${status%% *}" != "$CONTAINER" ]; then
+      warn "$host: Docker returned a different container for the configured name"
+      rc=1
+    else
+      printf '%s\n' "$status"
+    fi
+  done
+  log "--- endpoint ---"
+  if ! code=$(curl -s -m 10 -o /dev/null -w '%{http_code}' "$HEALTH_URL"); then
+    code=000
+  fi
+  log "GET $HEALTH_URL -> $code"
+  [ "$code" = "200" ] || rc=1
+  return "$rc"
+}
+
+# ---------------------------------------------------------- fabric-check
+
+cmd_fabric_check() {
+  local i host rc=0 targets t ifaces n_if
+  for i in $(seq 0 $((NNODES - 1))); do
+    host=${HOSTS[$i]}
+    log "--- rank $i · $host: fabric interfaces ---"
+    # Captured instead of streamed: an empty result means the fabric is not configured on
+    # that node, and a silent pass here would let `up` launch on a 1500-MTU mgmt path.
+    if ! ifaces=$(rsh "$host" "ip -o -4 addr show | awk '/$FABRIC_PREFIX_RE/{print \$2, \$4}' | while read -r ifc cidr; do printf '  %-10s %-18s mtu=%s\n' \"\$ifc\" \"\$cidr\" \"\$(cat /sys/class/net/\$ifc/mtu)\"; done"); then
+      warn "$host: cannot read the fabric interfaces"
+      rc=1
+    else
+      n_if=0
+      if [ -n "$ifaces" ]; then
+        printf '%s\n' "$ifaces"
+        n_if=$(printf '%s\n' "$ifaces" | wc -l | tr -d ' ')
+      fi
+      # Each node sits on TWO ring links: one interface is as broken as none.
+      if [ "$n_if" -lt 2 ]; then
+        warn "$host: $n_if fabric interface(s) $FABRIC_FILTER_DESC, expected 2: the ring is not configured"
+        rc=1
+      fi
+    fi
+  done
+
+  log "--- jumbo ping matrix (MTU 9000, 8 directions) ---"
+  for i in $(seq 0 $((NNODES - 1))); do
+    host=${HOSTS[$i]}
+    targets=${FABRIC_TARGETS[$i]}
+    for t in $targets; do
+      if rsh "$host" "ping -M do -s 8972 -c 2 -W 3 $t" >/dev/null 2>&1; then
+        log "  OK   $host -> $t (jumbo)"
+      else
+        warn "  FAIL $host -> $t (8972B jumbo does not get through: MTU or link)"
+        rc=1
+      fi
+    done
+  done
+  return $rc
+}
+
+# ------------------------------------------------------------- flusher
+
+flusher_on() {
+  local i host rc=0
+  for i in $(seq 0 $((NNODES - 1))); do
+    host=${HOSTS[$i]}
+    # Transient unit instead of `nohup ... &`: with a backgrounded process the remote
+    # shell never closed the ssh channel and `up` hung here forever.
+    if ! rsht 30 "$host" "load=\$(systemctl show -p LoadState --value tp4-flusher 2>/dev/null) || exit 1; if [ \"\$load\" != not-found ]; then sudo systemctl stop tp4-flusher || exit 1; load=\$(systemctl show -p LoadState --value tp4-flusher 2>/dev/null) || exit 1; if [ \"\$load\" != not-found ]; then sudo systemctl reset-failed tp4-flusher; reset_rc=\$?; if [ \"\$reset_rc\" -ne 0 ]; then load=\$(systemctl show -p LoadState --value tp4-flusher 2>/dev/null) || exit 1; [ \"\$load\" = not-found ] || exit \"\$reset_rc\"; fi; fi; fi; sudo systemd-run --unit=tp4-flusher --collect --quiet $REMOTE_FLUSHER || exit 1; systemctl is-active --quiet tp4-flusher"; then
+      warn "flusher on $host: could not start and verify unit tp4-flusher"
+      rc=1
+      continue
+    fi
+    log "flusher ON  on $host (unit tp4-flusher)"
+  done
+  return "$rc"
+}
+
+flusher_off() {
+  local i host rc=0
+  for i in $(seq 0 $((NNODES - 1))); do
+    host=${HOSTS[$i]}
+    # A collected transient unit is legitimately not-found. The legacy pgrep/pkill path
+    # remains for flushers started before the unit existed, and is verified explicitly.
+    # The [f] character class keeps the matcher from selecting the shell carrying it.
+    if rsht 20 "$host" "probe_flusher() { sudo sh -c 'pgrep -f \"[f]lusher-unconditional\" >/dev/null 2>&1; probe_rc=\$?; case \"\$probe_rc\" in 0) printf present ;; 1) printf absent ;; *) exit \"\$probe_rc\" ;; esac'; }; load=\$(systemctl show -p LoadState --value tp4-flusher 2>/dev/null) || exit 1; if [ \"\$load\" != not-found ]; then sudo systemctl stop tp4-flusher || exit 1; load=\$(systemctl show -p LoadState --value tp4-flusher 2>/dev/null) || exit 1; if [ \"\$load\" != not-found ]; then sudo systemctl reset-failed tp4-flusher; reset_rc=\$?; if [ \"\$reset_rc\" -ne 0 ]; then load=\$(systemctl show -p LoadState --value tp4-flusher 2>/dev/null) || exit 1; [ \"\$load\" = not-found ] || exit \"\$reset_rc\"; fi; fi; fi; proc_state=\$(probe_flusher) || exit 1; if [ \"\$proc_state\" = present ]; then sudo pkill -f '[f]lusher-unconditional' >/dev/null 2>&1; kill_rc=\$?; if [ \"\$kill_rc\" -ne 0 ]; then proc_state=\$(probe_flusher) || exit 1; [ \"\$proc_state\" = absent ] || exit \"\$kill_rc\"; fi; fi; load=\$(systemctl show -p LoadState --value tp4-flusher 2>/dev/null) || exit 1; [ \"\$load\" = not-found ] || { state=\$(systemctl show -p ActiveState --value tp4-flusher 2>/dev/null) || exit 1; [ \"\$state\" = inactive ]; } || exit 1; [ \"\$(probe_flusher)\" = absent ]" >/dev/null 2>&1; then
+      log "flusher OFF on $host"
+    else
+      warn "flusher OFF on $host: stop or absence verification failed"
+      rc=1
+    fi
+  done
+  return "$rc"
+}
+
+# ------------------------------------------------------------- teardown
+
+teardown_all() {
+  local i host rc=0
+  for i in $(seq 0 $((NNODES - 1))); do
+    host=${HOSTS[$i]}
+    if rsh "$host" "names=\$(sudo docker ps -a --filter 'name=^/$CONTAINER_NAME_RE$' --format '{{.Names}}') || exit 1; if [ -n \"\$names\" ]; then [ \"\$names\" = '$CONTAINER' ] || exit 1; sudo docker rm -f '$CONTAINER' >/dev/null || exit 1; fi; names=\$(sudo docker ps -a --filter 'name=^/$CONTAINER_NAME_RE$' --format '{{.Names}}') || exit 1; [ -z \"\$names\" ]"; then
+      log "teardown $CONTAINER on $host"
+    else
+      warn "$host: teardown or absence verification failed"
+      rc=1
+    fi
+  done
+  return "$rc"
+}
+
+# ------------------------------------------------------------------- up
+
+wait_peers() {
+  local deadline=$((SECONDS + 600)) i host pending
+  log "waiting for every node to answer ssh (max 10 min)..."
+  while :; do
+    pending=""
+    for i in $(seq 0 $((NNODES - 1))); do
+      host=${HOSTS[$i]}
+      rsh "$host" true >/dev/null 2>&1 || pending="$pending $host"
+    done
+    if [ -z "$pending" ]; then
+      log "all nodes reachable"
+      return 0
+    fi
+    if [ $SECONDS -ge $deadline ]; then
+      die "nodes unreachable after 10 min:$pending"
+    fi
+    log "still waiting for:$pending"
+    sleep 15
+  done
+}
+
+# The launcher sources the overlay on the node: it has to be there before we tear the
+# stack down, otherwise every rank aborts and the cluster stays dead.
+check_overlay_on_nodes() {
+  [ -n "${TP4_ENV:-}" ] || return 0
+  local i host missing=""
+  log "checking the overlay $TP4_ENV on every node"
+  for i in $(seq 0 $((NNODES - 1))); do
+    host=${HOSTS[$i]}
+    rsh "$host" "test -f $REMOTE_DIR/$TP4_ENV" >/dev/null 2>&1 || missing="$missing $host"
+  done
+  [ -z "$missing" ] \
+    || die "overlay $REMOTE_DIR/$TP4_ENV missing on:$missing — run TP4_ENV=$TP4_ENV ./scripts/deploy.sh first"
+  log "overlay present on all $NNODES nodes"
+}
+
+cmd_up() {
+  wait_peers
+
+  check_overlay_on_nodes
+
+  log "fabric-check before launch"
+  cmd_fabric_check || die "degraded fabric: invalid MTU/link. Launch aborted (at MTU 1500 the cluster is silently ~2.7x slower)."
+
+  log "turning the flusher on across all nodes (required while the weights load)"
+  # Cleanup is armed before the first flusher can become active. Existing serving
+  # containers remain untouched until the destructive prelaunch teardown begins.
+  UP_CLEANUP_STACK=0
+  trap 'up_cleanup $?' EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  trap 'exit 129' HUP
+  flusher_on || die "page-cache flusher did not become active on all four ranks"
+
+  log "full teardown before launching"
+  UP_CLEANUP_STACK=1
+  teardown_all || die "prelaunch teardown is incomplete; launch aborted"
+
+  # Mandatory ordering: the headless ranks must be listening before rank 0 starts.
+  local r host
+  for r in $(seq $((NNODES - 1)) -1 0); do
+    host=${HOSTS[$r]}
+    log "launching rank $r on $host"
+    rsht 120 "$host" "cd $REMOTE_DIR && ${LAUNCH_ENV_PREFIX}./$LAUNCHER $r" || die "launching rank $r failed on $host"
+    if [ "$r" -gt 0 ]; then sleep 10; fi
+  done
+
+  log "waiting for /health 200 on $MASTER_IP:$API_PORT (polling every 30s, 35 min timeout)"
+  local deadline=$((SECONDS + 2100)) code last
+  while :; do
+    code=$(curl -s -m 10 -o /dev/null -w '%{http_code}' "$HEALTH_URL" || echo 000)
+    if [ "$code" = "200" ]; then
+      log "health 200 after ${SECONDS}s"
+      break
+    fi
+    if [ $SECONDS -ge $deadline ]; then
+      die "timeout: /health did not reach 200 within 35 min (last code=$code)"
+    fi
+    last=$(rsht 20 "${HOSTS[0]}" "sudo docker logs --tail 1 $CONTAINER 2>&1" || echo "<log unavailable>")
+    log "health=$code (${SECONDS}s) | head: $last"
+    sleep 30
+  done
+
+  log "turning the flusher off everywhere"
+  flusher_off || die "endpoint reached readiness but the flusher could not be stopped everywhere"
+  trap - EXIT INT TERM HUP
+
+  log "endpoint ready: http://$MASTER_IP:$API_PORT/v1  (model id: $SERVED_NAME)"
+  curl -s -m 15 "$MODELS_URL" || warn "/v1/models is not responding"
+  echo
+}
+
+up_cleanup() {
+  local original_rc=$1 cleanup_rc=0
+  trap - EXIT INT TERM HUP
+  if [ "${UP_CLEANUP_STACK:-0}" -eq 1 ]; then
+    warn "up failed after teardown began; removing the configured container from all ranks"
+    if ! teardown_all; then cleanup_rc=1; fi
+  fi
+  if ! flusher_off; then cleanup_rc=1; fi
+  [ "$cleanup_rc" -eq 0 ] || warn "automatic cleanup was incomplete; inspect all four ranks"
+  exit "$original_rc"
+}
+
+# ----------------------------------------------------------------- down
+
+cmd_down() {
+  local rc=0
+  if ! flusher_off; then rc=1; fi
+  # teardown_all visits rank 0 first, closing the endpoint before its peers.
+  if ! teardown_all; then rc=1; fi
+  if [ "$rc" -eq 0 ]; then
+    log "cluster down"
+  else
+    warn "cluster teardown is incomplete or could not be verified"
+  fi
+  return "$rc"
+}
+
+# ------------------------------------------------------------- poweroff
+
+cmd_poweroff() {
+  local ans
+  printf '[tp4ctl] physically power off all %d nodes? [y/N] ' "$NNODES"
+  read -r ans
+  case "$ans" in
+    y|Y) ;;
+    *) log "cancelled"; return 0 ;;
+  esac
+
+  cmd_down || die "poweroff aborted because full-cluster teardown was not verified"
+
+  # head last: it stays reachable until every other node is down.
+  local r host
+  for r in $(seq $((NNODES - 1)) -1 0); do
+    host=${HOSTS[$r]}
+    log "poweroff rank $r · $host"
+    rsh "$host" "sudo systemctl poweroff" >/dev/null 2>&1 || true
+  done
+  log "poweroff command sent to every node"
+}
+
+# ----------------------------------------------------------------- misc
+
+cmd_restart() {
+  cmd_down || die "restart aborted because full-cluster teardown was not verified"
+  cmd_up
+}
+
+cmd_logs() {
+  local host=${1:-${HOSTS[0]}}
+  rsht 0 "$host" "sudo docker logs -f --tail 100 $CONTAINER"
+}
+
+cmd_health() {
+  local code
+  code=$(curl -s -m 10 -o /dev/null -w '%{http_code}' "$HEALTH_URL" || echo 000)
+  log "GET $HEALTH_URL -> $code"
+  [ "$code" = "200" ] || die "endpoint is not healthy"
+
+  log "smoke chat completion (2+2, max_tokens 30)"
+  curl -s -m 120 "$CHAT_URL" \
+    -H 'Content-Type: application/json' \
+    -d "{\"model\":\"$SERVED_NAME\",\"max_tokens\":30,\"messages\":[{\"role\":\"user\",\"content\":\"What is 2+2? Answer with the number only.\"}]}" \
+    || die "chat completion failed or timed out"
+  echo
+}
+
+# ----------------------------------------------------------------- main
+
+[ $# -ge 1 ] || { usage >&2; exit 2; }
+# A non-serving overlay (TP4_NO_SERVE=1) swaps the entrypoint and exits on its own, so
+# `up`/`restart` would leave the cluster with no endpoint and no autostart parity.
+case "${1:-}:${TP4_NO_SERVE:-0}" in
+  up:1|restart:1) die "this overlay has TP4_NO_SERVE=1 and cannot be started with tp4ctl up/restart" ;;
+esac
+
+case "$1" in
+  -h|--help)    usage; exit 0 ;;
+  status)       cmd_status ;;
+  fabric-check) cmd_fabric_check ;;
+  up)           cmd_up ;;
+  down)         cmd_down ;;
+  poweroff)     cmd_poweroff ;;
+  restart)      cmd_restart ;;
+  logs)         shift; cmd_logs "$@" ;;
+  health)       cmd_health ;;
+  *)            usage >&2; exit 2 ;;
+esac

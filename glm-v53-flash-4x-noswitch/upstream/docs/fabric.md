@@ -1,0 +1,152 @@
+# Switchless RoCE fabric
+
+The verified cluster uses four direct DAC links in a closed ConnectX-7 ring. There is
+no switch and no physical rank 0↔2 or rank 1↔3 edge:
+
+```text
+rank 0 ── L1 ── rank 1 ── L2 ── rank 2 ── L3 ── rank 3
+  └──────────────────────── L4 ────────────────────────┘
+```
+
+Each link owns a private /24 and each node addresses exactly two ports at MTU 9000.
+`cluster.env` is the source for `FABRIC_TARGETS`, interface/HCA selections, GID index,
+renderer, and optional per-rank overrides. `scripts/render-netplan.sh` derives the
+gitignored per-node netplan and iptables environment files. Do not hand-edit them.
+
+## Physical map
+
+On the verified ASUS GX10 profile, the addressed Linux ports are `enp1s0f0np0` and
+`enp1s0f1np1`, mapped to `rocep1s0f0` and `rocep1s0f1`. Linux may expose a second
+PCIe view of the same two physical cages; those duplicate netdevs are set UP with MTU
+9000 but receive no fabric address and are excluded from `NCCL_IB_HCA`.
+
+Use the cable label or EEPROM serial to identify peers; carrier state alone cannot say
+which neighbor is attached. The physical position of ConnectX port 1 on the GX10 was
+not independently verified.
+
+```sh
+ssh <node> 'sudo -n ethtool -m <fabric-iface> | grep "Vendor SN"'
+ssh <node> 'sudo -n ethtool -p <fabric-iface> 5'
+```
+
+Expected: both ends of one cable report the same serial. Stop before addressing if a
+peer or cage is ambiguous.
+
+## Address and render the ring
+
+Prerequisite: the owner has confirmed rank order, all four cable edges, private
+subnets, management isolation, and the per-rank interface/HCA/GID selection produced
+by `scripts/agent-preflight.sh`.
+
+```sh
+$EDITOR cluster.env
+./scripts/render-netplan.sh --write
+./scripts/render-netplan.sh --check
+./scripts/deploy-host.sh --check
+```
+
+The renderer enforces four ranks, two neighbor addresses per rank, one /24 per link,
+matching subnets at both ends, and the rank 0→1→2→3→0 port convention. Every address
+must contain exactly four decimal octets from 0 through 255; leading-zero octets are
+rejected as ambiguous. `RELAY_DEST` must remain the rank-2 address reachable directly
+from rank 1 for weight fan-out.
+
+Expected: all eight generated files match and the deploy audit shows only the intended
+network drift. Stop on any topology disagreement or unreviewed management-address
+change.
+
+With an approved network window, push and activate through the bootstrap procedure in
+[`install-from-zero.md`](install-from-zero.md). Netplan activation can drop SSH.
+
+## Verify without changing the cluster
+
+```sh
+./scripts/tp4ctl fabric-check
+```
+
+`fabric-check` reports the addresses and MTU of ports in the configured fabric
+range, fails when it finds fewer than two, and runs the eight directed 8972-byte
+pings. Expected: the output shows exactly the two intended addressed ports per rank,
+each displays MTU 9000, and every jumbo ping succeeds.
+
+The command does not query Ethernet speed, RDMA state, or the HCA/GID selection.
+Check those required properties separately on every rank:
+
+```sh
+ssh <node> 'ip -br link; ip -o -4 addr show'
+ssh <node> 'ethtool <fabric-iface> | grep -E "Speed|Link detected"'
+ssh <node> 'ibv_devinfo -v; ibdev2netdev'
+```
+
+Expected from the manual probes: `200000Mb/s` and `Link detected: yes` on both
+selected ports, both configured HCA ports `ACTIVE` / `LINK_UP`, and the configured
+RoCEv2 GID present on each rank. Stop and report if the addressed port set is wrong,
+any port is MTU 1500, speed or RDMA/HCA/GID state differs, a jumbo ping fails, or a
+rank is unreachable. Do not start TP4 and do not repair one serving rank in isolation.
+
+`NCCL_IB_GID_INDEX` accepts a non-negative explicit index or the automatic-selection sentinel `-1`.
+With `-1`, pinned NCCL selects per HCA port while the launcher continues to constrain
+selection to `NCCL_IB_ADDR_FAMILY=AF_INET` and `NCCL_IB_ROCE_VERSION_NUM=2`. Before a
+rank starts, and during static verification, every configured HCA must have an active
+port with a RoCEv2 GID that is IPv4-mapped, names a configured fabric netdev, and
+exactly matches an IPv4 address on that netdev. A link-local RoCEv2 entry alone does
+not pass. This follows NVIDIA's [automatic GID selection guidance](https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/troubleshooting/networking_troubleshooting.html).
+
+The September 19 and September 18 baselines select `-1`, as does the frozen
+September 11 runtime overlay. The older template also documented explicit index `3`
+as a hardware-specific fallback. Verify the actual addressed ports and their GIDs
+before selecting an explicit index. For rollback, use the values documented in `cluster.env.example`, keeping the
+same `TP4_ENV` for `down` when leaving an overlay.
+
+Keep `NCCL_RELAY_ENABLE` unset with automatic GID selection. The optional compiled
+relay discovery still probes explicit index `3`; it is inert in this production recipe.
+
+### Verify SIRCL GID selections
+
+SIRCL selects its own explicit `SPARK_TP4_DEVICE0/1` and `SPARK_TP4_GID0/1` from
+the mounted serving runtime; NCCL automatic selection does not update them. For
+the Current single-rail profile, source that runtime and run
+`python3 -S scripts/sircl_gid_check.py --fabric-ifaces <edge0-netdev> <edge1-netdev>`
+before loading weights. The checker requires active Ethernet port 1, IPv4 RoCEv2,
+the expected netdev and its primary IPv4, and a distinct peer in that edge's subnet.
+It uses read-only Linux interface ioctls, so the serving image needs no `ip` utility.
+It rejects stale selections without replacing them. Hash the complete SIRCL bundle
+and runtime, then check the native capability records from all four ranks in the
+actual image without mounting model weights when qualifying a changed payload.
+A successful jumbo ping does not prove that SIRCL selected a valid GID. Keep the
+runtime selections and their site-specific hashes consistent; never change a manifest
+merely to accept an unexpected file. `scripts/sircl-site-files.sh` derives the per-rank
+selections from `cluster.env`; see the
+[payload preparation procedure](install-from-zero.md#8-prepare-the-sparkcache-and-sircl-payload).
+
+## Why patched NCCL is required
+
+NCCL's tree and PAT connection setup expects diagonal peers that are not cabled in a
+four-node ring. The vendored overlay makes `NCCL_SKIP_TREE_CONNECT=1` bypass those
+connections, while the launcher forces `NCCL_ALGO=Ring`, whose edges all exist. The
+overlay also contains an upstream two-hop relay implementation, compiled but inert in
+this deployment because `NCCL_RELAY_ENABLE` is unset and the upstream example address
+table does not match this fabric.
+
+Every rank preloads the same host library from `$NCCL_DIR`. The launcher checks that
+the file exists; `scripts/verify-node.sh` checks its SHA-256 against
+`scripts/node/nccl/SHA256SUMS`. Build and atomic fan-out commands live in
+[`scripts/node/nccl/README.md`](../scripts/node/nccl/README.md).
+
+The base NCCL code is BSD-3-Clause. The switchless overlay was published upstream
+without a license file when checked on 2026-09-04; the uncertainty and attribution are
+preserved in [`CREDITS.md`](../CREDITS.md).
+
+## Diagnosis
+
+| Symptom | Check | Action |
+| --- | --- | --- |
+| Responses slow down after a fabric change without a clear log error | `./scripts/tp4ctl fabric-check`; look for MTU 1500 or a missing port | Keep TP4 down, restore the generated network configuration in a full approved window |
+| NCCL initialization hangs or times out | Verify all eight jumbo pings, selected HCA/GID, library SHA, and `NCCL_ALGO=Ring` | Fix the first failed prerequisite; never bypass fabric-check |
+| One node shows four addressed fabric interfaces | Compare with the generated netplan and selected HCAs | Remove duplicate PCIe views from addressing/HCA selection through `cluster.env`, re-render, and review before activation |
+| Link is UP but the peer is wrong | Compare cable serials at both ends | Correct the physical cable map before changing addresses |
+| Wrong-but-present NCCL library | Compare every node to `scripts/node/nccl/SHA256SUMS` | Re-run the atomic installer, then perform an approved full restart and gates |
+
+After any repair, require the static verifier, fabric-check, a full-cluster boot, the
+[post-boot functional gates](operations.md#post-boot-functional-gates), and all six
+runtime signatures before declaring recovery.

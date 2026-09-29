@@ -1,0 +1,37 @@
+# Container patches
+
+These Python files change engine behavior without rebuilding the image. They are
+deployed to `~/patches/`; a patch becomes active only when the launcher or
+`EXTRA_DOCKER_ENV` mounts it.
+
+| File | Role | Activation |
+| --- | --- | --- |
+| `../sparse_attn_indexer_kpool_sm121.py` | Apache-2.0-derived SM121 sparse-attention K-pool fix | deployed as `~/patches/sparse_attn_indexer_kpool.py` and mounted by the launcher only for the September 11 configuration (`SPARKCACHE_MODE=off`) |
+| `adaptive_k_scheduler.py` | frozen previous adaptive speculative verification scheduler, retained for rollback | historical recipes mount it at `/opt/tp4/adaptive_k_scheduler.py`, added to `PYTHONPATH`, and selected by `--scheduler-cls` in `cluster.env` |
+| `test_adaptive_k_policy.py` | CPU-only policy and observation-gate tests | workstation only; `scripts/deploy.sh` skips `test_*.py` |
+
+The current defaults mount the measured scheduler at
+[`../experiments/e03/draft-budget/adaptive_k_scheduler.py`](../experiments/e03/draft-budget/adaptive_k_scheduler.py).
+It preserves the original policy and caps placeholders by the producing output's
+engine budget. Its flag, source pin and complete previous-base rollback are in
+`cluster.env.example`; the original module here keeps its historical bytes and hash.
+
+The scheduler tracks each request's acceptance history and chooses the configured low
+or high verify length. The dynamic speculation table captures CUDA-graph families for
+both. It derives from the pinned vLLM `AsyncScheduler` interface and disables the
+optimization if that path is unavailable. Exceptions in policy logic fall back to base
+scheduling rather than stopping the endpoint.
+
+`EXTRA_DOCKER_ENV` also carries the tuned MoE, engine override, SparkCache and SIRCL
+mounts. A scheduler rollback must remove
+its class flag, mount, `PYTHONPATH`, policy variables, and coupled speculative settings
+while preserving all unrelated entries. See [`docs/operations.md`](../../../docs/operations.md).
+
+```sh
+python3 scripts/node/patches/test_adaptive_k_policy.py
+```
+
+The design and current behavior are summarized in
+[`docs/production-recipe.md`](../../../docs/production-recipe.md). Derived files keep
+their SPDX and provenance headers; licensing details are in
+[`CREDITS.md`](../../../CREDITS.md).

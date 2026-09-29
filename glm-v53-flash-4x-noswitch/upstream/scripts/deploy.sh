@@ -1,0 +1,348 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Deploy cluster.env, runtime assets and the pinned model fetch/manifest tooling to all
+# NODES. Idempotent: it always recopies and verifies the source<->destination sha256.
+# With TP4_ENV=<relative path> the configuration overlay is pushed too, at the same
+# relative path under ~/.local/tp4/ (see docs/operations.md). Host assets (sysctl, grub, host scripts)
+# are NOT handled here: scripts/deploy-host.sh does that.
+#
+# usage:
+#   scripts/deploy.sh            # push and verify
+#   scripts/deploy.sh --check    # read-only audit, copies nothing
+#   scripts/deploy.sh --help
+#
+# --check runs `bash -n` on the local shell sources, then prints one
+# `STATE  <node>  <path>` line per managed file: OK / DRIFT (content) / MODE-DRIFT (an
+# executable that is not executable on the node) / MISSING / UNREADABLE. No scp, no
+# chmod; exit 1 unless every line is OK.
+
+USAGE="usage: $0 [-h] [--check] [--host <alias>]"
+usage() {
+  cat <<EOF
+$USAGE
+
+  --check          read-only audit: local \`bash -n\` plus, per node, the sha256 and the
+                   exec bit of every managed file ("STATE  <node>  <path>"). No scp, no chmod.
+  --host <alias>   push to (or check) one node of NODES/TP4_HOSTS only
+
+Managed files: cluster.env, scripts/launcher/launch-glm53-tp4.sh, scripts/tp4ctl, the
+regular-file September 11 reference controller, September 18 rollback assets, the flusher,
+model and NCCL GID helpers/manifests, the indexer patch, scripts/node/patches/*.py (minus tests),
+scripts/node/moe-configs/*.json, vLLM overrides, the vendored SparkCache/SIRCL payload
+(third_party/) with its manifests, the generated SIRCL site files when present, and the
+TP4_ENV overlay when set. Host assets: scripts/deploy-host.sh.
+EOF
+}
+# --help must work in a checkout that has no cluster.env yet.
+for a in "$@"; do case "$a" in -h|--help) usage; exit 0 ;; esac; done
+
+REPO=$(cd "$(dirname "$0")/.." && pwd)
+# shellcheck disable=SC2034  # read by scripts/lib/common.sh (log/warn/die prefix)
+TP4_LOG_TAG='[deploy]'
+# shellcheck source=lib/common.sh
+. "$REPO/scripts/lib/common.sh"
+tp4_load_env "$REPO" --require --overlay
+
+CHECK=0
+ONE_HOST=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -h|--help) usage; exit 0 ;;
+    --check)   CHECK=1; shift ;;
+    --host)    [ $# -ge 2 ] || { echo "--host needs a node alias" >&2; exit 2; }; ONE_HOST=$2; shift 2 ;;
+    *)         echo "$USAGE" >&2; exit 2 ;;
+  esac
+done
+
+read -r -a HOSTS <<<"${TP4_HOSTS:-$NODES}"
+SSH_OPTS=("${TP4_SSH_OPTS[@]}")
+
+# A TP4_HOSTS entry can be user@address: --host matches the connection string or the NODES
+# alias at the same position (rank order), so `--host <ALIAS_RANK3>` works either way.
+read -r -a NODE_ALIASES <<<"$NODES"
+if [ -n "$ONE_HOST" ]; then
+  SELECTED=()
+  for i in "${!HOSTS[@]}"; do
+    if [ "${HOSTS[$i]}" = "$ONE_HOST" ] \
+       || [ "${HOSTS[$i]##*@}" = "$ONE_HOST" ] \
+       || { [ "${#HOSTS[@]}" -eq "${#NODE_ALIASES[@]}" ] && [ "${NODE_ALIASES[$i]}" = "$ONE_HOST" ]; }; then
+      SELECTED+=("${HOSTS[$i]}")
+    fi
+  done
+  [ "${#SELECTED[@]}" -gt 0 ] \
+    || { warn "ERROR: --host $ONE_HOST is not in NODES/TP4_HOSTS (${HOSTS[*]})"; exit 2; }
+  HOSTS=("${SELECTED[@]}")
+  log "--host $ONE_HOST: only this node is touched"
+fi
+
+# source file -> path relative to $HOME on the node
+FILES=(
+  "cluster.env:tp4/cluster.env"
+  "scripts/launcher/launch-glm53-tp4.sh:tp4/launch-glm53-tp4.sh"
+  "scripts/tp4ctl:tp4/tp4ctl"
+  "scripts/node/reference/tp4ctl-f0-20260912.sh:tp4/tp4ctl-f0-reference"
+  "scripts/node/reference/model-20260918.py:tp4/reference/model-20260918.py"
+  "scripts/node/reference/sparkcache-20260918.json:tp4/reference/sparkcache-20260918.json"
+  "scripts/node/flusher-unconditional.sh:tp4/flusher-unconditional.sh"
+  "scripts/node/sparse_attn_indexer_kpool_sm121.py:patches/sparse_attn_indexer_kpool.py"
+  "scripts/fetch-fp8-weights.sh:tp4/scripts/fetch-fp8-weights.sh"
+  "scripts/model_manifest.py:tp4/scripts/model_manifest.py"
+  "scripts/nccl_gid_check.py:tp4/scripts/nccl_gid_check.py"
+  "scripts/render_chat_template.py:tp4/scripts/render_chat_template.py"
+  "scripts/lib/common.sh:tp4/scripts/lib/common.sh"
+)
+EXECUTABLES="tp4/launch-glm53-tp4.sh tp4/tp4ctl tp4/tp4ctl-f0-reference tp4/flusher-unconditional.sh tp4/scripts/fetch-fp8-weights.sh tp4/scripts/model_manifest.py tp4/sircl/runtime/entrypoint.sh"
+REFERENCE_EXECUTABLES="tp4/tp4ctl-f0-reference"
+SHELL_SCRIPTS="tp4/launch-glm53-tp4.sh tp4/tp4ctl tp4/tp4ctl-f0-reference tp4/flusher-unconditional.sh tp4/scripts/fetch-fp8-weights.sh tp4/scripts/lib/common.sh tp4/sircl/runtime/entrypoint.sh"
+
+# Extra remote directories to create before scp (relative to $HOME).
+REMOTE_DIRS=(tp4 patches tp4/scripts tp4/scripts/lib tp4/node/model-manifests tp4/reference)
+
+# Complete immutable release manifests. Both the current and rollback revisions stay
+# available on the nodes so fetch and full verification never consult a moving URL.
+manifest_count=0
+for f in "$REPO"/scripts/node/model-manifests/*.json; do
+  [ -f "$f" ] || continue
+  FILES+=("scripts/node/model-manifests/${f##*/}:tp4/node/model-manifests/${f##*/}")
+  manifest_count=$((manifest_count + 1))
+done
+[ "$manifest_count" -gt 0 ] || { warn "no model release manifests found"; exit 1; }
+
+# Python patches for the container (scripts/node/patches/README.md): pushed next to the indexer
+# patch. Every .py in FILES is ast.parsed below, so a syntax error never reaches a node.
+patch_count=0
+for f in "$REPO"/scripts/node/patches/*.py; do
+  [ -f "$f" ] || continue
+  case ${f##*/} in test_*) continue ;; esac   # unit tests stay on the workstation
+  FILES+=("scripts/node/patches/${f##*/}:patches/${f##*/}")
+  patch_count=$((patch_count + 1))
+done
+
+# SparkCache recipe. The vLLM override files (Apache-2.0 derived, scripts/node/overrides/),
+# the kv-transfer config and the vendored Apache-2.0 connector, encoder and SIRCL payload
+# (third_party/, docs/third-party.md) are managed here; the launcher verifies them against
+# the deployed SHA256SUMS before Docker starts.
+override_count=0
+if [ -d "$REPO/scripts/node/overrides" ]; then
+  while IFS= read -r f; do
+    FILES+=("$f:tp4/overrides/${f#scripts/node/overrides/}")
+    override_count=$((override_count + 1))
+  done < <(cd "$REPO" && find scripts/node/overrides -type f -name '*.py' | sort)
+fi
+if [ "$override_count" -gt 0 ]; then
+  REMOTE_DIRS+=(tp4/overrides/vllm/v1/core tp4/overrides/vllm/v1/worker tp4/overrides/vllm/models/glm5next/nvidia/ops tp4/overrides/vllm/parser)
+fi
+# SHA256SUMS.site is the gitignored per-site manifest (SIRCL per-rank peer/GID files).
+for f in scripts/node/sparkcache/kv-transfer-config.json scripts/node/sparkcache/SHA256SUMS scripts/node/sircl/SHA256SUMS scripts/node/sircl/SHA256SUMS.site; do
+  [ -f "$REPO/$f" ] || continue
+  FILES+=("$f:tp4/${f#scripts/node/}")
+done
+for f in "$REPO"/third_party/sparkcache/*.py; do
+  FILES+=("third_party/sparkcache/${f##*/}:tp4/sparkcache/${f##*/}")
+done
+for f in "$REPO"/third_party/sparkring-sircl/bundle/* "$REPO"/third_party/sparkring-sircl/runtime/*; do
+  rel=${f#"$REPO"/third_party/sparkring-sircl/}
+  FILES+=("third_party/sparkring-sircl/$rel:tp4/sircl/$rel")
+done
+FILES+=("scripts/sircl_gid_check.py:tp4/sircl/runtime/sircl_gid_check.py")
+# This site's generated SIRCL files (scripts/sircl-site-files.sh), when this checkout holds them.
+if [ -d "$REPO/scripts/node/sircl/site" ]; then
+  for f in rank0.env rank1.env rank2.env rank3.env SHA256SUMS; do
+    FILES+=("scripts/node/sircl/site/$f:tp4/sircl/runtime/$f")
+  done
+fi
+REMOTE_DIRS+=(tp4/sparkcache tp4/sircl tp4/sircl/bundle tp4/sircl/runtime)
+
+# Accepted E03 runtime sources retain their measured paths; historical checks and
+# preparation assets travel alongside them. The effective recipe selects each mount.
+if [ -d "$REPO/scripts/node/experiments/e03" ]; then
+  while IFS= read -r f; do
+    FILES+=("$f:tp4/experiments/e03/${f#scripts/node/experiments/e03/}")
+    REMOTE_DIRS+=("tp4/experiments/e03/$(dirname "${f#scripts/node/experiments/e03/}")")
+  done < <(cd "$REPO" && find scripts/node/experiments/e03 -type f \( -name '*.py' -o -name '*.json' -o -name SHA256SUMS \) | sort)
+fi
+
+# The configuration overlay travels next to cluster.env, at the same relative path.
+if [ -n "${TP4_ENV:-}" ]; then
+  FILES+=("$TP4_ENV:tp4/$TP4_ENV")
+  # The overlay is sourced by bash on the node: syntax-check it here, not at `up` time.
+  SHELL_SCRIPTS="$SHELL_SCRIPTS tp4/$TP4_ENV"
+  overlay_dir="tp4/$TP4_ENV"
+  overlay_dir=${overlay_dir%/*}
+  [ "$overlay_dir" = "tp4" ] || REMOTE_DIRS+=("$overlay_dir")
+fi
+
+# Fused-MoE tuning configs, when the directory carries any.
+moe_count=0
+if [ -d "$REPO/scripts/node/moe-configs" ]; then
+  for f in "$REPO"/scripts/node/moe-configs/*.json; do
+    [ -f "$f" ] || continue
+    FILES+=("scripts/node/moe-configs/${f##*/}:tp4/moe-configs/${f##*/}")
+    moe_count=$((moe_count + 1))
+  done
+  [ "$moe_count" -eq 0 ] || REMOTE_DIRS+=(tp4/moe-configs)
+fi
+
+sha_of() { shasum -a 256 "$1" | awk '{print $1}'; }
+
+# Site layout (site mod 5, §2.5 relocation): the deployed runtime lives OUTSIDE $HOME
+# (`~/.local/tp4/`, `~/.local/lib/patches/`), while the FILES/REMOTE_DIRS entries below
+# keep the historical ~/ relative form. Map every remote destination through this single
+# point so push, --check, the sha256 verification and the remote bash -n all agree with
+# the launcher's own path resolution (~/.local/tp4) and the cluster.env -v mounts.
+remote_rel() {
+  case "$1" in
+    tp4/*)             printf '.local/%s' "$1" ;;
+    patches|patches/*) printf '.local/lib/%s' "$1" ;;
+    *)                 printf '%s' "$1" ;;
+  esac
+}
+
+# Nothing is copied before the whole list is known-good: a source that disappeared would
+# otherwise abort the run mid-node (sha_of on a missing file, `set -o pipefail`), and a
+# .py with a syntax error would reach the container. This covers every Python file that
+# travels: scripts/node/patches/ and the indexer patch.
+for entry in "${FILES[@]}"; do
+  src=${entry%%:*}
+  [ -f "$REPO/$src" ] || { warn "source missing, refusing to run: $REPO/$src"; exit 1; }
+  case "$src" in
+    *.py) python3 -c 'import ast,sys; ast.parse(open(sys.argv[1]).read(), sys.argv[1])' "$REPO/$src" \
+            || { warn "syntax check failed: $src"; exit 1; } ;;
+  esac
+done
+
+# --- check (read-only) -----------------------------------------------------------------
+if [ "$CHECK" = 1 ]; then
+  rc=0
+  log "--check: read-only, nothing is copied and no mode is changed"
+  # remote destination -> local source, for the shell scripts pushed from this repo
+  local_for() {
+    local dst=$1 e
+    for e in "${FILES[@]}"; do
+      if [ "${e#*:}" = "$dst" ]; then printf '%s' "$REPO/${e%%:*}"; return 0; fi
+    done
+    return 1
+  }
+  log "local bash -n"
+  for s in $SHELL_SCRIPTS; do
+    lsrc=$(local_for "$s") || lsrc=""
+    if [ -z "$lsrc" ]; then
+      printf '  %-11s %-12s %s\n' MISSING - "no local source for ~/$s" >&2; rc=1; continue
+    fi
+    if bash -n "$lsrc"; then
+      printf '  %-11s %-12s %s\n' OK - "bash -n ${lsrc#"$REPO/"}"
+    else
+      printf '  %-11s %-12s %s\n' FAIL - "bash -n ${lsrc#"$REPO/"}" >&2; rc=1
+    fi
+  done
+  # "PRESENT <sha256> <mode>", "UNREADABLE -" or "ABSENT -", one ssh per file.
+  probe='if [ -r "$p" ]; then echo "PRESENT $(sha256sum "$p" | cut -d" " -f1) $(stat -c "%a" "$p")";
+         elif [ -e "$p" ]; then echo "UNREADABLE -";
+         else echo "ABSENT -"; fi'
+  for host in "${HOSTS[@]}"; do
+    log "=== $host ==="
+    if ! ssh -n "${SSH_OPTS[@]}" "$host" true >/dev/null 2>&1; then
+      warn "$host: unreachable"; rc=1; continue
+    fi
+    for entry in "${FILES[@]}"; do
+      src=${entry%%:*}
+      dst=${entry#*:}
+      want=$(sha_of "$REPO/$src") || { warn "cannot hash $REPO/$src"; rc=1; continue; }
+      rdst=$(remote_rel "$dst")
+      out=$(ssh -n "${SSH_OPTS[@]}" "$host" "p=\$HOME/$rdst; $probe" 2>/dev/null) || out=""
+      read -r pst got pmode <<<"${out:-ERROR -}"
+      case "$pst" in
+        PRESENT)
+          if [ "$want" != "$got" ]; then st=DRIFT; rc=1
+          elif [[ " $REFERENCE_EXECUTABLES " == *" $dst "* ]] && [ "${pmode:-}" != 700 ]; then
+            st=MODE-DRIFT; rc=1
+          elif [[ " $EXECUTABLES " == *" $dst "* ]] && [ $(( 8#${pmode:-0} & 0100 )) -eq 0 ]; then
+            st=MODE-DRIFT; rc=1
+          else st=OK
+          fi ;;
+        ABSENT)     st=MISSING; rc=1 ;;
+        UNREADABLE) st=UNREADABLE; rc=1 ;;
+        *)          st=UNREADABLE; rc=1 ;;
+      esac
+      # shellcheck disable=SC2088  # display label, not a path to expand
+      printf '  %-11s %-12s %s\n' "$st" "${host##*@}" "~/$rdst"
+    done
+  done
+  if [ $rc -eq 0 ]; then
+    log "check: every managed file matches the repo on every node"
+  else
+    warn "check: not everything is OK above (DRIFT/MODE-DRIFT/MISSING/UNREADABLE) — nothing was changed"
+  fi
+  exit $rc
+fi
+
+rc=0
+for host in "${HOSTS[@]}"; do
+  log "=== $host ==="
+
+  mkdir_list=""
+  for d in "${REMOTE_DIRS[@]}"; do mkdir_list+=" \$HOME/$(remote_rel "$d")"; done
+  if ! ssh -n "${SSH_OPTS[@]}" "$host" "mkdir -p$mkdir_list"; then
+    warn "$host: unreachable, skipping"
+    rc=1
+    continue
+  fi
+
+  for entry in "${FILES[@]}"; do
+    src=${entry%%:*}
+    dst=${entry#*:}
+    rdst=$(remote_rel "$dst")
+    scp "${SSH_OPTS[@]}" -q "$REPO/$src" "$host:~/$rdst" \
+      || { warn "$host: scp failed for $src"; rc=1; continue; }
+  done
+
+  mapped_execs=""; mapped_ref=""
+  for e in $EXECUTABLES; do mapped_execs+=" \$HOME/$(remote_rel "$e")"; done
+  for e in $REFERENCE_EXECUTABLES; do mapped_ref+=" \$HOME/$(remote_rel "$e")"; done
+  ssh -n "${SSH_OPTS[@]}" "$host" "chmod +x$mapped_execs" \
+    || { warn "$host: chmod +x failed"; rc=1; }
+  ssh -n "${SSH_OPTS[@]}" "$host" "chmod 0700$mapped_ref" \
+    || { warn "$host: reference controller mode failed"; rc=1; }
+
+  log "sha256 verification"
+  for entry in "${FILES[@]}"; do
+    src=${entry%%:*}
+    dst=${entry#*:}
+    want=$(sha_of "$REPO/$src") || { warn "cannot hash $REPO/$src"; rc=1; continue; }
+    rdst=$(remote_rel "$dst")
+    got=$(ssh -n "${SSH_OPTS[@]}" "$host" "sha256sum \$HOME/$rdst | awk '{print \$1}'" || echo "MISSING")
+    if [ "$want" = "$got" ]; then
+      printf '  OK   %-40s %s\n' "$rdst" "${want:0:12}…"
+    else
+      printf '  DIFF %-40s want=%s got=%s\n' "$rdst" "${want:0:12}…" "${got:0:12}…" >&2
+      rc=1
+    fi
+  done
+
+  log "remote bash -n"
+  for s in $SHELL_SCRIPTS; do
+    if ssh -n "${SSH_OPTS[@]}" "$host" "bash -n \$HOME/$(remote_rel "$s")"; then
+      printf '  OK   %s\n' "$s"
+    else
+      printf '  FAIL %s\n' "$s" >&2
+      rc=1
+    fi
+  done
+done
+
+log "--- summary ---"
+log "recipe: cluster.env${TP4_ENV:+ + overlay $TP4_ENV -> ~/.local/tp4/$TP4_ENV}"
+log "model manifests: $manifest_count release(s) + fetch/integrity helper -> ~/.local/tp4/"
+log "patches: $patch_count runtime file(s) -> ~/patches/ (test_*.py not pushed)"
+if [ "$moe_count" -gt 0 ]; then
+  log "moe-configs: $moe_count file(s) -> ~/.local/tp4/moe-configs/"
+else
+  log "moe-configs: none in scripts/node/moe-configs (nothing pushed)"
+fi
+if [ $rc -eq 0 ]; then
+  log "deploy completed on every node"
+else
+  warn "deploy completed WITH ERRORS (see above)"
+fi
+exit $rc

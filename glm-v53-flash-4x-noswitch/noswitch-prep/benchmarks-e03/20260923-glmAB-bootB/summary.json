@@ -1,0 +1,17 @@
+{
+  "label": "bootB",
+  "kv_line": "(EngineCore pid=564) INFO 09-23 21:57:30 [kv_cache_utils.py:2312] GPU KV cache size: 1,172,644 tokens, Maximum concurrency for 1,048,576 tokens per request: 1.12x",
+  "boot_seconds": null,
+  "c1_tok_s": [
+    51.23,
+    52.47
+  ],
+  "c2_tok_s": [
+    64.86,
+    61.55
+  ],
+  "c1_median": 51.85,
+  "c2_median": 63.2,
+  "alpha": 0.9515,
+  "excluded_eos_short": true
+}

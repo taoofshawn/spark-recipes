@@ -1,0 +1,23 @@
+[bench] label=after tier=1 out=/home/sdrew/benchmarks/20260919-mtp3-after
+[bench] /health 200
+[bench] kv: (EngineCore pid=577) INFO 09-19 10:33:45 [kv_cache_utils.py:2274] GPU KV cache size: 1,994,013 tokens, Maximum concurrency for 1,048,576 tokens per request: 1.90x
+[bench] spec: (APIServer pid=1) INFO 09-19 10:27:04 [api_utils.py:273] non-default args: {'model_tag': '/models/intel-gptq-surgery', 'chat_template': '/models/chat_template_mm.jinja', 'default_chat_template_kwargs': {'enable_thinking': True, 'reasoning_effort': 'high'}, 'enable_auto_tool_choice': True, 'tool_call_parser': 'glm47', 'enable_prompt_tokens_details': True, 'host': '0.0.0.0', 'model': '/models/intel-gptq-surgery', 'trust_remote_code': True, 'max_model_len': 1048576, 'served_model_name': ['glm-5.3-flash'], 'generation_config': 'vllm', 'override_generation_config': {'temperature': 1.0, 'top_p': 0.95}, 'reasoning_parser': 'glm45', 'distributed_executor_backend': 'mp', 'master_addr': '192.168.0.170', 'master_port': 29521, 'nnodes': 2, 'tensor_parallel_size': 2, 'block_size': 2304, 'gpu_memory_utilization': 0.85, 'kv_cache_memory_bytes': 14000000000, 'kv_cache_dtype': 'fp8_e4m3', 'prefix_match_unit': 128, 'max_num_batched_tokens': 8192, 'max_num_seqs': 6, 'enable_flashinfer_autotune': False, 'moe_backend': 'marlin', 'speculative_config': {'method': 'mtp', 'num_speculative_tokens': 3, 'disable_eagle_block_drop': True}}
+[bench] warm-up (3 generations, temp 0)...
+  [c1_prose_short] round 0: agg=38.44 tok/s  (512tok/13.318s)
+  [c1_prose_short] round 1: agg=39.18 tok/s  (512tok/13.068s)
+  [c1_prose_short] round 2: agg=39.25 tok/s  (512tok/13.043s)
+  [c1_code_short] round 0: agg=37.12 tok/s  (512tok/13.793s)
+  [c1_code_short] round 1: agg=39.68 tok/s  (512tok/12.904s)
+  [c1_code_short] round 2: agg=38.8 tok/s  (512tok/13.196s)
+  [c1_prose_medium] round 0: agg=18.71 tok/s  (256tok/13.682s)
+  [c1_prose_medium] round 1: agg=37.66 tok/s  (256tok/6.798s)
+  [c1_prose_long] round 0: agg=9.09 tok/s  (256tok/28.152s)
+  [c1_prose_long] round 1: agg=31.94 tok/s  (64tok/2.004s)
+  [c4_prose_short] round 0: agg=115.2 tok/s  (384tok/13.333s, 384tok/13.333s, 384tok/13.196s, 384tok/13.332s)
+  [c4_prose_short] round 1: agg=116.46 tok/s  (384tok/13.048s, 384tok/13.189s, 384tok/13.048s, 384tok/13.188s)
+  [c4_prose_short] round 2: agg=117.49 tok/s  (384tok/12.936s, 384tok/13.073s, 384tok/12.936s, 384tok/12.934s)
+  [pmu_replay_long] round 0: agg=15.09 tok/s  (8tok/0.53s)
+[bench] MemAvailable: 2.5 GiB
+[bench] spec-decode acceptance (delta): 0.9947
+[bench] PMU replay: cached_tokens=43904 / expected≈43904 -> PASS
+[bench] done -> /home/sdrew/benchmarks/20260919-mtp3-after

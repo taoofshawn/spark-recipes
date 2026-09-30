@@ -29,9 +29,13 @@ CANDIDATE = REPO / "scripts/node/experiments/e03/end-drain"
 PARENT = REPO / "scripts/node/experiments/e03/queued-cadence/scheduler.py"
 MANIFEST = json.loads((CANDIDATE / "manifest.json").read_text())
 SITE = "/usr/local/lib/python3.12/dist-packages/vllm/"
-SCHED_FROM = f"/tp4/experiments/e03/queued-cadence/scheduler.py:{SITE}v1/core/sched/scheduler.py:ro"
-SCHED_TO = f"/tp4/experiments/e03/end-drain/scheduler.py:{SITE}v1/core/sched/scheduler.py:ro"
-CORE = f"/tp4/experiments/e03/end-drain/core.py:{SITE}v1/engine/core.py:ro"
+SCHED_FROM = f"/.local/tp4/experiments/e03/queued-cadence/scheduler.py:{SITE}v1/core/sched/scheduler.py:ro"
+SCHED_TO = f"/.local/tp4/experiments/e03/end-drain/scheduler.py:{SITE}v1/core/sched/scheduler.py:ro"
+CORE = f"/.local/tp4/experiments/e03/end-drain/core.py:{SITE}v1/engine/core.py:ro"
+# TC-45 strict tool calling: the promoted default adds this mount; the E28b-measured
+# candidate chain predates it.
+PARSER = str(Path.home()) + "/.local/tp4/overrides/vllm/parser/glm47_moe.py:" \
+    "/usr/local/lib/python3.12/dist-packages/vllm/parser/glm47_moe.py:ro"
 sha = lambda p: hashlib.sha256(p.read_bytes()).hexdigest()
 _spec = importlib.util.spec_from_file_location(
     "e27b_test", REPO / "scripts/tests/test-long-prefill-cadence-config.py")
@@ -212,7 +216,11 @@ RELAY_DEST=operator@192.0.2.23
                 "kv-inside-another-argument": e28b + 'EXTRA_VLLM_ARGS="${EXTRA_VLLM_ARGS/--kv-cache-memory-bytes=17179869184/--served-model-name=--kv-cache-memory-bytes=17179869184}"\n' + delta,
             }
             for rank in range(4):
-                self.assertEqual(argv(launch("default.env", rank)), argv(launch("candidate-b.env", rank)))
+                default_words, candidate_words = argv(launch("default.env", rank)), argv(launch("candidate-b.env", rank))
+                self.assertEqual(Counter(default_words) - Counter(candidate_words),
+                                 Counter(["-v", PARSER]), f"rank {rank}")
+                self.assertEqual(Counter(candidate_words) - Counter(default_words),
+                                 Counter(), f"rank {rank}")
 
             for name, text in bad.items():
                 (root / "bad.env").write_text(text)

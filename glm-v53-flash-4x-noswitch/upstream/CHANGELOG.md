@@ -373,6 +373,23 @@ Versions and releases are created only at the owner's explicit request.
 
 ### Fixed
 
+- Repaired the offline check suite (`./scripts/check.sh`), broken by the `~/tp4` →
+  `~/.local/tp4` relocation and by the TC-45 parser override mounted since: seven offline
+  tests still matched the pre-relocation path literals; the accepted-recipe and end-drain
+  four-rank parity asserts predated the default's parser-override mount and the promotion
+  accounting of the E29 overlay (the end-drain scheduler mount replaces the E27c mount in
+  place, so the recorded delta carries one `-v`, on the engine-core mount only); and the
+  drafter rollback delta omitted the parser override the default now carries. The tests
+  track the relocated paths and assert the known deltas explicitly, and the check passes
+  again end to end.
+- Fixed `scripts/tests/test-agent-preflight.sh` file-mode probing to prefer GNU
+  `stat -c '%a'` before the BSD `stat -f '%Lp'` fallback, which a coreutils-compatible
+  `stat` answers with a full filesystem dump instead of a mode.
+- Repaired the historical F0 reference set: the frozen rollback overlay's mutable image tag
+  is now digest-pinned (the tagged image had been replaced by a rebuild), the reference
+  manifest's artifact hashes again match the relocated artifacts, and `f0-reference.py` no
+  longer requires the macOS-only `/private/tmp` for its render, verify and restore scratch
+  directories, using the platform temp directory instead.
 - Fixed `scripts/deploy.sh` remote paths on this site: since the `~/tp4` → `~/.local/tp4`
   relocation the script still built remote destinations as `$HOME/<relative>` (`~/tp4/…`,
   `~/patches/…`), so `--check` reported every managed file MISSING on all four ranks and a

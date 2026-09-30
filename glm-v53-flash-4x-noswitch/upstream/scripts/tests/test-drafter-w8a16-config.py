@@ -340,10 +340,10 @@ RELAY_DEST=operator@192.0.2.23
                 return [line[2:] for line in result.stdout.splitlines() if line.startswith("  ")]
 
             home = str(Path.home())
-            src = f"{home}/tp4/experiments/e03/drafter-w8a16/"
+            src = f"{home}/.local/tp4/experiments/e03/drafter-w8a16/"
             override = f"{src}qwen3_dflash2.py:/usr/local/lib/python3.12/dist-packages/vllm/model_executor/models/qwen3_dflash2.py:ro"
             module = f"{src}e22_drafter_w8a16.py:/usr/local/lib/python3.12/dist-packages/vllm/models/glm5next/nvidia/e22_drafter_w8a16.py:ro"
-            old_cfg = f"<canonical JSON of {home}/tp4/experiments/e03/bf16-residue/kv-transfer-config.json>"
+            old_cfg = f"<canonical JSON of {home}/.local/tp4/experiments/e03/bf16-residue/kv-transfer-config.json>"
             new_cfg = f"<canonical JSON of {src}kv-transfer-config-e22b.json>"
             flags = ["VLLM_E22_DRAFTER_W8A16=1", "VLLM_E22_CONTEXT_KV_W8A16=0"]
             for rank in range(4):
@@ -361,14 +361,19 @@ RELAY_DEST=operator@192.0.2.23
                                   '"kv_cache_dtype":"fp8_e4m3"}' % (k, k))
                 self.assertEqual(Counter(after) - Counter(current),
                                  Counter([spec(5), "--kv-cache-memory-bytes=16106127360"]))
+                # TC-45 strict tool calling adds the parser override to the default only;
+                # the e22b return predates it.
                 self.assertEqual(Counter(current) - Counter(after), Counter([
                     "--prefill-schedule-interval", "8", "-v",
-                    str(Path.home()) + "/tp4/experiments/e03/end-drain/scheduler.py:"
+                    str(Path.home()) + "/.local/tp4/overrides/vllm/parser/glm47_moe.py:"
+                    "/usr/local/lib/python3.12/dist-packages/vllm/parser/glm47_moe.py:ro",
+                    "-v",
+                    str(Path.home()) + "/.local/tp4/experiments/e03/end-drain/scheduler.py:"
                     "/usr/local/lib/python3.12/dist-packages/vllm/v1/core/sched/scheduler.py:ro",
                     "-e", "VLLM_E27B_SHORT_PREFILL_TOKENS=2048", "-e", "VLLM_E27C_CADENCE_WHEN_QUEUED=1",
                     spec(7), "-e", "VLLM_ADAPTIVE_K_HI=7", '--compilation-config={"max_cudagraph_capture_size":72}',
                     "--kv-cache-memory-bytes=17179869184", "-v",
-                    str(Path.home()) + "/tp4/experiments/e03/end-drain/core.py:"
+                    str(Path.home()) + "/.local/tp4/experiments/e03/end-drain/core.py:"
                     "/usr/local/lib/python3.12/dist-packages/vllm/v1/engine/core.py:ro",
                     "-e", "VLLM_E29_END_DRAIN=1", "-e", "VLLM_E29_IDLE_COALESCE_MS=4", "-e", "VLLM_E29_TRACE=0"]))
                 mounts = [after[i + 1] for i, item in enumerate(after[:-1]) if item == "-v"]

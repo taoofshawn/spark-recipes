@@ -116,12 +116,12 @@ class FetchIntegrationTests(unittest.TestCase):
             (model / "chat_template.jinja").write_bytes(self.new_template if host == "head" else self.old_template)
             os.utime(model / "chat_template.jinja", (1_700_000_000, 1_700_000_000))
             (model / ".glm53-fp8-synced").write_text(self.old_rev)
-            (home / "tp4/scripts").mkdir(parents=True)
-            (home / "tp4/node/model-manifests").mkdir(parents=True)
-            shutil.copy2(TOOL, home / "tp4/scripts/model_manifest.py")
+            (home / ".local/tp4/scripts").mkdir(parents=True)
+            (home / ".local/tp4/node/model-manifests").mkdir(parents=True)
+            shutil.copy2(TOOL, home / ".local/tp4/scripts/model_manifest.py")
             shutil.copy2(
                 self.checkout / f"scripts/node/model-manifests/{self.new_rev}.json",
-                home / f"tp4/node/model-manifests/{self.new_rev}.json",
+                home / f".local/tp4/node/model-manifests/{self.new_rev}.json",
             )
         self.bin = self.root / "bin"
         self.bin.mkdir()

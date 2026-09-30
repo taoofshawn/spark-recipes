@@ -60,11 +60,13 @@ historical_e28b = "\n".join([e27c_rollback, (e03 / "draft-depth-7/delta.env").re
 # The measured E29 candidate (load B): the complete E28b recipe plus the end-drain overlay.
 historical_candidate = "\n".join([e28b_rollback, (e03 / "end-drain/delta-b.env").read_text()])
 SCHED = "/usr/local/lib/python3.12/dist-packages/vllm/v1/core/sched/scheduler.py:ro"
-E29_ADDED = [str(Path.home()) + "/tp4/experiments/e03/end-drain/scheduler.py:" + SCHED,
-             "-v", str(Path.home()) + "/tp4/experiments/e03/end-drain/core.py:"
+# The end-drain overlay replaces the E27c scheduler mount word in place (its "-v" is
+# reused, not removed) and appends the engine-core mount with its own "-v".
+E29_ADDED = [str(Path.home()) + "/.local/tp4/experiments/e03/end-drain/scheduler.py:" + SCHED,
+             "-v", str(Path.home()) + "/.local/tp4/experiments/e03/end-drain/core.py:"
              "/usr/local/lib/python3.12/dist-packages/vllm/v1/engine/core.py:ro",
              "-e", "VLLM_E29_END_DRAIN=1", "-e", "VLLM_E29_IDLE_COALESCE_MS=4", "-e", "VLLM_E29_TRACE=0"]
-E29_REMOVED = [str(Path.home()) + "/tp4/experiments/e03/queued-cadence/scheduler.py:" + SCHED]
+E29_REMOVED = [str(Path.home()) + "/.local/tp4/experiments/e03/queued-cadence/scheduler.py:" + SCHED]
 E28B_ADDED = ['{"method":"dflash","model":"/draft","num_speculative_tokens":7,'
               '"num_speculative_tokens_per_batch_size":[[1,1,7],[2,6,3]],"kv_cache_dtype":"fp8_e4m3"}',
               "-e", "VLLM_ADAPTIVE_K_HI=7", '--compilation-config={"max_cudagraph_capture_size":72}',
@@ -72,9 +74,13 @@ E28B_ADDED = ['{"method":"dflash","model":"/draft","num_speculative_tokens":7,'
 E28B_REMOVED = ['{"method":"dflash","model":"/draft","num_speculative_tokens":5,'
                 '"num_speculative_tokens_per_batch_size":[[1,1,5],[2,6,3]],"kv_cache_dtype":"fp8_e4m3"}',
                 "--kv-cache-memory-bytes=16106127360"]
-E27C_TOKENS = ["-v", str(Path.home()) + "/tp4/experiments/e03/queued-cadence/scheduler.py:"
+E27C_TOKENS = ["-v", str(Path.home()) + "/.local/tp4/experiments/e03/queued-cadence/scheduler.py:"
                "/usr/local/lib/python3.12/dist-packages/vllm/v1/core/sched/scheduler.py:ro",
                "-e", "VLLM_E27B_SHORT_PREFILL_TOKENS=2048", "-e", "VLLM_E27C_CADENCE_WHEN_QUEUED=1"]
+# Site delta on top of the measured E29 candidate: the TC-45 tool-choice parser override,
+# an additive mount that is not part of any frozen baseline identity.
+PARSER_OVERRIDE = ["-v", str(Path.home()) + "/.local/tp4/overrides/vllm/parser/glm47_moe.py:"
+                   "/usr/local/lib/python3.12/dist-packages/vllm/parser/glm47_moe.py:ro"]
 with tempfile.TemporaryDirectory(prefix="tp4-accepted-recipe-") as temp:
     root = Path(temp)
     shutil.copyfile(REPO / "scripts/launcher/launch-glm53-tp4.sh", root / "launch.sh")
@@ -120,7 +126,13 @@ RELAY_DEST=operator@192.0.2.23
 
     for rank in range(4):
         current = launch(rank)
-        assert current == launch(rank, "measured.env"), f"rank {rank}: changed measured command"
+        measured = launch(rank, "measured.env")
+        # The default recipe carries the site parser override; everything else must match
+        # the measured E29 candidate exactly.
+        assert Counter(current) - Counter(measured) == Counter(PARSER_OVERRIDE), \
+            f"rank {rank}: changed measured command"
+        assert Counter(measured) - Counter(current) == Counter(), \
+            f"rank {rank}: removed measured command item"
         mounts = dict(arg.split(":")[1::-1] for i, arg in enumerate(current) if i and current[i-1] == "-v")
         mount_count = Counter(arg.split(":")[1] for i, arg in enumerate(current) if i and current[i-1] == "-v")
         assert all(n == 1 for n in mount_count.values()), "Duplicate mount target"
@@ -131,14 +143,14 @@ RELAY_DEST=operator@192.0.2.23
             if target in private_targets:
                 continue
             source = mounts[target]
-            assert source.startswith(str(Path.home()) + "/tp4/")
+            assert source.startswith(str(Path.home()) + "/.local/tp4/")
             local = REPO / "scripts/node" / source.split("/tp4/", 1)[1]
             assert sha(local) == digest, local
         # Immediate rollback: exactly the measured E28b command, with the E27c scheduler.
         e28b_restored = launch(rank, "rollback-e28b.env")
         assert e28b_restored == launch(rank, "historical-e28b.env"), f"rank {rank}: E28b rollback drifted"
-        assert Counter(current) - Counter(e28b_restored) == Counter(E29_ADDED), f"rank {rank}: E29 delta"
-        assert Counter(e28b_restored) - Counter(current) == Counter(E29_REMOVED), f"rank {rank}: E29 removed"
+        assert Counter(measured) - Counter(e28b_restored) == Counter(E29_ADDED), f"rank {rank}: E29 delta"
+        assert Counter(e28b_restored) - Counter(measured) == Counter(E29_REMOVED), f"rank {rank}: E29 removed"
         # Older E27c return: exactly the measured E27c command, five draft tokens and 15 GiB.
         e27c_restored = launch(rank, "rollback-e27c.env")
         assert e27c_restored == launch(rank, "historical-e27c.env"), f"rank {rank}: E27c rollback drifted"
@@ -167,7 +179,7 @@ RELAY_DEST=operator@192.0.2.23
         assert e03_restored == launch(rank, "historical-e03.env"), f"rank {rank}: E03 rollback drifted"
         assert not any("e21_bf16_residue" in item for item in e03_restored)
         assert "VLLM_E21_BF16_RESIDUE_W8A16=1" not in e03_restored
-        assert any(item.endswith("/tp4/overrides/vllm/models/glm5next/nvidia/e20_kda_w8a16.py:"
+        assert any(item.endswith(".local/tp4/overrides/vllm/models/glm5next/nvidia/e20_kda_w8a16.py:"
                                  "/usr/local/lib/python3.12/dist-packages/vllm/models/glm5next/nvidia/"
                                  "e20_kda_w8a16.py:ro") for item in e03_restored)
         assert "VLLM_E21_BF16_RESIDUE_W8A16=1" in current

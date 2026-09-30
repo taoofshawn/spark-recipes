@@ -28,7 +28,7 @@ OVERRIDE = CANDIDATE / "scheduler.py"
 PATCH = CANDIDATE / "scheduler.patch"
 MANIFEST = json.loads((CANDIDATE / "manifest.json").read_text())
 FILE = MANIFEST["files"]["scheduler.py"]
-MOUNT = ("/tp4/experiments/e03/long-prefill-cadence/scheduler.py:"
+MOUNT = ("/.local/tp4/experiments/e03/long-prefill-cadence/scheduler.py:"
          "/usr/local/lib/python3.12/dist-packages/vllm/v1/core/sched/scheduler.py:ro")
 sha = lambda p: hashlib.sha256(p.read_bytes()).hexdigest()
 

@@ -650,7 +650,7 @@ def materialize_remote_files(rank_dir: Path, rank: dict[str, Any]) -> None:
 
 
 def render_private(source: Path, site_config: Path, destination: Path) -> dict[str, Any]:
-    with tempfile.TemporaryDirectory(prefix="f0-render-", dir="/private/tmp") as temp:
+    with tempfile.TemporaryDirectory(prefix="f0-render-") as temp:
         work = Path(temp) / "repo"
         shutil.copytree(source, work, symlinks=True)
         shutil.copyfile(site_config, work / "cluster.env")
@@ -936,7 +936,7 @@ def validate_archive(archive: Path, *, rerender: bool = True) -> list[str]:
     if nccl.is_file() and (nccl.stat().st_size != EXPECTED_NCCL_SIZE or sha256_file(nccl) != EXPECTED_NCCL_SHA):
         problems.append("archived NCCL identity")
     if rerender and not problems:
-        with tempfile.TemporaryDirectory(prefix="f0-verify-render-", dir="/private/tmp") as temp:
+        with tempfile.TemporaryDirectory(prefix="f0-verify-render-") as temp:
             generated = Path(temp) / "rendered"
             check = render_private(archive / "source/completed-iac",
                                    archive / "private/site/f0-cluster-resolved.env", generated)
@@ -1122,7 +1122,7 @@ def plan_restore(args: argparse.Namespace, collector: Callable = collect_rank) -
     rank1 = ssh_targets[1] if len(ssh_targets) > 1 else "<rank1>"
     rank0_home = rank_homes[0] if rank_homes else "/home/<USER>"
     rank1_home = rank_homes[1] if len(rank_homes) > 1 else "/home/<USER>"
-    work = f"/private/tmp/f0-restore-{state.get('reference_id','f0-20260912')}"
+    work = str(Path(tempfile.gettempdir()) / f"f0-restore-{state.get('reference_id','f0-20260912')}")
     stage_controller = rank0_home + "/tp4/.tp4ctl-f0-reference.stage"
     controller = rank0_home + "/tp4/tp4ctl-f0-reference"
     controller_sha = next(item["sha256"] for item in json.loads(REFERENCE_MANIFEST.read_text())["artifacts"]

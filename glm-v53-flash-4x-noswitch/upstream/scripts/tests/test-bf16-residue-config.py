@@ -376,11 +376,11 @@ RELAY_DEST=operator@192.0.2.23
 
             home = str(Path.home())
             target = "/usr/local/lib/python3.12/dist-packages/vllm/models/glm5next/nvidia/"
-            old_hook = f"{home}/tp4/overrides/vllm/models/glm5next/nvidia/e20_kda_w8a16.py:{target}e20_kda_w8a16.py:ro"
-            new_hook = f"{home}/tp4/experiments/e03/bf16-residue/e20_kda_w8a16.py:{target}e20_kda_w8a16.py:ro"
-            residue = f"{home}/tp4/experiments/e03/bf16-residue/e21_bf16_residue.py:{target}e21_bf16_residue.py:ro"
-            old_cfg = f"<canonical JSON of {home}/tp4/experiments/e03/kv-transfer-config.json>"
-            new_cfg = f"<canonical JSON of {home}/tp4/experiments/e03/bf16-residue/kv-transfer-config.json>"
+            old_hook = f"{home}/.local/tp4/overrides/vllm/models/glm5next/nvidia/e20_kda_w8a16.py:{target}e20_kda_w8a16.py:ro"
+            new_hook = f"{home}/.local/tp4/experiments/e03/bf16-residue/e20_kda_w8a16.py:{target}e20_kda_w8a16.py:ro"
+            residue = f"{home}/.local/tp4/experiments/e03/bf16-residue/e21_bf16_residue.py:{target}e21_bf16_residue.py:ro"
+            old_cfg = f"<canonical JSON of {home}/.local/tp4/experiments/e03/kv-transfer-config.json>"
+            new_cfg = f"<canonical JSON of {home}/.local/tp4/experiments/e03/bf16-residue/kv-transfer-config.json>"
             flag = f"{MANIFEST['activation']['flag']}=1"
             for rank in range(4):
                 before, after = argv(launch("e03.env", rank)), argv(launch("e21.env", rank))

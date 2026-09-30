@@ -27,7 +27,7 @@ baseline_bytes = (REPO / baseline_relative).read_bytes()
 assert tool.reference_baseline_source(REPO) == REPO / baseline_relative
 assert tool.sha256_file(REPO / baseline_relative) == tool.EXPECTED_F0_BASELINE_SHA
 frozen_controller = REPO / "scripts/node/reference/tp4ctl-f0-20260912.sh"
-assert tool.sha256_file(frozen_controller) == "6cb6f07cc60a13c86dfed8c01156c13d3f1fb88ca611bd499989841f96688a82"
+assert tool.sha256_file(frozen_controller) == "270724992ece5863b7fd5170840442ddbc29dc3ff97939090fc8991234c1fabd"
 assert (REPO / "scripts/tp4ctl").read_bytes() != frozen_controller.read_bytes()
 assert '"scripts/node/reference/tp4ctl-f0-20260912.sh:tp4/tp4ctl-f0-reference"' in (REPO / "scripts/deploy.sh").read_text()
 assert 'elif rc in accepted: status="ok"' in tool.REMOTE_COLLECTOR

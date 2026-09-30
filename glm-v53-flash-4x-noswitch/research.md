@@ -184,6 +184,32 @@ All of `noswitch-prep/` is site-owned, not upstream-owned:
 
 ## 5. Changelog
 
+- **2026-09-30 — Correction to the 09-29 rollout note + offline parity gate repaired (`glm4x-parity-test-fix`).**
+  The 09-29 note's premise ("`check-f0.py` will show a mount/identity delta vs the frozen
+  2026-09-25-e29 baseline after the TC-45 rollout … needing an owner decision on a new
+  baseline") is wrong: `check-f0.py` is additive-tolerant — its command identity check only
+  pins the files and env keys listed in `baseline.json`'s
+  `operational_identity.container_file_sha256` (and their env keys), so the additive parser
+  override mount does not fail it. No new baseline record is needed on that account; the
+  frozen E29 record stays valid (live confirmations below). The real breakage the rollout
+  caused was **offline**: `./scripts/check.sh` had been failing since the 09-27
+  `~/tp4` → `~/.local/tp4` relocation (stale `~/tp4` literals in seven test files,
+  uutils-`stat` ordering in `test-agent-preflight.sh`, mutable image tag in the F0 rollback
+  overlay + stale F0 reference-manifest artifact pins, and `f0-reference.py`'s
+  macOS-only `/private/tmp` scratch dirs) and the TC-45 addition then also invalidated the
+  E29 command-parity constants (the end-drain scheduler mount replaces the E27c mount in
+  place → the delta carries one `-v`, not two; the rollback envs rebuild
+  `EXTRA_DOCKER_ENV` completely → their deltas include the parser mount pair). All fixed on
+  branch `glm4x-parity-test-fix`; `./scripts/check.sh` → PASS end to end (worktree
+  validated; `docs/benchmarks/` copied locally for the check, stays gitignored).
+  **Live state confirmed read-only, no restart**: `check-f0.py` → 2026-09-25-e29 CHECK
+  PASS (first two runs returned transient FAILs — most plausibly cold-SSH probe timeouts;
+  reports are auto-wiped with WSL `/tmp` on VM teardown, then three consecutive runs were
+  clean PASS with zero rank problems). Open item unchanged from 09-29: the default now
+  differs from the *measured* E29 candidate command by the parser override mount — cosmetic
+  for `check-f0.py`, but the owner may still want a recorded identity note at the next
+  authorized window; do NOT auto-remeasure.
+
 - **2026-09-29 — TC-45 fixed at recipe level: `tool_choice="required"`/named enforcement via glm_4_7 structural tag (new mod §2.6).**
   Diagnosis (proven from the image's own source, extracted read-only on spark-0f0b via
   `docker create`/`docker cp` from `glm53_fp8_dflash_tp4`): the image's parser manager

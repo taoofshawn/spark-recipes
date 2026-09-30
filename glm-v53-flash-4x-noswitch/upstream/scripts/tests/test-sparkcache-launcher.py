@@ -68,7 +68,7 @@ with tempfile.TemporaryDirectory(prefix="tp4-encoder-launcher.") as temp:
         argv = docker_argv(result.stdout)
         assert len(mounts(argv, TARGET)) == len(mounts(argv, CONNECTOR_TARGET)) == 1
         assert mounts(argv, TARGET)[0].endswith(":ro")
-        assert mounts(argv, TARGET)[0].startswith(str(Path.home()) + "/tp4/sparkcache/")
+        assert mounts(argv, TARGET)[0].startswith(str(Path.home()) + "/.local/tp4/sparkcache/")
         assert argv[argv.index("--entrypoint") + 1] == "/opt/sircl-serving/entrypoint.sh"
         assert argv[argv.index("--node-rank") + 1] == str(rank)
         assert "--kv-cache-memory-bytes=17179869184" in argv

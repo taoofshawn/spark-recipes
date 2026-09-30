@@ -52,9 +52,9 @@
     }
   },
   "overlay_parts_sha256": {
-    "scripts/node/experiments/e03/candidate.env": "521768fee2014d71354acc5af1ecdd4928d28eb4d57a7e0c1d18fec50a77f19b",
-    "scripts/node/experiments/e03/replay-views/delta.env": "1f20984d1c266f93bcd01040b4dcf1febe6b3e16913e7c3a8edc236153ac78e6",
-    "scripts/node/experiments/e03/draft-budget/delta.env": "e4c835a0480b04bfeda744451a22bd1955debbcf3dca4d6504ff8070c0cf360a"
+    "scripts/node/experiments/e03/candidate.env": "ceef5bdfaa70ea90523cc0243c74e2450ff918ef30480dbacb4c409cf48dace0",
+    "scripts/node/experiments/e03/replay-views/delta.env": "956518ba1afca1004ce5d66502258ce45b8afd3790ef19164d2b01f525b868e6",
+    "scripts/node/experiments/e03/draft-budget/delta.env": "c8c45b7b02d0c9c121840bc49ffa2e52ec675d98a7b8d8ac8fee635dfe4421fe"
   },
   "rollback": "Stop using the candidate overlay; deploy/start using E03 + replay views in an authorized coordinated window. Retain connector files, cache namespace and frozen scheduler.",
   "limits": [

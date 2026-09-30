@@ -62,8 +62,8 @@ RELAY_DEST=operator@192.0.2.23
 
     for rank in range(4):
         before, after = argv(launch("parent.env", rank)), argv(launch("candidate.env", rank))
-        old_mount = str(Path.home()) + "/patches/adaptive_k_scheduler.py:/opt/tp4/adaptive_k_scheduler.py:ro"
-        new_mount = str(Path.home()) + "/tp4/experiments/e03/draft-budget/adaptive_k_scheduler.py:/opt/tp4/adaptive_k_scheduler.py:ro"
+        old_mount = str(Path.home()) + "/.local/lib/patches/adaptive_k_scheduler.py:/opt/tp4/adaptive_k_scheduler.py:ro"
+        new_mount = str(Path.home()) + "/.local/tp4/experiments/e03/draft-budget/adaptive_k_scheduler.py:/opt/tp4/adaptive_k_scheduler.py:ro"
         assert Counter(before) - Counter(after) == Counter([old_mount])
         assert Counter(after) - Counter(before) == Counter([new_mount, "-e", "VLLM_ADAPTIVE_K_RESPECT_DRAFT_BUDGET=1"])
         # The rest of the native command is identical, including ordering.

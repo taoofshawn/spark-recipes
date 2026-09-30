@@ -29,7 +29,7 @@
       "path": "scripts/node/reference/f0-20260912.env",
       "destination": "$HOME/.local/tp4/scripts/node/reference/f0-20260912.env",
       "mode": "0644",
-      "sha256": "0837ea1a359509cdc0cb27164265b5bd37ac9d46198d34ad0af7e9503eff59b7"
+      "sha256": "ef656a450539a2f6d4f58f54690e06d17ca5485094cac4301a88e83b5aed37e7"
     },
     {
       "path": "scripts/node/reference/tp4-autostart-f0-20260912.conf.example",
@@ -41,13 +41,13 @@
       "path": "scripts/node/reference/launch-glm53-tp4-f0-20260912.sh",
       "destination": "$HOME/.local/tp4/launch-glm53-tp4.sh",
       "mode": "0755",
-      "sha256": "4ee95668acba3aa7693c7cf1efa584499fead443cbb9498eeb18f18587d36401"
+      "sha256": "94162f81948f256c0c4a9ff6dd42e3ef74dc5c55552eafe9fc090f2ad4247e9f"
     },
     {
       "path": "scripts/node/reference/tp4ctl-f0-20260912.sh",
       "destination": "$HOME/.local/tp4/tp4ctl-f0-reference",
       "mode": "0700",
-      "sha256": "6cb6f07cc60a13c86dfed8c01156c13d3f1fb88ca611bd499989841f96688a82"
+      "sha256": "270724992ece5863b7fd5170840442ddbc29dc3ff97939090fc8991234c1fabd"
     },
     {
       "path": "scripts/node/patches/adaptive_k_scheduler.py",
@@ -89,13 +89,13 @@
       "path": "scripts/node/nccl/SHA256SUMS",
       "destination": "archive-only NCCL identity input",
       "mode": "0644",
-      "sha256": "16a18020a9e2967bd3d60bdda9293fa78813e91c3c2f8612e50ac609d77999d5"
+      "sha256": "207bb7c2e8450d3938a3a5011c9503355c4925d1198df9ab63d6bd69081b0a0c"
     },
     {
       "path": "scripts/node/bootstrap/versions.env",
       "destination": "archive-only host and image pin input",
       "mode": "0644",
-      "sha256": "a117aa9a68b28cc0d6b6084a40d1c5c7025c508b7ce60565521c61c312b5d0a6"
+      "sha256": "024f9e0fb9662a30c595711037c12ad455dc47986f028787587bb8c7c07af34a"
     }
   ],
   "known_observed_drift": [

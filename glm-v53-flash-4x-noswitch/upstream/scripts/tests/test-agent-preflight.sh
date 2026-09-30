@@ -94,7 +94,7 @@ PY
 report="$TMPD/saved.json"
 TP4_TEST_PROFILE=asus PATH="$TMPD/bin:$PATH" TP4_HOSTS='h0 h1 h2 h3' \
   "$REPO/scripts/agent-preflight.sh" --report "$report" >/dev/null
-mode=$(stat -f '%Lp' "$report" 2>/dev/null || stat -c '%a' "$report")
+mode=$(stat -c '%a' "$report" 2>/dev/null || stat -f '%Lp' "$report")
 [ "$mode" = 600 ]
 if TP4_TEST_PROFILE=asus PATH="$TMPD/bin:$PATH" TP4_HOSTS='h0 h1 h2 h3' \
   "$REPO/scripts/agent-preflight.sh" --report "$REPO/preflight.json" >/dev/null 2>&1; then

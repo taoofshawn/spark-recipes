@@ -6,7 +6,7 @@ repeated deploy cycles to learn.
 
 ## What this repository is
 
-A collection of **self-contained recipes for serving LLMs on a 2-node DGX Spark (GB10) cluster**
+A collection of **self-contained recipes for serving LLMs on the DGX Spark (GB10) cluster**
 via vLLM, with DSpark speculative decoding, at 1M-token context. Every recipe is a drop-in
 package: config files, a launch mechanism, and the runtime patches/overlays needed to make the
 specific model work on this specific hardware.
@@ -23,29 +23,41 @@ The upstream source of truth for most of this is the
 plus a few community GitHub repos. Recipes are vendored/backported from those; links and
 attribution are in each recipe directory's README.
 
-## Cluster topology (two fixed nodes)
+## Cluster topology (four fixed nodes, 4x-noswitch ring)
 
-This repo is deployed on a specific pair of nodes. Do not invent other hardware in commits.
+This repo is deployed on a specific 4-node cluster (the "4x-noswitch" topology, served by the
+`glm-v53-flash-4x-noswitch` FP8 and `glm-v53-flash-nvfp4-4x-noswitch` recipes). Do not invent
+other hardware in commits.
 
-| role | host | RoCE IP | notes |
-|---|---|---|---|
-| node 0 (leader, rank 0, API server) | `spark-0f0b.shawndo.intra` | `192.168.0.170` | also called "head" |
-| node 1 (follower, rank 1, headless) | `spark-6d14.shawndo.intra` | `192.168.0.171` | also called "worker" |
+| rank | host | mgmt IP (`enP7s7`) | fabric IPs (ring, `10.10.<L>.<N>/24`) | notes |
+|---|---|---|---|---|
+| rank 0 (head, API server) | `spark-0f0b.shawndo.intra` | `10.69.42.170` | `10.10.1.1`, `10.10.4.1` | `MASTER_IP`; hosts the API process |
+| rank 1 | `spark-6d14.shawndo.intra` | `10.69.42.171` | `10.10.1.2`, `10.10.2.2` | also the weight-fan-out relay hop |
+| rank 2 | `spark-6d90.shawndo.intra` | `10.69.42.172` | `10.10.2.3`, `10.10.3.3` | no direct link from rank 0 (relay via rank 1) |
+| rank 3 | `spark-6d24.shawndo.intra` | `10.69.42.173` | `10.10.3.4`, `10.10.4.4` | |
 
-- **SSH to the nodes via their DNS hostnames, NEVER the RoCE crossover IPs.** The
-  `192.168.0.x` addresses above are the RoCE/control-plane fabric between the two boxes and are
-  **not routable from the management network** (`ssh 192.168.0.170` times out). Use:
-  `ssh spark-0f0b.shawndo.intra` (node 0 / head) and `ssh spark-6d14.shawndo.intra` (node 1 /
-  worker). SSH hops run from the local workstation (`eve`), which resolves the `.shawndo.intra`
-  DNS zone; the IPs are for in-cluster `MASTER_ADDR`/`ROCE_IP` config, not for reaching the
-  boxes.
+- **Fabric ring:** 4 QSFP56 cables in a switchless ring rank0→rank1→rank2→rank3→rank0; each
+  cable presents as 2 PFs (`enp1s0f0np0`/`enp1s0f1np1` are the addressed ring ends,
+  `enP2p1s0f0np0`/`enP2p1s0f1np1` are the second PCIe views of the same transceivers, MTU
+  9000, no address — hence their link-local `169.254.x.x`). Ring plan: node N's address on
+  ring link L is `10.10.<L>.<N>/24`. **The old `192.168.0.170/.171` "RoCE crossover IPs" no
+  longer exist on any node** (verified live) — any env/README still carrying them is stale.
+- **NCCL:** switchless 4-PF contract, `NCCL_IB_HCA=rocep1s0f0,rocep1s0f1` (FP8 recipe) /
+  all four PFs (NVFP4 recipe), GID `-1` (auto), site-patched NCCL at
+  `~/.local/lib/nccl-patched`. The RoCE GID index is still auto-detected/renumbered at boot —
+  keep the detection loop consistent across recipes that carry it.
+- **SSH to the nodes via their DNS hostnames**, never the in-cluster fabric IPs:
+  `ssh spark-0f0b.shawndo.intra` etc. from the workstation (`eve`), which resolves the
+  `.shawndo.intra` DNS zone. Mgmt IPs are for `MGMT_IPS`/`MASTER_IP` config; fabric
+  `10.10.x.x` IPs are for netplan/`FABRIC_TARGETS`/relay config only.
 - Inter-node networking: **RoCE/InfiniBand** for the NCCL data plane
   (`IB_PORTS=rocep1s0f0,roceP2p1s0f0`) and **Ethernet** for control plane
   (`ETH_IF=enp1s0f0np0`, `ETH_IF2=enP2p1s0f0np0`). These are the actual NIC names on this
   cluster; the files always say "match YOUR NICs" because they were originally written for
   other hardware — here the committed values ARE correct.
-- Each node has 2 GPUs; recipes use `CUDA_VISIBLE_DEVICES=0` (one GPU per node, TP=2 across
-  nodes).
+- Each node has 2 GPUs. The 4x-noswitch recipes use **TP4 across all 4 nodes** (1 GPU per
+  node, ranks 0–3); the older 2-node recipes used `CUDA_VISIBLE_DEVICES=0` with TP=2 across a
+  pair. Don't mix the two conventions in one recipe.
 - The RoCE IPv4 **GID index is auto-detected at container boot** (it renumbers across
   reboots). This detection loop is duplicated in each docker-compose `command` block — keep it
   consistent across recipes.
@@ -57,6 +69,8 @@ This repo is deployed on a specific pair of nodes. Do not invent other hardware 
 ```
 README.md                       # short index; stable recipes in main, in-progress on branches
 glm-v53-flash-intel-w4a16/                  # docker-compose recipe (Intel W4A16 AutoRound, DFlash2)
+glm-v53-flash-4x-noswitch/                  # 4-node TP4 FP8 GLM-5.3-Flash + DFlash2 (switchless ring)
+glm-v53-flash-nvfp4-4x-noswitch/            # 4-node TP4 NVFP4 GLM-5.3-Flash sibling (same ring)
 .archived/                                  # archived recipes (kept for reference, not maintained)
   ├── deepseek-v4-flash-aiden/              #   docker-compose recipe (the "reference" compose)
   ├── deepseek-v4-flash-aiden-sparkrun/     #   sparkrun port of aiden (no rebuild, docker-pull)

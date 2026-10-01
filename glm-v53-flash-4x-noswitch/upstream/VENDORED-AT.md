@@ -3,12 +3,15 @@
 This `upstream/` directory is a **detached, live checkout** of:
 
 - **Repo:** `https://github.com/jnardiello/GLM-5.3-Flash-FP8-4-DGX-Spark-Switchless`
-- **Pinned commit:** `080fe09` (E29 recipe: R10/sparkring image, DFlash2 k=7/3,
-  SparkCache+SIRCL vendored under `third_party/`, patched NCCL 2.30.7-1 flow)
+- **Pinned commit:** `ed365a6` (E36 recipe: E31-MB memory-bounded layer + SparkCache disk
+  capacity (200 GiB cap / 160 GiB watermark via the ram-budget connector), E35
+  confidence-based verify length, E36 INT8 W8A16 shared lm_head; same pinned image
+  digest `sha256:0d40…` as the previous pin)
 - **Vendored:** 2026-09-26 (moved from the standalone workstation checkout
   `C:\Users\sdrew\code\glm-4x-noswitch`, `.git` deleted); committed into the
   `glm-v53-flash-4x-noswitch` branch of `taoofshawn/spark-recipes` at commit
-  `9cd37a0`.
+  `9cd37a0`. Refreshed to `ed365a6` on 2026-09-30 (branch
+  `glm-v53-flash-4x-noswitch-sparkcache-diskbound`).
 
 ## Local modifications carried on top of the pin (do NOT overwrite on update)
 

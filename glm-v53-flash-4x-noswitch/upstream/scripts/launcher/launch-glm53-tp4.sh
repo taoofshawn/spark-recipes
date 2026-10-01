@@ -28,8 +28,10 @@ set -euo pipefail
 #
 #       --speculative-config "{\"method\":\"dflash\",\"model\":\"/draft\",\"num_speculative_tokens\":$SPEC_TOKENS,\"kv_cache_dtype\":\"auto\"}" \
 #
-#  c) rank 0 fails with NV_ERR_NO_MEMORY: lower the KV pool to 14 GiB by setting, in
-#     cluster.env, EXTRA_VLLM_ARGS="--kv-cache-memory=15032385536".
+#  c) rank 0 fails with NV_ERR_NO_MEMORY: replace only
+#     --kv-cache-memory-bytes=17179869184 with --kv-cache-memory-bytes=15032385536 in
+#     EXTRA_VLLM_ARGS, preserving every other engine option. The prepared bounded-memory
+#     candidate makes that replacement through its production.env overlay.
 #     Never raise GPU_MEM_UTIL.
 
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -279,9 +281,15 @@ if [ -n "${SPEC_EXTRA_JSON:-}" ]; then
     echo "[launch] ERROR: SPEC_EXTRA_JSON is not a valid JSON fragment: $SPEC_EXTRA_JSON" >&2; exit 1
   fi
 fi
-# SPEC_TOKENS must be an integer >= 1 (DFlash2 drafter).
-if ! [ "$SPEC_TOKENS" -ge 1 ] 2>/dev/null; then
-  echo "[launch] ERROR: SPEC_TOKENS must be an integer >= 1 (cluster.env, current: $SPEC_TOKENS)" >&2
+# SPEC_TOKENS must be an integer >= 1 (DFlash2 drafter). 0 omits --speculative-config
+# entirely; it exists only for measurement overlays that must run without speculation
+# (docs/fidelity/REPORT.md) and requires an empty SPEC_EXTRA_JSON.
+if ! [ "$SPEC_TOKENS" -ge 0 ] 2>/dev/null; then
+  echo "[launch] ERROR: SPEC_TOKENS must be an integer >= 0 (cluster.env, current: $SPEC_TOKENS)" >&2
+  exit 1
+fi
+if [ "$SPEC_TOKENS" -eq 0 ] && [ -n "${SPEC_EXTRA_JSON:-}" ]; then
+  echo "[launch] ERROR: SPEC_TOKENS=0 disables speculative decoding; SPEC_EXTRA_JSON must be empty" >&2
   exit 1
 fi
 
@@ -485,6 +493,54 @@ case "${EXTRA_DOCKER_ENV:-}" in
         || { echo "[launch] ERROR: E29 end-drain source manifest failed" >&2; exit 1; }
     fi ;;
 esac
+# Likewise for the E31 indexer candidate, when any of its files is mounted.
+case "${EXTRA_DOCKER_ENV:-}" in
+  */e31-indexer/*)
+    if [ "$DRY_RUN" != 1 ]; then
+      (cd "$ENV_DIR/experiments/e03/e31-indexer" && sha256sum -c SHA256SUMS) \
+        || { echo "[launch] ERROR: E31 indexer source manifest failed" >&2; exit 1; }
+    fi ;;
+esac
+# The opt-in allocator diagnostic has a separate, deployable source manifest.
+case "${EXTRA_DOCKER_ENV:-}" in
+  */prefill-cache-trim/gpu_worker.py:*)
+    if [ "$DRY_RUN" != 1 ]; then
+      (cd "$ENV_DIR/experiments/e03/prefill-cache-trim" && sha256sum -c SHA256SUMS) \
+        || { echo "[launch] ERROR: prefill-cache-trim source manifest failed" >&2; exit 1; }
+    fi ;;
+esac
+# The opt-in step cap keeps its scheduler payload separate from the E29 parent.
+case "${EXTRA_DOCKER_ENV:-}" in
+  */prefill-step-cap/scheduler.py:*)
+    if [ "$DRY_RUN" != 1 ]; then
+      (cd "$ENV_DIR/experiments/e03/prefill-step-cap" && sha256sum -c SHA256SUMS) \
+        || { echo "[launch] ERROR: prefill-step-cap source manifest failed" >&2; exit 1; }
+    fi ;;
+esac
+# The opt-in admission middleware is deployed from its own pinned source manifest.
+case "${EXTRA_DOCKER_ENV:-}" in
+  */bounded-admission/middleware.py:*)
+    if [ "$DRY_RUN" != 1 ]; then
+      (cd "$ENV_DIR/experiments/e03/bounded-admission" && sha256sum -c SHA256SUMS) \
+        || { echo "[launch] ERROR: bounded-admission source manifest failed" >&2; exit 1; }
+    fi ;;
+esac
+# The E35 runner verify-length candidate carries its own source manifest.
+case "${EXTRA_DOCKER_ENV:-}" in
+  */e35-runner-k/*)
+    if [ "$DRY_RUN" != 1 ]; then
+      (cd "$ENV_DIR/experiments/e03/e35-runner-k" && sha256sum -c SHA256SUMS) \
+        || { echo "[launch] ERROR: E35 runner-k source manifest failed" >&2; exit 1; }
+    fi ;;
+esac
+# The E36 lm_head candidate carries its own source manifest.
+case "${EXTRA_DOCKER_ENV:-}" in
+  */e36-lm-head-w8a16/*)
+    if [ "$DRY_RUN" != 1 ]; then
+      (cd "$ENV_DIR/experiments/e03/e36-lm-head-w8a16" && sha256sum -c SHA256SUMS) \
+        || { echo "[launch] ERROR: E36 lm-head source manifest failed" >&2; exit 1; }
+    fi ;;
+esac
 if [ "$ASYNC_SCHEDULING" = "1" ]; then
   ASYNCFLAG="--async-scheduling"
 fi
@@ -580,8 +636,12 @@ DOCKER_CMD+=(
 )
 # shellcheck disable=SC2206
 DOCKER_CMD+=( $ASYNCFLAG )
+if [ "$SPEC_TOKENS" -gt 0 ]; then
+  DOCKER_CMD+=(
+    --speculative-config "{\"method\":\"dflash\",\"model\":\"/draft\",\"num_speculative_tokens\":$SPEC_TOKENS${SPEC_EXTRA_JSON:+,$SPEC_EXTRA_JSON}}"
+  )
+fi
 DOCKER_CMD+=(
-  --speculative-config "{\"method\":\"dflash\",\"model\":\"/draft\",\"num_speculative_tokens\":$SPEC_TOKENS${SPEC_EXTRA_JSON:+,$SPEC_EXTRA_JSON}}"
   --tool-call-parser glm47
   --enable-auto-tool-choice
   --reasoning-parser glm45

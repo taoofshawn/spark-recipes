@@ -155,14 +155,29 @@ fi
 REMOTE_DIRS+=(tp4/sparkcache tp4/sircl tp4/sircl/bundle tp4/sircl/runtime)
 
 # Accepted E03 runtime sources retain their measured paths; historical checks and
-# preparation assets travel alongside them. The effective recipe selects each mount.
+# preparation assets travel alongside them, as do `*.flag` policy files that a recipe mounts.
+# The effective recipe selects each mount.
 if [ -d "$REPO/scripts/node/experiments/e03" ]; then
   while IFS= read -r f; do
     FILES+=("$f:tp4/experiments/e03/${f#scripts/node/experiments/e03/}")
     REMOTE_DIRS+=("tp4/experiments/e03/$(dirname "${f#scripts/node/experiments/e03/}")")
-  done < <(cd "$REPO" && find scripts/node/experiments/e03 -type f \( -name '*.py' -o -name '*.json' -o -name SHA256SUMS \) | sort)
+  done < <(cd "$REPO" && find scripts/node/experiments/e03 -type f \( -name '*.py' -o -name '*.json' -o -name '*.flag' -o -name SHA256SUMS \) | sort)
 fi
 
+# Fidelity campaign assets (docs/fidelity/REPORT.md): per-overlay SparkCache configurations
+# with their own cache namespaces, and the NVFP4 comparison launcher. They are inert unless
+# a fidelity TP4_ENV overlay selects them.
+if [ -d "$REPO/scripts/node/experiments/fidelity" ]; then
+  while IFS= read -r f; do
+    rel=${f#scripts/node/experiments/fidelity/}
+    FILES+=("$f:tp4/experiments/fidelity/$rel")
+    REMOTE_DIRS+=("tp4/experiments/fidelity/$(dirname "$rel")")
+    case "$f" in
+      *.sh) EXECUTABLES="$EXECUTABLES tp4/experiments/fidelity/$rel"
+            SHELL_SCRIPTS="$SHELL_SCRIPTS tp4/experiments/fidelity/$rel" ;;
+    esac
+  done < <(cd "$REPO" && find scripts/node/experiments/fidelity -type f \( -name '*.json' -o -name '*.sh' -o -name SHA256SUMS \) | sort)
+fi
 # The configuration overlay travels next to cluster.env, at the same relative path.
 if [ -n "${TP4_ENV:-}" ]; then
   FILES+=("$TP4_ENV:tp4/$TP4_ENV")

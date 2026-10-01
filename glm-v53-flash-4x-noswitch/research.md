@@ -184,6 +184,44 @@ All of `noswitch-prep/` is site-owned, not upstream-owned:
 
 ## 5. Changelog
 
+- **2026-09-30 — Upstream refresh 080fe09 → ed365a6: the SparkCache disk-capacity fix lands (branch `glm-v53-flash-4x-noswitch-sparkcache-diskbound`).**
+  Upstream moved 15 commits (Sep 27–30) with NO image bump (digest stays
+  `sha256:0d40…`/IMAGE_ID `5e32aaa1bbe3…`) — everything is runtime overlay/config. The
+  headline is exactly our #2 long-term fix: **E31-MB disk capacity** — the SparkCache chunk
+  store now evicts LRU above 200 GiB (`SPARK_CONTEXT_CACHE_MAX_BYTES=214748364800`) down to a
+  160 GiB watermark (`SPARK_CONTEXT_CACHE_LOW_WATERMARK_BYTES=171798691840`), with per-rank
+  worker scans at startup. This replaces the unbounded growth that filled the nodes' disks
+  (SparkCache chunk store was 1.7 TB/node at audit). Delivery chain: `cdf9b17` (E31 indexer
+  tail-ring + memory-bounded recipe: 8 MiB transfers, 1 GiB transient budget/rank, 1 GiB
+  admission floor, 14 GiB KV pool, allocator trim, 6,912-token step cap, bounded admission
+  6 active/128 queued) → `ed365a6` (E31-MB disk capacity + E35 confidence-based verify length
+  (3-or-7 drafts from DFlash2 confidence, `hybrid` policy, rank-0 broadcast, 0.5 s re-read)
+  + E36 INT8 W8A16 Marlin `lm_head` group 128 (~155 MB/rank freed, perplexity +0.018%); E36
+  is the new baseline; E32 discarded). Rollback ladder:
+  `operational-20260930-e35.env` → `operational-20260930-e31-mb.env` →
+  `operational-20260929-memory-bounded.env` → `operational-20260929-sparkcache-protected.env`
+  (complete protected E31, 16 GiB pool) → `baseline-20260928-e31.env`. The new default uses a
+  new `ram-budget` SparkCache connector via patch-05 substitution in `EXTRA_DOCKER_ENV`; the
+  E22b store namespace is unchanged, so the existing on-disk cache stays valid. Site merge:
+  all 58 site-modified files accounted for (11 changed upstream — three-way merged, 6 clean
+  + `scripts/node/README.md` resolved by hand + 3 resolved by taking upstream structure with
+  `scripts/node/README.md` resolved by hand + 3 resolved by taking upstream structure with
+  site path rewrites; 47 restored from git untouched); site path rewrites re-applied to all
+  newly adopted functional files (reference envs, test constants, resilience tooling
+  `campaign.py`/`prepare_overlay.py`, fidelity fixtures); docs keep upstream's `~/tp4` prose
+  per site convention. SITE MOD 7 (parser override) re-added to `cluster.env.example`'s
+  `EXTRA_DOCKER_ENV` (end-of-value) and handled in tests by stripping the adjacent
+  `(-v, glm47_moe.py)` pair from template-derived commands only — the upstream-pure
+  reference/fixture envs (incl. `baseline-20260925-e29.env` / `baseline-20260928-e31.env` /
+  `operational-20260929-sparkcache-protected.env`) stay byte-faithful to upstream, since the
+  accepted-recipe ladder reconstructs them from deltas and a parser injection would misrepresent
+  the measured recipes. Post-merge state: full `./scripts/check.sh` → `check: PASS` (all
+  gates; fidelity fixtures `le36-m*.env` regenerated from `make_overlays.py`, which is
+  canonical). `VENDORED-AT.md` pin updated.
+  NOT done here (deliberate): site `cluster.env` / `noswitch-prep/cluster.env`
+  regeneration and the actual rollout — needs an authorized window and, per owner
+  constraint, the owner switches backend models first; nothing is committed or pushed yet.
+
 - **2026-09-30 — Correction to the 09-29 rollout note + offline parity gate repaired (`glm4x-parity-test-fix`).**
   The 09-29 note's premise ("`check-f0.py` will show a mount/identity delta vs the frozen
   2026-09-25-e29 baseline after the TC-45 rollout … needing an owner decision on a new

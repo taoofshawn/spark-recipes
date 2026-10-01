@@ -8,3 +8,17 @@ __pycache__/
 *.pyc
 
 .pi/
+
+# glm-v53-flash-4x-noswitch: upstream-vendored docs/data — all of it exists verbatim in the
+# upstream repo (jnardiello/GLM-5.3-Flash-FP8-4-DGX-Spark-Switchless at the VENDORED-AT pin),
+# so we do not preserve a second copy. Kept: code + test-referenced pins (baseline.json,
+# operational-identities) which check.sh needs to run.
+glm-v53-flash-4x-noswitch/upstream/docs/fidelity/
+glm-v53-flash-4x-noswitch/upstream/docs/plots/
+glm-v53-flash-4x-noswitch/upstream/docs/resilience.md
+glm-v53-flash-4x-noswitch/upstream/docs/historical_benchmarks/experiments/
+glm-v53-flash-4x-noswitch/upstream/docs/historical_benchmarks/baselines/*/*
+!glm-v53-flash-4x-noswitch/upstream/docs/historical_benchmarks/baselines/2026-09-28-e31/baseline.json
+!glm-v53-flash-4x-noswitch/upstream/docs/historical_benchmarks/baselines/2026-09-30-e31-mb/baseline.json
+!glm-v53-flash-4x-noswitch/upstream/docs/historical_benchmarks/baselines/2026-09-30-e35/baseline.json
+!glm-v53-flash-4x-noswitch/upstream/docs/historical_benchmarks/baselines/2026-09-30-e36/baseline.json

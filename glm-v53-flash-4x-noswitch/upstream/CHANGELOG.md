@@ -7,6 +7,344 @@ Versions and releases are created only at the owner's explicit request.
 
 ### Added
 
+- E36 is the new default: the vocab-parallel `lm_head` that the target shares with the
+  DFlash2 drafter is packed INT8 W8A16 (group 128, Marlin) once at load, before CUDA graph
+  capture, and its BF16 weight is freed (about 155 MB per rank net).
+  - Pre-registered fidelity on one measurement load (424 windows, BF16 against INT8): dense
+    perplexity +0.018% [+0.013, +0.024], top-1 agreement 99.6%.
+  - Two native Rigmark suites against the E35 record on another load: code decode +2.3%,
+    prose +3.6%, C1 +6.2%; C2/C4, prefill and time to first token within noise. The owner
+    judged the gains marginal and kept the change.
+  - `operational-20260930-e35.env` returns to E35 in one step; the E31-MB and memory-bounded
+    returns now also remove E36.
+  - `check-f0.py` validates the new `2026-09-30-e36-lm-head` identity, and the E35 return has
+    its own identity. E36 becomes the current performance reference.
+  - The fidelity harness can build overlays from the current template, and has an `le36-m`
+    measurement arm that selects the BF16 or INT8 head with a flag file on one load.
+- E35 is the new default: on a single-request decode step with seven scheduled drafts, the
+  model runner verifies 3 or 7 drafts from the DFlash2 selector's own confidence instead of
+  the acceptance average the scheduler sees two steps late. Rank 0 decides and broadcasts
+  the length to every tensor-parallel rank; trimmed drafts count as rejected.
+  - A read-only policy file selects `hybrid`. Overwriting it in place with `ema` on rank 0
+    returns to the acceptance average without a restart.
+  - On native Rigmark with the reference flags, code decode and C1 were unchanged within
+    noise, prose decode −1.5% and decode time to first token about 30 ms lower. The owner
+    promoted it for the latency gain and judged the prose change to be noise.
+  - `operational-20260930-e31-mb.env` returns to E31-MB in one step. The memory-bounded
+    return now also removes E35.
+  - `check-f0.py` validates the new `2026-09-30-e35-hybrid` identity, and the E31-MB return
+    has its own identity. `deploy.sh` also ships `*.flag` policy files.
+  - The report and portable extract record the held-out screen and the A–P–P–A suites.
+  - E35 is the new performance reference, frozen from the two `hybrid` suites (n = 2,
+    108 requests, zero errors) with the same-load `ema` arm kept per metric; E31-MB
+    becomes the previous reference.
+- E31-MB, the owner-named current performance reference: the E31 engine with the
+  memory-bounded layer, frozen from the two default-arm suites of the E32 series (n = 2,
+  108 requests, zero errors) with upstream Rigmark and the reference flags. The record keeps
+  the frozen E31 values for context and states that the measured load ran the E32 overlay
+  at the default's flags. The E31 record and the README figures are unchanged. The
+  operational identity of the default is `2026-09-30-e31-mb`.
+- The discarded E32 experiment has a report and a portable extract: runtime switches for the
+  eager-prefill allocator trim and the 6,912-token step cap, compared on one load with a
+  factorial screen, a resilience re-check and four native Rigmark suites. Trimming only on
+  new-request steps shortened cold prefills by 0.8–1.7% but slowed cached replays by up to
+  3.8%; the cap switches had no effect. The default is unchanged and the overlay is not kept.
+- `scripts/plot-resilience-memory.py` renders one plain-language bar chart of the free
+  memory left on the busiest node (rank 0) in each of the eight KV14 resilience tests, from
+  the campaign's portable results, with the 0.75 GiB safety stop marked and the other three
+  nodes' lowest value in a note.
+- A reproducible requests-versus-memory figure, portable CSV and summary of the
+  98m59s mixed-load run: 756 complete responses, 84 intentional cancellations and
+  fresh four-rank drains. The operator ended the stable run early; the original
+  two-hour gate remains incomplete and the earlier failed attempt is preserved.
+  Coverage notes distinguish the overlapping campaign and handoff samplers.
+- Final native Rigmark evidence on the bounded production recipe, kept separate
+  from the frozen E31 baseline: one suite, 54 complete requests, no recorded errors.
+  Initial/final performance differences are descriptive across different loads;
+  the slower 8K replay is documented alongside code and concurrency results.
+- A sealed partial mixed-load checkpoint preserves per-rank memory samples and a
+  load-correlated CSV, including source age, idle periods and final-drain memory. Its
+  failed idle check coincided with five non-driver inference requests; the later
+  successful drain does not turn the incomplete two-hour test into a pass.
+  Subsequent operational recovery is recorded separately from the failed run.
+- A separate bounded targeted checkpoint records three repetitions of
+  16 queue, maximum-context replay, cancellation, slow-client, API and cache-fault cases on the 14 GiB
+  recipe: 144 request attempts, 192 fresh rank drain proofs and complete sampled
+  OOM/retry coverage. The selected 23-case driver summary has 69 qualifying repetitions;
+  duration, final production checks and deferred fault coverage remain distinct.
+- Resilience campaigns can select a reduced set of targeted cases and finish the
+  soak after its required duration. Completed evidence remains reusable only for
+  the matching runtime and protocol; deferred cases stay pending. The original
+  campaign clock, minimum two-hour load, final proofs and restoration checks remain
+  intact, allowing an earlier return to the operational service.
+- Resilience context cases now include five concurrent clients through the full
+  262,144-token context limit, with exact prompt and output accounting. An explicit
+  operator-authorized deadline extension preserves the original campaign start,
+  records the old and new deadlines, and retains bounded restoration and soak phases.
+  A distinct five-client long-decode case uses 245,760 prompt tokens and forces
+  16,384 output tokens within the same context limit, recording logical payload identity
+  and overlapping client intervals to exercise longer KV retention. A 3,600-second
+  client deadline bounds this case independently of the campaign deadline;
+  expiry fails the case while preserving all request outcomes.
+  A sealed short-output C5 cold checkpoint records three repetitions, 15 complete
+  maximum-context responses, 12 fresh rank drain proofs and 4.25 GiB minimum
+  available memory on rank 0. Five admitted clients reached at most two running
+  engine requests; this result does not establish five resident full contexts.
+  A separate long-output checkpoint completes all 15 responses across three waves,
+  retains 3.71 GiB minimum sampled rank-0 headroom and records 22 preemptions with
+  fresh four-rank drains. Retrospective output rates explicitly include queue,
+  prefill and scheduler pauses; they are not native performance measurements.
+  Coverage notes distinguish the captured telemetry tail, cache drain proofs,
+  independently sampled API gauges and the test namespace's cache policy.
+- An optional bounded-admission experiment uses vLLM's native ASGI middleware hook
+  to queue requests before prompt parsing and tokenization. It limits active and
+  waiting requests, bounds body size and stalled reads/writes, and reports explicit
+  overload responses. Health and metrics remain available independently. Queue
+  counters and release checks distinguish frontend waiting from the engine queue;
+  the measured admission settings are now part of the operational default described below.
+  A separate production candidate excludes fault injection and retains the normal
+  cache namespace. Explicit `check-f0 --identity` verifies its four-rank payload,
+  admission and KV settings; a complete rollback restores the protected 16 GiB recipe.
+  A sealed live checkpoint records three overload repetitions with 128 accepted
+  wave requests and 22 explicit full-queue rejections each, complete response
+  accounting and fresh four-rank drain. This establishes the tested admission
+  behavior, not many distinct resident contexts or a promotion verdict.
+- An isolated scheduler experiment limits each output to 6,912 target tokens while
+  retaining the configured 8,192-token capacity and existing draft-slot accounting.
+  Remaining prefill work stays queued. The cap is now part of the composed operational
+  recipe; it is not an independent guarantee of memory safety or performance.
+- An opt-in prefill allocator-trim experiment, isolated from the validated worker
+  payload. It measures unused CUDA memory released before eligible eager prefills;
+  its deployed source hashes are checked before launch. The measured worker is now
+  selected by the operational default together with the other memory controls.
+- A separate protected-SparkCache resilience report with the initial native Rigmark
+  receipt hash, actual request counts and numeric extracts. It records successful
+  8k/C1 cold/replay repeats and the first 8k/C2 memory-guard stop with its evidence
+  limitations, plus a default-only 4k/C2 reproduction that isolates CUDA allocator
+  reservation and concurrent working-memory pressure. Stress cases and final measurements remain separate from
+  frozen E31 results.
+  A separate allocator-trim diagnostic records actual reclaimed memory and its
+  repeated guard failure, without counting it as a successful correction.
+  The subsequent scheduler-cap candidate records three successful two-client
+  repetitions at both 4k and 8k, with exact token counts, drained reservations and
+  sampled memory minima; 8k prefill is partly serialized through the queue.
+  These bounded results alone do not establish a general memory bound.
+  A subsequent context checkpoint records 34 complete three-repeat cases through
+  128k/C6 and 180k/C1, plus a partial 180k/C2 case, with separate replay-seed
+  counts and four-rank restore and resource-drain evidence. Unrecorded interrupted
+  work is excluded. A separate checkpoint records three repetitions of four API and
+  nine cache cases, with 84 cache responses, explicit fault evidence and measured
+  sampling cadence. Shared-prefix and legacy cancellation observations retain their
+  evidence limits; sustained load and remaining fault coverage stay pending.
+  A separate 14 GiB KV candidate completes three cold and three replay requests at
+  262,128 prompt tokens plus 16 output tokens, with nine responses including replay
+  seeds, four-rank release proofs and a measured 2.72 GiB minimum available memory
+  on rank 0. This is maximum-context evidence, not a queue, soak or promotion verdict.
+  A disjoint checkpoint records three successful 8- and 16-client queue waves and
+  three multiple-cancellation repetitions. The 32-client wave remains failed after
+  a controller telemetry timeout, with uninterrupted node samples and no observed
+  OOM; the delivery-delay cause remains unresolved.
+- A bounded production resilience campaign under `scripts/resilience/`, documented in
+  `docs/resilience.md`: reproducible context and queue cases, cancellation and slow-client
+  probes, isolated cache fault injection, worker faults with coordinated recovery, private
+  receipts and a fixed restoration deadline. Test overlays keep cache mutations in a
+  marked namespace capped at 8 GiB per node, with native eviction of synthetic cache
+  entries at 3 GiB toward a 2 GiB low watermark. Reservation telemetry distinguishes verified
+  zero from missing evidence. Native Rigmark remains the separate performance interface;
+  incomplete or unsupported cases remain explicitly pending. Namespace initialization uses
+  `sudo` to traverse Docker-owned cache directories without changing their permissions.
+  Failed fault cleanup stops the campaign even when a case is otherwise pending;
+  soak accounting distinguishes stalled requests from bounded deadline cancellations
+  and requires cancelled client threads to terminate.
+  Generated runtime mounts preserve the target node's home directory when an overlay
+  is inspected from a workstation with a different home path.
+  Explicit runtime variants verify the loaded worker and retain per-attempt recipe
+  hashes; resuming after a correction preserves the original deadline and requires
+  new passing repetitions under the active recipe.
+  The duration phase retains actual conversation history and exact replays, records
+  private request and cancellation receipts, and requires observed load, idle periods
+  and fresh four-rank resource drain. Empty visible reasoning-only responses remain
+  valid. A separate final-proof reserve preserves the full two-hour load requirement.
+  Queue receipts retain client failures, and an optional targeted-case order allows
+  fault coverage before expensive remaining contexts without moving phase deadlines.
+  Planned deadline cancellations retain their cause; local client-capacity limits
+  remain pending only after service and resource checks, with actual dispatched
+  responses preserved even when executor submission fails.
+  A combined cache-read EIO and restore cancellation uses existing four-rank phase
+  events and requires successful prerequisites, cleanup and recovery evidence;
+  interrupted cleanup and recovery preserve partial receipts before propagating.
+  Cancellation and shared-prefix cases now use a separate evidence protocol:
+  completed streams cannot count as cancellations, individual client outcomes and
+  validated reissued requests are retained, and historical results do not satisfy new
+  repetitions. The shared-prefix test crosses a complete cache block and requires
+  both a seed restore and a distinct committed snapshot on all four ranks.
+  An optional KV-pool experiment records the requested byte budget in its overlay
+  identity and verifies the loaded value on every rank while retaining the
+  262,144-token context limit. A smaller pool trades concurrent resident context
+  capacity for memory headroom; every variant retains its separate runtime identity.
+  Planned targeted-phase cutoffs keep interrupted cancellation cases pending so
+  the soak can proceed; guard aborts cannot qualify as intentional cancellations.
+  KV candidate validation rejects conflicting alias spellings as well as duplicate
+  byte-budget options.
+  Private receiver timestamps and SSH diagnostics help locate telemetry interruptions
+  without relaxing safety thresholds. An optional pinned production return is selected
+  only after a successful two-hour soak; early stops retain the protected return.
+  Final native measurement receipts identify the verified restoration recipe separately
+  from the initial measurement.
+- SparkCache disk-transfer protection with 8 MiB payload pieces, a shared
+  1 GiB transient-work budget per rank and a 1 GiB admission headroom floor. Capture
+  stages to an anonymous disk file; publication and restore stream bounded pieces
+  without a complete snapshot in RAM. Under pressure stores are skipped
+  and restores recompute; queued and cancelled work stays charged until its owner
+  drains. It verifies checksums before reporting successful restore, publishes independent
+  snapshots atomically, cleans up staging files and uses a separate cache namespace.
+  The operational default selects these protections separately from the unchanged
+  E31 performance reference. A versioned operational identity and complete E31
+  rollback distinguish the protected recipe from the historical unrestricted cache
+  path. Identity checks compare every running container's cache configuration with
+  the pinned JSON and require the protection boot signatures on all four ranks.
+  Live migration requires four-rank launcher parity and identity verification;
+  GPU resilience validation requires a coordinated window. See
+  `scripts/node/experiments/e03/sparkcache-ram-budget/`.
+- E31 indexer overlay (`scripts/node/experiments/e03/e31-indexer/`), now promoted (see Changed).
+  A `TP4_ENV` overlay on the E29 default swaps only the `pooled_indexer.py` and
+  `ops/glm_kpool.py` mounts. The two changes are selected at runtime by in-container flag
+  files, so they can be compared on one load without a restart:
+  - The indexer head gate can run as a BF16 tensor-core GEMM with FP32 output instead of an
+    FP32 GEMM, after the Apache-2.0 RiNGSiDE `GLM53_INDEXER_GATE_TC` patch. It is off by
+    default in the overlay.
+  - A fix candidate for C4 pools corrupted by speculative decoding, on by default in the
+    overlay. The per-request tail that completes four-token pools had four slots, so the
+    rows of a DFlash verify step, including rejected drafts, overwrote committed members of
+    the open pool. The tail becomes a ring of `4 * cdiv(4 + K, 4)` slots, 12 for seven
+    drafts.
+  - Leaf tests for both changes run on one GPU in a maintenance window.
+  - `scripts/tests/test-e31-kpool-tail-ring.py` proves the ring offline against the
+    kernels' index arithmetic. The legacy tail corrupts pools, the ring never does.
+  - `scripts/tests/test-e31-indexer-config.py` checks the patches, switches, launcher parity
+    and refusals.
+  - The launcher verifies the candidate's `SHA256SUMS` when its files are mounted.
+  - The README gives the same-load A/B procedure and the SparkCache residual risk. The
+    production override files under `scripts/node/overrides/` and the E29 record are
+    unchanged.
+- Fidelity campaign tooling (`docs/fidelity/REPORT.md`): it measures how far the E29 recipe's
+  next-token distributions and task outcomes deviate from the vendor FP8 model served
+  without the local precision and runtime changes.
+  - `scripts/fidelity/make_overlays.py` generates complete `TP4_ENV` overlays under
+    `scripts/node/experiments/fidelity/` from the frozen references and the E29 default.
+    Measurement overlays change only the declared measurement keys: 6 GiB KV, one
+    sequence, a 139,264-token window, `--max-logprobs 100` and SparkCache store/restore
+    off. The reference keeps the FP8 KV of its frozen recipe, because B12X cannot use BF16
+    KV. Serving overlays keep their base recipe, with at most a smaller KV pool. Each
+    overlay has its own SparkCache namespace. `--check` detects stale files and `--diff`
+    prints any overlay's delta against its base.
+  - `scripts/deploy.sh` also deploys `scripts/node/experiments/fidelity/` (SparkCache
+    configurations and launchers) to `~/tp4/experiments/fidelity/`. These files stay inert
+    unless a fidelity overlay selects them.
+  - `data/fidelity/` is ignored: corpus text, token IDs, raw logprobs, audits and site
+    inventories stay local. `scripts/check.sh` skips it.
+  - Measurement harness in `scripts/fidelity/`:
+    - Collectors for teacher-forced prompt logprobs and greedy generations through the vLLM
+      completions API. They use a fresh cache salt per attempt, retry with backoff, resume,
+      and stop on an abort file.
+    - `mem_sampler.py` samples MemAvailable per rank and raises that abort file below a
+      rank-0 floor.
+    - `analyze.py` reports coarse top-K KL, which is a lower bound on the true KL, together
+      with top-1 agreement and ΔNLL. Breakdowns cover category, source, position bucket
+      and prefill path, with window-bootstrap CIs, noise-floor excess, MDE and
+      K-sensitivity.
+    - `smoke.py`, `gates.py` and `boot_record.py` check logprob support, run the two
+      functional gates and record each boot's identity.
+  - `scripts/fidelity/corpus/` builds the private corpus: redacted agent-session windows,
+    Italian and model-native windows, and a 150-prompt decode set. It renders with the
+    runtime chat template and the pinned tokenizer, verifies token files against their
+    manifests, and publishes only the numeric `docs/fidelity/corpus-summary.json`.
+  - `scripts/fidelity/tasks/` is the endpoint layer, for local vLLM arms and a cost-capped
+    z.ai arm, over the knapcio qeval, hardset and tasktime sets vendored unmodified in
+    `third_party/knapcio-bench/` (MIT). Its statistics are exact McNemar, Wilson intervals
+    and a paired bootstrap.
+  - `scripts/fidelity/voxel/` fetches the two public voxel-pagoda prompts verbatim and runs
+    them against each arm. It renders the outputs headlessly, checks the Pagoda Bench
+    constraints and builds an anonymised gallery.
+  - `scripts/check.sh` runs the new stdlib tests (metrics, collectors, redaction, tasks,
+    campaign analysis and report) and `make_overlays.py --check`.
+  - `scripts/node/experiments/fidelity/launch-nvfp4-tp4.sh` runs Alex Ellis's published
+    NVFP4 engine layer on this repository's fabric for the comparison arm.
+  - `scripts/fidelity/analyze_campaign.py` and `campaign.config.json` report every
+    comparison separately for dense (≤ 2,048 conditioning tokens), sparse and overall
+    regimes. They add covered probability mass and top-K overlap, a bootstrap over source
+    sessions, excess over the repeatability floor with one-sided bounds and
+    `within_margin`/`exceeds_margin`/`unresolved` verdicts. Repeated executions give the
+    averaged-distribution estimate for the nondeterministic sparse regime; the analysis also
+    covers MDE, K sensitivity and ladder attribution. KL is computed in log space, with a
+    compensated complement for the rest bucket, so near-identical distributions do not
+    round to spurious values.
+  - `scripts/fidelity/plots.py`, `build_report.py` and `make_all.sh` regenerate all metrics,
+    the task statistics and probe summaries, fifteen PNG/SVG figures,
+    `docs/fidelity/REPORT.md` and a self-contained `report.html` in one command. The report
+    opens with the verdict and the perplexity-change quality figures, and a built-in leak
+    check keeps site values out of the public outputs.
+  - `corruption_probe.py` counts invalid UTF-8, U+FFFD replacement characters, repetition
+    locks and tool-call parse failures on Italian and tool-call prompts (motivated by vLLM
+    issue 54150 for ModelOpt NVFP4 checkpoints). `run_serving_chain.sh` runs the
+    serving-mode boots for tasks, voxel runs and probes, and ends by restoring the plain
+    default with both gates and `check-f0.py`.
+  - `determinism_probe.py`, `generate_native.py`, `make_subsets.py`, `run_measure_boot.sh`
+    and `run_arm_chain.sh` drive the measurement boots: a repeatability probe, model-native
+    corpus windows, seeded subsets and resumable measurement steps under the rank-memory
+    abort.
+  - First campaign results in `docs/fidelity/`: the report, its verdict, aggregated metrics,
+    boot identities and figures. E29 differs from the vendor FP8 model in the dense regime
+    well beyond the pre-registered KL margin, but shows no detectable perplexity change
+    (all positions +0.14% [−0.32, +0.56]). The sparse regime remains unresolved because the
+    engine is not deterministic beyond 2,048 tokens. The NVFP4 comparison arm deviates
+    further and is 6.9% [4.5, 9.2] worse in perplexity than E29 overall. Voxel runs and the
+    cloud arm are deferred.
+  - The report opens with a plain-language summary (`docs/fidelity/eli5.md`, "In plain
+    words"). It shows the corruption-probe results and the ladder negative controls, and
+    says which arm was scored by prompt scoring, tasks or the probe. Descoped work
+    (decode-set generations, sampled task runs, the voxel showcase, the cloud arm) is
+    named as descoped instead of pending. The task limitation gives both MDE
+    approximations: 6.5–7.5 pp from the observed discordance, about 32 pp if every item
+    were discordant. `tasks/stats.py` now computes the paired pass-rate MDE; it
+    previously reported the sign-test shift (16.2 pp) under that name.
+  - After an independent review, the verdict, the plain-language summary and the README
+    state "no detectable quality loss on this corpus" rather than equivalence. They label
+    ladder steps against the previous rung, and describe qeval as 75 mixed tasks. They
+    also report NVFP4's short-context perplexity advantage and name the Italian corpus
+    as synthetic.
+  - `scripts/fidelity/export_public.py` writes the campaign's portable data to
+    `docs/historical_benchmarks/experiments/2026-09-27-fidelity/`: identity, coverage,
+    headline results and hashes of the private originals, run metadata, qeval per-item
+    results, corruption-probe rows, functional gates and memory samples. Per-window
+    metrics are included only for windows generated from public prompts. Site values
+    are removed, and a built-in leak check guards the output. Raw logprobs, token IDs,
+    corpus text, and per-window metrics and records from private sessions stay in the
+    ignored `data/fidelity/`. Private-session windows appear publicly only in aggregates
+    and in `corpus-hashes.json`, as one row each: category, token count and SHA-256.
+  - `run_serving_chain.sh` validates every overlay and step before the first boot. It
+    exits non-zero after a failed step (both voxel processes are checked), a memory
+    abort at any point or a failed final `check-f0.py`, restoring the plain default
+    first. `tasks/run_tasks.py` exits non-zero on collection errors or cost-capped
+    skips. `run_arm_chain.sh`
+    accepts an empty `CURRENT_TP4_ENV` for the default recipe. The fidelity README warns
+    that qeval grading runs model-generated Python, so it belongs in a disposable
+    environment.
+  - The campaign plan is not published. The report lists the protocol amendments that the
+    text, figure notes and overlay headers cite, and the plan stays in the private campaign
+    records.
+  - The README has a "Measured quality" section, next to "Measured performance", with
+    "vs vendor FP8" and "vs NVFP4" subsections. It explains in plain language how to read
+    each number (same first choice, distance, perplexity change, tasks, repeat runs,
+    broken characters), gives both tables a "What it means" column and refers to the
+    current recipe without internal names. It shows
+    two plain-language charts (`16-quality-by-context-length`, `17-quality-by-kind-of-text`,
+    which the report also shows under "In plain words") and links the report. The
+    technical quality figures use plain labels (Vendor FP8,
+    Current recipe, Earlier recipe, NVFP4); their notes no longer claim equal prediction,
+    and figure 1 leaves the recipe ladder to its own figure. The benchmark index lists
+    the campaign.
+
 - Archived the discarded E27d experiment: a per-step cap of 2,304 prefill tokens while other
   requests decode, on the E29 default. The archive holds its report and portable numeric
   extract, and the benchmark index has a new row for it.
@@ -249,15 +587,65 @@ Versions and releases are created only at the owner's explicit request.
 
 ### Changed
 
-- Site path relocation (shawndo 4x site): the deployed runtime directory moved from
-  `$HOME/tp4` to `$HOME/.local/tp4`, the patched NCCL library from `~/nccl-patched` to
-  `~/.local/lib/nccl-patched`, and the vLLM/JIT cache from `~/vllm-cache` to
-  `~/.cache/tp4-vllm-cache`. The model and drafter now live in the default HF cache
-  (`~/.cache/huggingface/hub/models--zai-org--GLM-5.3-Flash/snapshots/690b705…` and
-  `models--incoai--GLM-5.3-Flash-DFlash2/snapshots/bf582e4e…`), so plain
-  `hf download <repo> --revision <rev>` verifies them in place. All path references in
-  `scripts/`, `cluster.env` and `cluster.env.example` follow; the user's home keeps no
-  recipe-owned directories. This is a documented site modification (research.md §2 #5).
+- The README performance figures now compare E31 with its same-load E29-equivalent arm,
+  both measured with upstream Rigmark and Alex Ellis's reference flags, instead of the
+  old-protocol E29 versus E28b medians. `scripts/plot-baseline-comparison.py` reads that
+  arm from the E31 record by default and keeps `--comparison e29-vs-e28b` for the archived
+  figures. Figure labels round like the README table.
+- The README's memory-resilience summary is now a short "Measured resilience" section
+  after "Measured quality", with the per-test minimum-memory figure and a link to the
+  campaign report.
+- Made the memory-bounded operational recipe the default while retaining the frozen
+  E31 performance reference: 14 GiB KV per rank with the 262,144-token context limit,
+  eager-prefill allocator trim, a 6,912-token scheduler-step cap, six active API
+  admission slots, 128 queued requests, and protected SparkCache. Complete rollbacks
+  retain the protected 16 GiB predecessor and measured E31 recipe. Five full contexts
+  require waiting or preemption; test-only cache eviction does not bound production
+  disk growth. Default identity checks verify the composed protections on all ranks.
+- `scripts/check-f0.py` now selects the protected SparkCache operational identity by
+  default and reports `<identity-id> CHECK PASS|FAIL`. Historical checks require an
+  explicit `--baseline` and its matching rollback recipe. Each rank's live transfer
+  configuration is compared in full with the pinned JSON. The complete E31 rollback
+  restores the prior cache behavior, while the frozen performance records stay unchanged.
+- The default engine recipe retains the September 28 E31 reference: the E29 recipe with the pooled
+  indexer and its C4 kernels mounted from `scripts/node/experiments/e03/e31-indexer/` and
+  the two flag-file variables set. The speculative-safe tail ring is on and the head-gate
+  switch is off.
+  - Rigmark: one suite of the promoted arm (n = 1, 54 requests) measured with upstream
+    Rigmark and the reference flags, against a same-load E29-equivalent arm. Code decode
+    +0.97%, prose −0.54%, prefill within ±3.5%, concurrency within the noise of three
+    short rounds.
+  - GPU leaf test: the old tail left 200 wrong pools, the ring none.
+  - The applied default is launcher-identical on all four ranks to the measured overlay, so
+    the running service needs no restart. The SparkCache namespace is kept; restored pools
+    built by the old tail remain a recorded residual risk.
+  - New frozen record `docs/historical_benchmarks/baselines/2026-09-28-e31/` with its
+    promotion record. Portable extracts, leaf-test summaries, the owner decisions and the
+    two excluded series are in
+    `docs/historical_benchmarks/experiments/2026-09-28-e31-indexer/`.
+  - Reports: `docs/benchmarks/baselines/2026-09-28-e31.md` and
+    `docs/benchmarks/experiments/2026-09-28-e31-indexer.md`.
+  - `scripts/check-f0.py` retains the E31 engine identity checks: the two indexer hashes, both
+    flag-file variables and both `E31_` log lines, and refuses the switch variables
+    themselves.
+  - `scripts/node/reference/baseline-20260925-e29.env` retains the earlier E29 return;
+    the immediate operational rollback is now `baseline-20260928-e31.env`. The
+    operations guide documents both and the runtime-only ring switch.
+  - The earlier records remain byte-identical. The fidelity overlay generator reads the E29
+    recipe from that rollback, so its overlays stay byte-identical to their boot records.
+- Benchmark policy (`AGENTS.md`): measure with upstream, unmodified Rigmark and exactly
+  the reference flags: every default plus `reasoning_effort` low, no cache salt, a fresh
+  comparison ID per suite.
+  - Candidates are compared with a same-load reference arm; quick screens may run one
+    suite per arm.
+  - Frozen records up to E29 used other settings and are not comparable. The README says
+    so beside the E31 values and keeps the E29 versus E28b figures as a labelled historical
+    comparison.
+- The launcher accepts `SPEC_TOKENS=0` (with an empty `SPEC_EXTRA_JSON`) and then omits
+  `--speculative-config`; measurement overlays use it when logprobs require speculation
+  off. Every value of 1 or more builds the same command as before: all four ranks of the
+  E29 default and of the eight reference overlays produce identical dry runs.
+
 - CREDITS, the README prerequisites, installation step 8 and the production recipe now
   link SparkCache and SparkRing SIRCL directly and state their Apache-2.0 licenses. They
   replace the earlier "no license notice" wording, which described only the archived copies.
@@ -373,45 +761,10 @@ Versions and releases are created only at the owner's explicit request.
 
 ### Fixed
 
-- Repaired the offline check suite (`./scripts/check.sh`), broken by the `~/tp4` →
-  `~/.local/tp4` relocation and by the TC-45 parser override mounted since: seven offline
-  tests still matched the pre-relocation path literals; the accepted-recipe and end-drain
-  four-rank parity asserts predated the default's parser-override mount and the promotion
-  accounting of the E29 overlay (the end-drain scheduler mount replaces the E27c mount in
-  place, so the recorded delta carries one `-v`, on the engine-core mount only); and the
-  drafter rollback delta omitted the parser override the default now carries. The tests
-  track the relocated paths and assert the known deltas explicitly, and the check passes
-  again end to end.
-- Fixed `scripts/tests/test-agent-preflight.sh` file-mode probing to prefer GNU
-  `stat -c '%a'` before the BSD `stat -f '%Lp'` fallback, which a coreutils-compatible
-  `stat` answers with a full filesystem dump instead of a mode.
-- Repaired the historical F0 reference set: the frozen rollback overlay's mutable image tag
-  is now digest-pinned (the tagged image had been replaced by a rebuild), the reference
-  manifest's artifact hashes again match the relocated artifacts, and `f0-reference.py` no
-  longer requires the macOS-only `/private/tmp` for its render, verify and restore scratch
-  directories, using the platform temp directory instead.
-- Fixed `scripts/deploy.sh` remote paths on this site: since the `~/tp4` → `~/.local/tp4`
-  relocation the script still built remote destinations as `$HOME/<relative>` (`~/tp4/…`,
-  `~/patches/…`), so `--check` reported every managed file MISSING on all four ranks and a
-  push would have landed outside the runtime directory the launcher mounts. Remote paths are
-  now mapped in one place (`tp4/*` → `.local/tp4/*`, `patches/*` → `.local/lib/patches/*`)
-  for push, probe, sha256 verification, remote `bash -n` and exec-bit fixes; `--check`
-  passes against the deployed installation again.
-- Enforced `tool_choice="required"` and named function choice on the GLM-4.7 engine parser
-  path (tool-eval-bench TC-45). The image's parser manager discards the registered tool
-  parser's `structural_tag_model` when both parser roles resolve to one engine class, so
-  `adjust_request` never applied the model's structural tag and `required` silently behaved
-  as `auto` (the model answered in content). The new site override
-  `scripts/node/overrides/vllm/parser/glm47_moe.py` mirrors
-  `DelegatingParser._apply_structural_tag`: requests with `required`/named tool choice get
-  the xgrammar `glm_4_7` structural tag (`TagsWithSeparatorFormat`, `at_least_one=True`),
-  forcing the tool-call envelope; plain `auto` with non-strict tools stays untouched. It is
-  mounted via `cluster.env` (`tp4/overrides/vllm/parser/`, deploy.sh site mod 7) behind the
-  `VLLM_ENFORCE_STRICT_TOOL_CALLING` gate. Post-restart follow-up: the engine's
-  token-id "strict" lexing demotes text-matched tool terminals to content, which the
-  forced xgrammar tag always produces; the override's `token_id_terminals` now keeps only
-  the THINK entries so text-matched `<tool_call>`/arg tags reach the state machine.
-
+- `scripts/fetch-fp8-weights.sh` finds the release manifests when run from `~/tp4` on
+  rank 0, as the installation guide documents. It used to look only under the checkout
+  layout, `scripts/node/model-manifests/`, which `scripts/deploy.sh` does not create
+  on a node.
 - Fixed a dead `IMAGE` assignment in the configuration template: the historical F0 rollback
   line had lost its comment marker, so it read as an active setting that the real
   digest-pinned `IMAGE` below silently overrode. Editing it had no effect. It is now marked

@@ -32,10 +32,6 @@ SITE = "/usr/local/lib/python3.12/dist-packages/vllm/"
 SCHED_FROM = f"/.local/tp4/experiments/e03/queued-cadence/scheduler.py:{SITE}v1/core/sched/scheduler.py:ro"
 SCHED_TO = f"/.local/tp4/experiments/e03/end-drain/scheduler.py:{SITE}v1/core/sched/scheduler.py:ro"
 CORE = f"/.local/tp4/experiments/e03/end-drain/core.py:{SITE}v1/engine/core.py:ro"
-# TC-45 strict tool calling: the promoted default adds this mount; the E28b-measured
-# candidate chain predates it.
-PARSER = str(Path.home()) + "/.local/tp4/overrides/vllm/parser/glm47_moe.py:" \
-    "/usr/local/lib/python3.12/dist-packages/vllm/parser/glm47_moe.py:ro"
 sha = lambda p: hashlib.sha256(p.read_bytes()).hexdigest()
 _spec = importlib.util.spec_from_file_location(
     "e27b_test", REPO / "scripts/tests/test-long-prefill-cadence-config.py")
@@ -148,7 +144,9 @@ RELAY_DEST=operator@192.0.2.23
             (root / "empty.env").write_text(e28b)
             (root / "candidate.env").write_text(e28b + delta)
             (root / "candidate-b.env").write_text(e28b + (CANDIDATE / "delta-b.env").read_text())
-            (root / "default.env").write_text("")
+            # The complete E29 return (the E29 default before E31) is the promoted load B.
+            (root / "default.env").write_text(
+                (REPO / "scripts/node/reference/baseline-20260925-e29.env").read_text())
             env = dict(os.environ, TP4_DRY_RUN="1")
             env.pop("TP4_ENV", None)
             forbidden = root / "forbidden.log"
@@ -195,7 +193,7 @@ RELAY_DEST=operator@192.0.2.23
 
             bad = {
                 "on-e27c-rollback": e27c + delta,
-                "on-e29-default": delta,
+                "on-e31-default": delta,
                 "applied-twice": e28b + delta + "\n" + delta,
                 "kv-15-gib": e28b + 'EXTRA_VLLM_ARGS="${EXTRA_VLLM_ARGS/--kv-cache-memory-bytes=17179869184/--kv-cache-memory-bytes=16106127360}"\n' + delta,
                 "five-drafts": e28b + "SPEC_TOKENS=5\n" + delta,
@@ -216,11 +214,8 @@ RELAY_DEST=operator@192.0.2.23
                 "kv-inside-another-argument": e28b + 'EXTRA_VLLM_ARGS="${EXTRA_VLLM_ARGS/--kv-cache-memory-bytes=17179869184/--served-model-name=--kv-cache-memory-bytes=17179869184}"\n' + delta,
             }
             for rank in range(4):
-                default_words, candidate_words = argv(launch("default.env", rank)), argv(launch("candidate-b.env", rank))
-                self.assertEqual(Counter(default_words) - Counter(candidate_words),
-                                 Counter(["-v", PARSER]), f"rank {rank}")
-                self.assertEqual(Counter(candidate_words) - Counter(default_words),
-                                 Counter(), f"rank {rank}")
+                self.assertEqual(argv(launch("default.env", rank)),
+                                 argv(launch("candidate-b.env", rank)), f"rank {rank}")
 
             for name, text in bad.items():
                 (root / "bad.env").write_text(text)

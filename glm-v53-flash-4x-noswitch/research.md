@@ -184,6 +184,71 @@ All of `noswitch-prep/` is site-owned, not upstream-owned:
 
 ## 5. Changelog
 
+- **2026-10-01 — KV-pool / context-length lever review (research only — nothing changed, nothing deployed).**
+  Question: what levers exist to grow the KV pool and/or per-window context, and does the
+  "upstream author wasn't headless" idea imply reclaimable memory? Findings, all measured today
+  unless noted:
+
+  **Live headroom (in-container `torch.cuda.mem_get_info`, 2026-10-01):** rank 0
+  (`spark-0f0b`, API host) **3.24 GiB free** of 121.69; workers 8.64 / 9.27 / 8.77 GiB
+  (6d14 / 6d90 / 6d24). Rank 0 is the binding constraint (API process + admission
+  middleware overhead), NOT a desktop: all four nodes verified headless at runtime
+  (`multi-user.target`, `display-manager` inactive, zero GUI sessions) — but GNOME/gdm3
+  *packages* remain installed on every node (12 pkgs). Since no desktop process runs, the
+  packages cost zero GPU/DRAM; purging them buys nothing while headless. The recipe's own
+  comment (`cluster.env` line ~265) says `0.885` GPU_MEM_UTIL "works only with the GUI
+  stripped from the OS" — our nodes are runtime-headless but not package-stripped; treat
+  that as untested territory here.
+
+  **Forum check (thread 382459, all 22 posts, 2026-10-01):** no headless/GPU-memory claim by
+  the upstream author exists in the thread — the premise is unsupported there. What IS there:
+  nick398 (post 19): "~4 GB/node left used" at the default pool; nardiello (post 20):
+  "I set KV to 14GB (was 16)… you can add more to the KV without running into OOMs";
+  nardiello (post 18): 1M context works when KV params are tuned but memory is the binding
+  constraint at x5 concurrency. Upstream's own data agrees with ours: **~4 GiB/rank is the
+  practical expansion ceiling**, subject to stress-testing.
+
+  **Lever inventory (ranked):**
+  1. `--kv-cache-memory-bytes` (PRIMARY, precise, measured): current 14 GiB
+     (`15032385536`) → engine reports 1,194,033 KV tokens = 4.55 full 256K windows
+     (~83K tokens/GiB at k=7). **16 GiB (`17179869184`) is the recommended first step** —
+     it is the E31-measured value with a prepared rollback lane
+     (`TP4_ENV=scripts/node/reference/operational-20260929-sparkcache-protected.env`),
+     giving 5.21 full windows and making 5 resident full contexts actually possible. Rank 0
+     keeps ~1.2 GiB margin after the change; upstream's resilience campaign saw 2.6–4.5 GiB
+     free on the busiest node with a 0.75 GiB safety stop, so 16 GiB fits inside observed
+     margins. **17+ GiB does NOT fit rank 0** without freeing API-process memory first.
+  2. `GPU_MEM_UTIL` — do NOT raise. Launcher comment: "Never raise GPU_MEM_UTIL." Global
+     budget knob, imprecise vs the KV-pool flag; 0.885+ documented as GUI-stripped-only.
+  3. `MAX_MODEL_LEN` beyond 262144 — mechanically supported (launcher auto-injects
+     `VLLM_ALLOW_LONG_MAX_MODEL_LEN=1` above 262144, `launch-glm53-tp4.sh:443`). The same
+     base model runs `max_model_len=1048576` in the Intel W4A16 lane, so context support is
+     not the constraint — memory is. If 16 GiB: **4 full windows of ~341,000 tokens**
+     (1,364,609 ÷ 4; practical setting `MAX_MODEL_LEN=340000`, leaving ~4.6K tokens spare
+     against graph/capture variance). 1M-context single request ≈ 12.6 GiB KV, concurrency 1.
+  4. KV dtype — already `fp8_e4m3` (best supported here). No lower dtype documented for
+     this image. No lever.
+  5. Spec k (7→5) — gains ~4.9% KV tokens/GiB (15 GiB at k=5 = 1,344,328 tokens ≈ 5.13
+     windows ≈ 16 GiB at k=7) but trades decode speed; upstream chose k=7 deliberately
+     (E28b). Only for squeezing a 6th window without touching pool size.
+
+  **Consequences of raising pool + context (if ever adopted):**
+  - `check-f0.py` identity breaks: frozen E29 baseline pins `--max-model-len 262144` and
+    `kv-cache-memory-bytes=15032385536`; both change → CHECK PASS fails until a new
+    baseline/identity is recorded. Expected, but loses the one-command measured-identity
+    guarantee.
+  - `MAX_NUM_SEQS=6` and admission (6 active/128 queued) unchanged; with 4 resident
+    windows, requests 5–6 queue or preempt (strictly better than today's 5-window cap).
+  - The k=7 dependency: all token/GiB math here assumes `SPEC_TOKENS=7`; dropping to 5
+    shifts capacity ~+5% and would justify re-raising the window instead.
+  - Verify after any deploy: boot log `GPU KV cache size: … tokens` ÷ target windows ≥
+    `MAX_MODEL_LEN`, both functional gates, full-context load test (never benchmark right
+    after boot; `stream:false`, read `usage.completion_tokens`).
+
+  **Decision: research only.** Nothing changed in `upstream/cluster.env` or
+  `noswitch-prep/cluster.env`; the 14 GiB / 262144 default stays. This entry exists so the
+  change is a 10-minute edit if the current context ever becomes a real problem.
+
 - **2026-09-30 — Upstream refresh 080fe09 → ed365a6: the SparkCache disk-capacity fix lands (branch `glm-v53-flash-4x-noswitch-sparkcache-diskbound`).**
   Upstream moved 15 commits (Sep 27–30) with NO image bump (digest stays
   `sha256:0d40…`/IMAGE_ID `5e32aaa1bbe3…`) — everything is runtime overlay/config. The

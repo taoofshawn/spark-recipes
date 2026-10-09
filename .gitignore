@@ -22,3 +22,7 @@ glm-v53-flash-4x-noswitch/upstream/docs/historical_benchmarks/baselines/*/*
 !glm-v53-flash-4x-noswitch/upstream/docs/historical_benchmarks/baselines/2026-09-30-e31-mb/baseline.json
 !glm-v53-flash-4x-noswitch/upstream/docs/historical_benchmarks/baselines/2026-09-30-e35/baseline.json
 !glm-v53-flash-4x-noswitch/upstream/docs/historical_benchmarks/baselines/2026-09-30-e36/baseline.json
+
+# local research scratch (untracked working notes)
+.research/
+

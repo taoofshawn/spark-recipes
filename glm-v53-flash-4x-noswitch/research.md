@@ -184,6 +184,37 @@ All of `noswitch-prep/` is site-owned, not upstream-owned:
 
 ## 5. Changelog
 
+- **2026-10-09 — Engine-fatal grammar-bitmask assert on a structured-output request (one-off); full restart, identity re-verified. WATCH ITEM.**
+  ~01:32 node time; the stack had been up ~8 days with ~1370 admissions and NO
+  config change (same E29/E35/E36 lane since the 09-30 rollout). Rank-0
+  `Worker_TP0` died in `vllm/v1/worker/gpu/structured_outputs.py:102`
+  (`assert num_masks == len(mapping)`) during `sample_tokens` → EngineCore fatal
+  → chat 500s → clean container exit 0; ranks 1–3 stayed up waiting. Scheduler
+  dump: exactly one in-flight chat completion
+  (`chatcmpl-a3954f9006b57a47-a2572b4f`) with `structured_output_requests=true`
+  / `structured_output_tokens=true`, mid draft-verify step
+  (`num_scheduled_tokens=8`, 7 draft tokens — the E28 solo k=7 schedule). The
+  image's adaptive-verification grammar path (`_build_grammar_mapping`, keyed by
+  (request, position) over `cu_num_logits` / `num_draft_tokens_per_req`)
+  mismatched the bitmask row count at a step boundary. First occurrence ever on
+  this cluster. Upstream vLLM carries a same-family bugfix (#44297, structured
+  output + spec-decode bitmask/advance at the reasoning boundary) — a known bug
+  class in the spec-decode + grammar path, not a fabric/config fault.
+  **Recovery**: full `tp4ctl down`/`up`; `/health` 200, both functional gates
+  (thinking-off chat → "Rome"; tool gate → `get_weather {"city": "Milan"}`),
+  `check-f0.py` → `2026-09-30-e36-lm-head CHECK PASS`.
+  Ops note from this cycle: interrupting the `tp4ctl up` health-wait loop skips
+  its post-health step that stops `tp4-flusher` — the flusher kept running on
+  all four ranks and `check-f0` flagged "flusher not proven inactive" ×4 until
+  `tp4-flusher` was stopped manually on every node. Let `tp4ctl up` run to
+  completion, or stop the flusher before running `check-f0.py`.
+  **If it recurs**: capture the scheduler dump and whether the triggering
+  request used `tool_choice:"required"`/named (the `VLLM_ENFORCE_STRICT_TOOL_CALLING`
+  grammar, §2.6/TC-45), then report to jnardiello upstream / forum thread
+  382459 with the image digest. The assert sits in the base
+  `structured_outputs.py` path, so TP4_ENV rollback lanes alone may not clear
+  it — treat as image/upstream bug to adopt a fix for.
+
 - **2026-09-30 — Upstream refresh 080fe09 → ed365a6: the SparkCache disk-capacity fix lands (branch `glm-v53-flash-4x-noswitch-sparkcache-diskbound`).**
   Upstream moved 15 commits (Sep 27–30) with NO image bump (digest stays
   `sha256:0d40…`/IMAGE_ID `5e32aaa1bbe3…`) — everything is runtime overlay/config. The

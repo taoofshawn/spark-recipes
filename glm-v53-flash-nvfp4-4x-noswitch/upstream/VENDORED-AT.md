@@ -25,15 +25,16 @@ the head (ignored file, node tree stays pristine).
 
 ### Site modifications (upstream files changed — MUST be re-applied on re-vendor)
 
-| file | mod | why | how to re-apply |
+| file | mod | why | status |
 |---|---|---|---|
-| `scripts/transport.sh` | **#1** one line added to the `switchless` branch of `transport_args`: `-e NCCL_SKIP_TREE_CONNECT=1` (marked with a `SITE MOD` comment block) | The site NCCL build (`~/.local/lib/nccl-patched`, SHA `afe5f486…`, the josephdrose/SparkRing patch family proven by the FP8 recipe) implements ring-only tree/PAT skipping under `NCCL_SKIP_TREE_CONNECT`, not the four-PF build's `NCCL_SWITCHLESS_RING_ONLY`. Without it, NCCL init on a switchless ring attempts tree connects that cannot succeed (the FP8 launcher always sets this env). `transport.sh` rejects `NCCL_*` keys in `EXTRA_ENV`, so there is no non-mod way to pass it. | After re-vendoring, add `-e NCCL_SKIP_TREE_CONNECT=1` to the `printf` in the `switchless` branch of `transport_args` (switchless case only; the switched render stays byte-identical to upstream). |
-| `scripts/transport.sh` | **#2** in the same `printf`: `-e NCCL_IB_MERGE_NICS=0` → `=1` (marked in the same `SITE MOD #2` comment block) | With two separate virtual devices, NCCL pairs channel c → vdev (c mod 2) with no subnet knowledge; the rank3→rank0 channel got 10.10.1.x at rank 0 against 10.10.4.x at rank 3 and QP RTR timed out (`ibv_modify_qp` 110, first boot 2026-10-10). The FP8 launcher's proven value is the default (merged vdev + subnet-aware routing picks the correct PF per connection). | After re-vendoring, change `NCCL_IB_MERGE_NICS=0` to `=1` in the switchless `printf`. **Revert to `=0` in Phase E** (the four-PF build requires separate dual-PF listeners). |
+| `scripts/transport.sh` | **#1 (REVERTED, Phase E 2026-10)** one line in the `switchless` branch of `transport_args`: `-e NCCL_SKIP_TREE_CONNECT=1` | (Historical, staged 2-PF transport) The then-pinned site NCCL build (`~/.local/lib/nccl-patched`, SHA `afe5f486…`, the josephdrose/SparkRing patch family proven by the FP8 recipe) implemented ring-only tree/PAT skipping under `NCCL_SKIP_TREE_CONNECT`, not the four-PF build's `NCCL_SWITCHLESS_RING_ONLY`. | **Removed.** The Phase-E four-PF build is ring-only under `NCCL_SWITCHLESS_RING_ONLY` (which the upstream render already sets); its hardened listener path also parses `NCCL_SKIP_TREE_CONNECT` as a compatibility alias, but the explicit flag is the four-PF contract, not the alias. |
+| `scripts/transport.sh` | **#2 (REVERTED, Phase E 2026-10)** in the same `printf`: `NCCL_IB_MERGE_NICS=1` → `=0` (restored to the upstream value) | (Historical, staged 2-PF transport) With two separate virtual devices, NCCL pairs channel c → vdev (c mod 2) with no subnet knowledge; the rank3→rank0 channel got 10.10.1.x at rank 0 against 10.10.4.x at rank 3 and QP RTR timed out (`ibv_modify_qp` 110, first boot 2026-10-10). The merged vdev let the SparkRing lib's subnet-aware routing pick the correct PF. | **Restored to upstream `=0`.** The four-PF contract requires separate dual-PF listeners + subnet-aware routing (and the four-PF lib's hardened switchless path hard-rejects `MERGE_NICS != 0`). |
 
-The Phase-E four-PF NCCL upgrade (research.md) supersedes this mod: once the rebuilt
-four-PF library is pinned, `NCCL_SWITCHLESS_RING_ONLY` works natively and this site line
-becomes redundant (drop it then — othexmr's docs call the alias-only tree-skip bypass
-weaker than the four-PF build's strict listener admission).
+As of Phase E (research.md changelog 2026-10), the functional lines of the `switchless`
+branch of `transport_args` are identical to upstream pin `770d115` — both site mods were
+transient staged-transport accommodations and are gone (only the explanatory comment block
+remains as a site annotation). On re-vendor at a new tip, verify the switchless render
+sets `NCCL_SWITCHLESS_RING_ONLY=1` and `NCCL_IB_MERGE_NICS=0` with no site env lines.
 
 ## Update procedure
 

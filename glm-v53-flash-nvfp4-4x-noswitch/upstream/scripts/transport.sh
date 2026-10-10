@@ -50,11 +50,18 @@ transport_args() {
   # patch family proven by the FP8 recipe) implements ring-only tree/PAT skipping under
   # NCCL_SKIP_TREE_CONNECT, NOT the four-PF build's NCCL_SWITCHLESS_RING_ONLY. Without
   # this line, NCCL init on a switchless ring attempts tree connects that cannot succeed.
+  # SITE MOD #2 (shawndo, 2026-10-10 — see ../VENDORED-AT.md): the four-PF build wants
+  # MERGE_NICS=0 (separate dual-PF listeners), but the SITE SparkRing lib + this ring's
+  # 2-PF staged transport need MERGE_NICS=1 (the FP8 launcher's proven value): with two
+  # separate virtual devices NCCL pairs channel c -> vdev (c mod 2) with no subnet
+  # knowledge, so the rank3->rank0 channel got 10.10.1.x at rank0 vs 10.10.4.x at rank3
+  # and QP RTR timed out (ibv_modify_qp 110). One merged vdev lets the subnet-aware
+  # routing pick the correct PF per connection. Revert to 0 with the Phase-E four-PF build.
   printf '%s' "-e TORCH_USE_RTLD_GLOBAL=1 -e NCCL_SWITCHLESS_RING_ONLY=1 -e NCCL_SKIP_TREE_CONNECT=1 -e NCCL_ALGO=Ring \
 -e NCCL_NET=IB -e NCCL_IB_DISABLE=0 -e NCCL_IB_HCA==$IB_HCA -e NCCL_IB_ADDR_FAMILY=AF_INET \
 -e NCCL_IB_ADDR_RANGE=$SWITCHLESS_ADDR_RANGE -e NCCL_IB_ROCE_VERSION_NUM=2 \
 -e NCCL_IB_SUBNET_AWARE_ROUTING=1 -e NCCL_IB_SUBNET_PREFIX_LEN=${SWITCHLESS_SUBNET_PREFIX_LEN:-24} \
--e NCCL_IB_MERGE_NICS=0 -e NCCL_CROSS_NIC=1 -e NCCL_SOCKET_IFNAME=$FABRIC_IFACE \
+-e NCCL_IB_MERGE_NICS=1 -e NCCL_CROSS_NIC=1 -e NCCL_SOCKET_IFNAME=$FABRIC_IFACE \
 -e GLOO_SOCKET_IFNAME=$FABRIC_IFACE -e MN_IF_NAME=$FABRIC_IFACE -e TP_SOCKET_IFNAME=$FABRIC_IFACE \
 -e NCCL_CUMEM_ENABLE=0 -e NCCL_DEBUG=INFO -e NCCL_IGNORE_CPU_AFFINITY=1 -e NCCL_MAX_CTAS=4 \
 -e NCCL_NVLS_ENABLE=0 -e NCCL_IB_EXTENDED_IPV4_GIDS=1 -e NCCL_IB_PRESERVE_PCI_DOMAIN=1 -e NCCL_IB_ROUTE_DIAGNOSTICS=1 -e NCCL_DEBUG_SUBSYS=INIT,NET"

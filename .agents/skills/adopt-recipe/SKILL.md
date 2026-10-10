@@ -20,7 +20,7 @@ branch, left uncommitted for the user to review.
 All 2-node recipes are archived under `.archived/` — do NOT model new work on them
 (their docker-compose pair flows, `.env.node0/.env.node1`, and 192.168.0.x wiring are
 the old cluster). The live reference for house style is the pair of 4x recipes:
-`glm-v53-flash-4x-noswitch/` (FP8) and `glm-v53-flash-nvfp4-4x-noswitch/` (NVFP4).
+`glm-v53-flash-fp8-tp4-switchless/` (FP8) and `glm-v53-flash-nvfp4-tp4-switchless/` (NVFP4).
 
 ## Scope boundary
 
@@ -60,8 +60,8 @@ A 4x lane is: a vendored/pinned upstream checkout (`upstream/`, pristine, with a
 a `site/` layer OUTSIDE the vendored tree (cluster env, netplan, weight
 materialization, per-lance additions) + a serving profile derived from upstream's with
 documented strip lists + a `README.md` (ops only) + `research.md` (provenance +
-changelog). See `glm-v53-flash-nvfp4-4x-noswitch/` for the cleanest example (knapcio
-vendored @ a pin, site env + profile + materializer) and `glm-v53-flash-4x-noswitch/`
+changelog). See `glm-v53-flash-nvfp4-tp4-switchless/` for the cleanest example (knapcio
+vendored @ a pin, site env + profile + materializer) and `glm-v53-flash-fp8-tp4-switchless/`
 for the pinned-checkout + site-mods variant.
 
 Non-negotiables for any new lane:
@@ -84,7 +84,8 @@ Non-negotiables for any new lane:
 ### 3. Name it
 
 `<model>-<distinguisher>` where the distinguisher is the author, quant, or defining
-feature (existing pattern: `glm-v53-flash-4x-noswitch`, `...-nvfp4-4x-noswitch`).
+feature (existing pattern: `glm-v53-flash-fp8-tp4-switchless`,
+`glm-v53-flash-nvfp4-tp4-switchless`).
 Check for collisions; record alternatives in research.md.
 
 ### 4. Branch, then create the directory

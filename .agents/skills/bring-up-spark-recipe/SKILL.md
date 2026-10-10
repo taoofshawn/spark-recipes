@@ -48,7 +48,7 @@ recipes (`adopt-recipe`). It never merges PRs.
    (`glm53_fp8_dflash_tp4` vs `glm53-nvfp4-r*`), node repo branch/log/status. One lane
    at a time — tear down the other lane first.
 2. **Preflight (non-negotiable):** `bash
-   glm-v53-flash-4x-noswitch/noswitch-prep/scripts/verify-fabric-p2.sh` — must print
+   glm-v53-flash-fp8-tp4-switchless/noswitch-prep/scripts/verify-fabric-p2.sh` — must print
    `ALL CHECKS PASS` (netplan vs generated, 16 interface addresses, two-view ping mesh,
    both NCCL SHAs). Failure text names the fix; resolve before booting anything.
 3. **Stale-mirror check** (the gotcha that costs boots): the FP8 recipe's
@@ -59,8 +59,8 @@ recipes (`adopt-recipe`). It never merges PRs.
    THE HEAD NODE (tp4ctl reads the DEPLOYED `~/.local/tp4/cluster.env`; the
    workstation run hits the Windows python3 stub).
 4. **Tear down + bring up** per `LANE-SWITCHING.md` for the target direction:
-   - FP8: `tp4ctl up` from `glm-v53-flash-4x-noswitch/upstream` on the head.
-   - NVFP4: `./start.sh serve` from `glm-v53-flash-nvfp4-4x-noswitch/upstream`
+   - FP8: `tp4ctl up` from `glm-v53-flash-fp8-tp4-switchless/upstream` on the head.
+   - NVFP4: `./start.sh serve` from `glm-v53-flash-nvfp4-tp4-switchless/upstream`
      (worker-first 3,2,1,0 is upstream's job). A relaunch after `stop` needs
      `docker rm` of the stopped `glm53-nvfp4-r*` first — preflight refuses existing
      names.

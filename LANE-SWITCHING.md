@@ -4,14 +4,14 @@ The one doc a fresh agent needs to switch between the two serving lanes without 
 both recipes end-to-end. Deep context lives where noted; this file is the procedure.
 
 **State this was verified against:** 2026-10-10, both lanes boot and switch cleanly on the
-four-PF NCCL contract (T1/T2 records: `glm-v53-flash-4x-noswitch/research.md` §5 and
-`glm-v53-flash-nvfp4-4x-noswitch/research.md` Changelog).
+four-PF NCCL contract (T1/T2 records: `glm-v53-flash-fp8-tp4-switchless/research.md` §5 and
+`glm-v53-flash-nvfp4-tp4-switchless/research.md` Changelog).
 
 ## The two lanes
 
 | | FP8 lane | NVFP4 lane |
 |---|---|---|
-| recipe dir | `glm-v53-flash-4x-noswitch/` | `glm-v53-flash-nvfp4-4x-noswitch/` |
+| recipe dir | `glm-v53-flash-fp8-tp4-switchless/` | `glm-v53-flash-nvfp4-tp4-switchless/` |
 | weights | zai FP8 checkpoint (lossless) + lossless8-style conversion stack (E36) | stock `nvidia/GLM-5.3-Flash-NVFP4` @ `09b04e5e`, zero weight mod |
 | context / pool | 262K / ~1.19M-token KV | 1M / ~3.25M-token KV (20 GiB/rank pin) |
 | control | `tp4ctl` (`up`/`down`/`restart`/`health`) on the head | `./start.sh` (`serve`/`stop`/`status`/`logs`) on the head |
@@ -31,7 +31,7 @@ Shared facts that make switching simple:
 ## Preflight — run before EVERY switch (cheap, read-only, safe while serving)
 
 ```bash
-bash glm-v53-flash-4x-noswitch/noswitch-prep/scripts/verify-fabric-p2.sh
+bash glm-v53-flash-fp8-tp4-switchless/noswitch-prep/scripts/verify-fabric-p2.sh
 ```
 
 Must print `ALL CHECKS PASS`. It gates on the netplan generator, compares live
@@ -43,7 +43,7 @@ Failures: resolve before booting anything (the failure text names the fix).
 
 ```bash
 # 1. Maintenance window. On the HEAD node, NVFP4 upstream:
-cd ~/code/spark-recipes/glm-v53-flash-nvfp4-4x-noswitch/upstream && ./start.sh stop
+cd ~/code/spark-recipes/glm-v53-flash-nvfp4-tp4-switchless/upstream && ./start.sh stop
 #    (stops + PRESERVES containers; confirm glm53-nvfp4-r* gone/stopped on all 4 —
 #     `docker rm` the stopped ones if you plan to relaunch NVFP4 later, its preflight
 #     refuses existing names)
@@ -55,10 +55,10 @@ cd ~/code/spark-recipes && git pull
 
 # 4. ONLY if a repo config change is pending (cluster.env etc.): from the HEAD node
 #    (NOT the workstation — its Windows python3 stub breaks deploy):
-cd ~/code/spark-recipes/glm-v53-flash-4x-noswitch/upstream && bash scripts/deploy.sh
+cd ~/code/spark-recipes/glm-v53-flash-fp8-tp4-switchless/upstream && bash scripts/deploy.sh
 
 # 5. Head node:
-cd ~/code/spark-recipes/glm-v53-flash-4x-noswitch/upstream && tp4ctl up
+cd ~/code/spark-recipes/glm-v53-flash-fp8-tp4-switchless/upstream && tp4ctl up
 #    (upstream handles worker-first ordering)
 ```
 
@@ -66,13 +66,13 @@ cd ~/code/spark-recipes/glm-v53-flash-4x-noswitch/upstream && tp4ctl up
 
 ```bash
 # 1. Head node, FP8 upstream:
-cd ~/code/spark-recipes/glm-v53-flash-4x-noswitch/upstream && tp4ctl down
+cd ~/code/spark-recipes/glm-v53-flash-fp8-tp4-switchless/upstream && tp4ctl down
 #    confirm glm53_fp8_dflash_tp4 gone on all 4
 
 # 2. Preflight — ALL PASS.  3. git pull on all 4 nodes (step 3 above).
 
 # 4. Head node, NVFP4 upstream (worker-first 3,2,1,0 is upstream's job):
-cd ~/code/spark-recipes/glm-v53-flash-nvfp4-4x-noswitch/upstream && ./start.sh serve
+cd ~/code/spark-recipes/glm-v53-flash-nvfp4-tp4-switchless/upstream && ./start.sh serve
 ```
 
 ## Verify after either switch
@@ -88,11 +88,19 @@ cd ~/code/spark-recipes/glm-v53-flash-nvfp4-4x-noswitch/upstream && ./start.sh s
 
 ## Known gotchas (each one cost a boot)
 
+- **Directory rename (2026-10-10):** the recipes were renamed
+  (`glm-v53-flash-4x-noswitch` → `glm-v53-flash-fp8-tp4-switchless`,
+  `glm-v53-flash-nvfp4-4x-noswitch` → `glm-v53-flash-nvfp4-tp4-switchless`). The first
+  `git pull` on the nodes AFTER that commit lands performs the rename on disk — do it
+  with the target lane DOWN (running containers bind-mount paths under the recipe
+  dirs; a live rename pulls the mount out from under the engine). Practical order:
+  tear down → pull (dirs rename) → preflight → bring up via the NEW paths.
+
 - **Stale mirrors on the nodes**: the FP8 recipe's `upstream/cluster.env` AND
   `upstream/scripts/node/etc/<node>/*.yaml` are gitignored derived files — `git pull`
   does NOT refresh them. After any repo config change: `cp
-  glm-v53-flash-4x-noswitch/noswitch-prep/cluster.env
-  glm-v53-flash-4x-noswitch/upstream/cluster.env` + `render-netplan.sh --write &&
+  glm-v53-flash-fp8-tp4-switchless/noswitch-prep/cluster.env
+  glm-v53-flash-fp8-tp4-switchless/upstream/cluster.env` + `render-netplan.sh --write &&
   --check` on the head, then `deploy.sh` (tp4ctl reads the DEPLOYED
   `~/.local/tp4/cluster.env`).
 - **Never re-deploy an old 2-address netplan** — it strips the P2 addresses and breaks
@@ -105,9 +113,9 @@ cd ~/code/spark-recipes/glm-v53-flash-nvfp4-4x-noswitch/upstream && ./start.sh s
 
 ## Pointers for depth
 
-- FP8 lane ops/invariants: `glm-v53-flash-4x-noswitch/README.md`; history + T1 record:
+- FP8 lane ops/invariants: `glm-v53-flash-fp8-tp4-switchless/README.md`; history + T1 record:
   its `research.md` §5.
-- NVFP4 lane ops/invariants: `glm-v53-flash-nvfp4-4x-noswitch/README.md`; history +
+- NVFP4 lane ops/invariants: `glm-v53-flash-nvfp4-tp4-switchless/README.md`; history +
   Phase E/T2/T3 records: its `research.md`.
-- NCCL four-PF build reproducibility: `glm-v53-flash-nvfp4-4x-noswitch/site/nccl-4pf/`.
+- NCCL four-PF build reproducibility: `glm-v53-flash-nvfp4-tp4-switchless/site/nccl-4pf/`.
 - Cluster topology (nodes, ring, addressing): repo `AGENTS.md`.

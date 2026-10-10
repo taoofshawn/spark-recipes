@@ -42,6 +42,15 @@ Full details and the update procedure: `../research.md` §2.
    the P2 addresses and break the NVFP4 lane. Re-apply on update: the flag plumbing is
    the three `FABRIC_P2_VIEWS` blocks (doc header, validation, `render()` emission
    order + address rule); see `../noswitch-prep/cluster.env` `FABRIC_P2_VIEWS` comment.
+7. `scripts/nccl_gid_check.py` — SITE FIX (shawndo, 2026-10-10, found by the gated
+   T1 four-PF bring-up): the addressed-netdev allowlist was hard-coded to the FIRST TWO
+   `FABRIC_IFACES` entries (the upstream 2-PF contract), so with the four-PF HCA list
+   the P2-view HCAs could never pass (`no usable automatic IPv4-mapped RoCE v2 fabric
+   GID` at the launcher preflight — every launcher boot attempt failed before Docker).
+   Fix: the allowlist is the FIRST `len(hcas)` entries — N=2 reproduces upstream
+   behavior byte-for-byte, N=4 admits the P2 views. 2-PF control re-verified PASS on
+   spark-0f0b after the fix. Re-apply on update: the one slice + comment block in
+   `validate_selection`.
 
 ## Refresh procedure
 

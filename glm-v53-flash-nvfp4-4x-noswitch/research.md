@@ -112,6 +112,72 @@ measured at bring-up, not assumed.
 
 ## Changelog
 
+- **2026-10-10 — PHASE E COMPLETE: serving on the full four-PF NCCL contract.** The
+  staged 2-PF transport (previous entry) is replaced by the real four-PF build; both
+  staged-transport site mods to `upstream/scripts/transport.sh` are REVERTED — the
+  switchless render's functional lines now match upstream `770d115` byte-for-byte
+  (`NCCL_SWITCHLESS_RING_ONLY=1`, `NCCL_IB_MERGE_NICS=0`, no `SKIP_TREE_CONNECT`).
+  - **NCCL build (site/nccl-4pf/, fully reproducible via `build-4pf.sh`):**
+    othexmr/switchless-nccl @ `94c2669` patch stack on NCCL `v2.30.7-1` @ `73cf1122…`
+    (base tree `3e7de6f9…`), patch order skip-tree-pat → advertise-all-listener-gids →
+    hardened-switchless → dual-pf.site, final patched tree `cf677895…`. The ONLY
+    site-modified patch is `nccl-2.30.7-dual-pf.site.patch` (SHA `334664f9…`): a one-line
+    `tp4ValidateListener` GID-range change `10.100.224–227` → `10.10.1–4` so the validator
+    accepts this ring's addressing (contract otherwise unchanged: 2 cable subnets/node ×
+    2 PCI roots, full cross product, `gids[15] ∉ {0,255}`). Built on spark-6d14 in docker
+    (`nvidia/cuda:13.0.2-devel-ubuntu24.04`, sm_121): **lib SHA256 `8de68def…a41a87`,
+    61,426,528 bytes, 165 symbols**. Identity check (`check_switchless_nccl.py`) PASS ×4
+    after staging to `~/.local/lib/nccl-patched-4pf/` on all 4 nodes (real file
+    `libnccl.so.2.30.7` + `libnccl.so.2` symlink).
+  - **Separate staging directory (`nccl-patched-4pf`, NOT the FP8 recipe's
+    `nccl-patched`):** the four-PF lib's hardened switchless path triggers on
+    `NCCL_SWITCHLESS_RING_ONLY=1` alone and hard-rejects `NCCL_IB_MERGE_NICS != 0`; the
+    FP8 launcher sets only `SKIP_TREE_CONNECT=1` with default merged vdevs. Swapping in
+    place would break the FP8 lane's next boot. The FP8 dir keeps `afe5f486…` untouched;
+    rollback for this lane = one-line `NCCL_HOST_DIR` revert + re-apply the staged
+    transport mods (documented in the transport.sh comment).
+  - **Netplan (host-side, mirrored as site/netplan/<node>/40-cx7.yaml):** every cable's
+    /24 gains one address per node on the second PCIe view, last octet = f-port octet + 2
+    — additive over the FP8 plan (f-port addresses unchanged), so the FP8 lane's 2-PF
+    addressing keeps working. Map: L1 rank0 f=.1/P2=.3, rank1 f=.2/P2=.4; L2 rank1
+    f=.2/P2=.4, rank2 f=.3/P2=.5; L3 rank2 f=.3/P2=.5, rank3 f=.4/P2=.6; L4 rank3
+    f=.4/P2=.6, rank0 f=.1/P2=.3. Deployed 4/4 (backup `/etc/netplan/40-cx7.yaml.bak-phaseE`
+    per node), verified 16/16 pings across both PCIe views per cable. **FP8-lane hazard:
+    never re-deploy the FP8 recipe's 2-address netplan — it strips the P2 addresses and
+    breaks this lane (noted in the FP8 recipe's research.md).**
+  - **Boot verdict:** preflight identity PASS ×4 → `Connected all rings, use ring PXN 0
+    GDR 0` on every rank → RouteFinal diagnostics show **all four PFs carried QPs on
+    every rank** (`rocep1s0f0/f1` + `roceP2p1s0f0/f1`), P2-view GIDs (10.10.x.3/.4) in
+    actual QP routing, subnet-aware routing overriding with PCI-root preservation
+    (`pci0000:00` / `pci0002:00`). Engine init 51.7 s warm (JIT caches hot). `/health`
+    200, `glm-5.3-flash`, max_model_len 1,048,576.
+  - **Gates:** corruption probe 0 U+FFFD (emoji + 海洋 intact); forced
+    `tool_choice:required` → clean `get_weather({"city": "Tokyo"})`; `prefix_scan.py`
+    **PASS** (tool's own score verdict, exit 0: drift 0.1367 cold-cold / 0.0392 cold-warm
+    vs 0.205 limit, misquotes 1 cold / 0 warm, scan-incorrect 6/6+6/6 — the known watch
+    item, baseline was 7/7; degenerate 0, errors 0, warm hit 96,768 tokens, sizing
+    P≈97.4K mod 2304 in-window).
+  - **accept_probe c1 (k=7 family):** prose 2.22 / 50.0 ms-step / **44.7 tok/s** (+2.1%);
+    code 4.36 / 57.6 / **75.8** (−0.7%); json 5.76 / 59.6 / **96.3** (−0.8%) — flat, as
+    expected: c1 is latency-bound and the extra PFs add aggregate bandwidth, not
+    single-stream RTT.
+  - **conc_bench full ladder (wall-aggregate tok/s, U+FFFD 0 everywhere):** c1
+    41.9/86.9/92.5 · c2 62.8/108.3/130.9 · c4 97.9/157.4/190.3 · c8 139.1/206.4/
+    **252.0** · c16 192.6/283.2/**322.3**. vs the 2-PF baseline: json c8 **+26%**,
+    json c16 **+15%**, everything else −1% to +6%. **The baseline's json TTFT watch item
+    (~6.5 s at c8/c16) is RESOLVED: 0.48/0.58 s** (prefill-phase collectives spread over
+    the four PFs). Raw artifacts: `bench-results/20261010-phaseE-4pf/`.
+  - **Verdict:** the lane-defining c1 gap vs the switched fleet is UNCHANGED (latency-
+    bound); the 4-PF transport pays off at concurrency and prefill TTFT. The lane stays
+    on the zero-mod NVFP4 stack; the lossless8 fallback is not triggered. Numbers taken
+    ~50 min after boot, after prefix_scan + accept traffic (fully warm).
+  - **Watch item (new):** `glm-devselect: DEVSELECT_BUILD_FAILED` ×2 at boot (cuda graph
+    `capture_end` invalid argument, caught by the overlay; decode continues with the
+    dev-0 fallback; benches unaffected). Unknown whether it predates Phase E (staged-boot
+    containers were removed before logs could be compared) — check on the next reboot.
+  - Raw build/deploy trace: site patch GID line =
+    `gids[i][12]!=10 || gids[i][13]!=10 || gids[i][14]<1 || gids[i][14]>4`;
+    build log `/home/sdrew/nccl-4pf-build/build.log` on spark-6d14 (scratch dir, not repo).
 - **2026-10-10 — update-recipe pass vs tonyd2wild/GLM-5.3-Flash-NVFP4-1M-KV-4x-DGX-Spark.**
   Full review of his repo (README @ `96658cf0` 2026-09-30 tip, runs/2026-09-29-knapcio-stack +
   -effort-low, docs, issues #1–#12) plus a forum sweep (t382459 jnardiello switchless,

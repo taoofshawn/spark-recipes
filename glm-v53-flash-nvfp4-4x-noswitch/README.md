@@ -90,6 +90,10 @@ keep both); HF cache holds both checkpoints (nvidia `09b04e5e`, drafter `bf582e4
 
 ## Switching between the FP8 and NVFP4 lanes
 
+> **Runbook: [`../../LANE-SWITCHING.md`](../../LANE-SWITCHING.md)** — the one-doc
+> procedure (preflight, both directions, verification, gotchas). The notes below are
+> the lane-specific background.
+
 GPU contention rule: only one lane serves at a time. The lanes were built to coexist
 without renames — switching is teardown + branch checkout:
 

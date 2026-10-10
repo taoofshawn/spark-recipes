@@ -184,6 +184,38 @@ All of `noswitch-prep/` is site-owned, not upstream-owned:
 
 ## 5. Changelog
 
+- **2026-10-10 — Phase-E cross-lane adoption, prepared on the sibling branch (UNTESTED
+  here until the gated bring-up; do not treat as validated until then).** Three coupled
+  pieces, all landing in the same commit on `glm-v53-flash-nvfp4-4x-noswitch` (worktree
+  stays on the per-lane branch rule: the FP8 node checkout picks this up at the next
+  switch):
+  1. **Netplan generator fixed at the root (closes the re-deploy hazard).**
+     `render-netplan.sh` gained the opt-in `FABRIC_P2_VIEWS` flag (upstream VENDORED-AT
+     mod #6; default 0 = upstream behavior byte-identical); `cluster.env` sets it to 1.
+     The regenerated files now byte-match the live `/etc/netplan/40-cx7.yaml` on all four
+     nodes (verified live via sudo diff, and against the NVFP4 lane's
+     `site/netplan/<node>/` reference) — `render-netplan.sh --check` passes and the
+     render/deploy workflow is safe again. BEFORE this fix, re-deploying host config
+     would have stripped the P2 addresses and broken the NVFP4 lane (the warning note
+     below stays as history; the hazard is now closed, not just warned about).
+  2. **Cross-lane preflight: `noswitch-prep/scripts/verify-fabric-p2.sh`** (read-only,
+     safe while serving): render --check gate, live-netplan-vs-generated per node, all
+     fabric interfaces UP @ expected addresses, the 16-ping two-view mesh (P2 views
+     verified carrying traffic live, 16/16), and both NCCL staging SHAs (`afe5f486…`
+     legacy 2-PF, `8de68def…` four-PF). Run before any lane bring-up or switch.
+  3. **The four-PF NCCL contract adopted for THIS lane** (the NVFP4 Phase-E measured
+     profile: json aggregate +26%/+15% at c8/c16, prefill TTFT 6.5 s → 0.5 s; c1 flat).
+     One coupled edit in `cluster.env` (rollback documented at `NCCL_IB_HCA`):
+     `NCCL_IB_HCA` → all four PFs, `NCCL_DIR` → `~/.local/lib/nccl-patched-4pf`
+     (8de68def…, built+validated on this fabric by the NVFP4 Phase E), and an
+     `EXTRA_DOCKER_ENV` append of `NCCL_IB_MERGE_NICS=0` +
+     `NCCL_SWITCHLESS_RING_ONLY=1` (the four-PF build hard-rejects this launcher's
+     former merged-vdev default; the launcher's hardcoded `NCCL_SKIP_TREE_CONNECT=1`
+     stays — same othexmr patch stack). Expected payoff on this lane's measured pain:
+     prefill-phase collectives under concurrency (mean TTFT 18.9 s, inter-turn prefill
+     barriers) — NOT single-stream decode. GATED: the next FP8 boot must run the full
+     gate suite + a TTFT/throughput comparison vs this lane's current numbers, and the
+     lane switch both ways must be exercised, BEFORE this branch merges.
 - **2026-10-10 — cross-lane note (no action taken on this recipe): the host netplan now
   also carries the NVFP4 lane's Phase-E P2-view addresses.** The sibling recipe
   `glm-v53-flash-nvfp4-4x-noswitch` completed its four-PF NCCL upgrade (its research.md

@@ -96,12 +96,15 @@ without renames — switching is teardown + branch checkout:
 - **No proxy change either way:** both lanes serve `glm-5.3-flash` on `:8000` behind the
   model-name-proxy (`BACKEND_MODEL=glm-5.3-flash` matches both); `SPOOF_FROM` already
   lists it.
-- **No NCCL conflict:** the lanes use DIFFERENT NCCL builds — this lane
-  `~/.local/lib/nccl-patched-4pf/` (`8de68def…`, hardened four-PF), the FP8 stack
-  `~/.local/lib/nccl-patched/` (`afe5f486…`, 2-PF SparkRing). Keep both directories; the
-  per-lane `NCCL_HOST_DIR` in each launcher/env picks the right one (the four-PF lib
-  hard-rejects the FP8 launcher's merged-vdev config, and vice versa). The fabric netplan
-  (all 4 PCIe views addressed) serves both lanes — the FP8 one uses the f-port subset.
+- **One NCCL build now serves both lanes (FP8 4-PF adoption, 2026-10-10):** this lane
+  `~/.local/lib/nccl-patched-4pf/` (`8de68def…`, hardened four-PF) — the FP8 stack's
+  `cluster.env` was converted to the same four-PF contract on this branch (its rollback to
+  the legacy 2-PF build `~/.local/lib/nccl-patched/` (`afe5f486…`) is documented at
+  `NCCL_IB_HCA` in its `cluster.env`, coupled: HCA + NCCL_DIR + EXTRA_DOCKER_ENV append).
+  Keep both dirs staged; the fabric netplan (all 4 PCIe views addressed) serves both lanes.
+  Preflight before any switch:
+  `bash glm-v53-flash-4x-noswitch/noswitch-prep/scripts/verify-fabric-p2.sh` (read-only,
+  safe while serving).
 - **FP8 → NVFP4:** `tp4ctl down` in the FP8 recipe (`glm-v53-flash-4x-noswitch/upstream`)
   on the head; confirm `glm53_fp8_dflash_tp4` is gone on all 4; on all 4 nodes
   `cd ~/code/spark-recipes && git checkout glm-v53-flash-nvfp4-4x-noswitch && git pull`;

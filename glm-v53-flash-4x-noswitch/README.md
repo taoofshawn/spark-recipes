@@ -225,6 +225,24 @@ OOM (`NV_ERR_NO_MEMORY`), or a rank container exiting while others stay up.
 - **Never hand-edit generated files**: per-node netplan/iptables (`upstream/scripts/node/etc/*`,
   rendered by `render-netplan.sh`) and `~/.local/tp4/*` on the nodes (pushed by
   `deploy.sh`). Edit `upstream/cluster.env` (mirrored in `noswitch-prep/cluster.env`), then re-render/deploy.
+- **The fabric netplan is SHARED with the NVFP4 lane — and is now four-view.** Since the
+  NVFP4 lane's Phase E (2026-10-10), `/etc/netplan/40-cx7.yaml` on all four nodes addresses
+  BOTH PCIe views of every cable (f ports = the 2-PF subset this lane uses; P2 views =
+  f-octet + 2, for the NVFP4 lane's four-PF NCCL). `FABRIC_P2_VIEWS=1` in `cluster.env`
+  makes the generator emit exactly that, so the render/deploy workflow above is safe again.
+  Do NOT revert `FABRIC_P2_VIEWS` or re-deploy a 2-address netplan — it strips the P2
+  addresses and breaks the NVFP4 lane (this lane keeps booting, so the breakage only
+  surfaces at the next NVFP4 switch). **NCCL builds:** with the Phase-E cross-lane adoption
+  (2026-10-10) BOTH lanes run the same four-PF build `~/.local/lib/nccl-patched-4pf`
+  (`8de68def…`) — this lane's `NCCL_DIR` now points there, and its merged-vdev default is
+  replaced by the contract env (`NCCL_IB_MERGE_NICS=0`, `NCCL_SWITCHLESS_RING_ONLY=1`,
+  four-PF `NCCL_IB_HCA` — see `cluster.env`). The legacy 2-PF SparkRing build
+  `~/.local/lib/nccl-patched` (`afe5f486…`) stays staged as THIS lane's rollback artifact
+  (the coupled rollback is documented at `NCCL_IB_HCA` in `cluster.env`). Keep both dirs;
+  never merge or swap them. **Preflight both lanes' fabric state before any bring-up or
+  switch:** `bash glm-v53-flash-4x-noswitch/noswitch-prep/scripts/verify-fabric-p2.sh`
+  (read-only, safe while serving — checks live netplan vs generated, all 16 interface
+  addresses, the 16-ping two-view mesh, and both NCCL staging SHAs).
 - **Measured knobs are not shared tuning knobs**: `GPU_MEM_UTIL=0.85`, the 16 GiB KV
   pool (`--kv-cache-memory-bytes`), `MAX_NUM_SEQS=6`, KV dtype, backend flags, spec
   schedule (k=7/3). Don't tune them casually; every one has a measured baseline and a

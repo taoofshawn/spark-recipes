@@ -1,259 +1,102 @@
 ---
 name: bring-up-spark-recipe
 description: >-
-  Use when bringing a recipe in the spark-recipes repo up on the 2-node DGX Spark cluster — starting/staging a recipe directory, tearing down the currently-serving model, rebuilding the patched image, launching worker-then-head, and confirming health. Triggers: "bring up <recipe>", "start <recipe> on the sparks", "deploy the glm/qwen/deepseek recipe", "latest recipe not running", "fresh head/worker after a model change", DFlash2/DFlash enablement.
+  Use when bringing a recipe in the spark-recipes repo up on the 4-node DGX Spark
+  switchless cluster — tearing down the currently-serving lane, running the fabric
+  preflight, launching the FP8 (tp4ctl) or NVFP4 (start.sh) lane worker-first, and
+  confirming health. Triggers: "bring up <recipe>", "start <recipe> on the sparks",
+  "deploy the glm fp8/nvfp4 recipe", "latest recipe not running", "switch to the
+  other lane", "fresh boot after a change".
 ---
 
-# Bring Up a Spark Recipe
+# Bring Up a Spark Recipe (4-node switchless ring)
 
-Deploy a `spark-recipes` recipe onto the fixed 2-node DGX Spark (GB10) cluster and
-leave it serving healthily on port 8000. This is the standing operational loop for
-this repo; it encodes the cluster's hard-won constraints so a fresh agent can go
-from "repo checkout" to "model serving" without re-discovering them.
+Deploy one of the two active GLM-5.3-Flash lanes onto the 4-node switchless DGX Spark
+(GB10) cluster and leave it serving healthily on port 8000. All 2-node recipes are
+archived (`.archived/`) — do not use their flows.
 
-Two fixed nodes (address by DNS hostnames, NEVER the `192.168.0.x` RoCE IPs — those
-time out from the management network):
+**The standing runbook is [`LANE-SWITCHING.md`](../../../LANE-SWITCHING.md) at the repo
+root** — the two-lane switch procedure, preflight, verification, and gotchas. This skill
+frames it; that file executes it. Read it first, every time.
 
-| role | host | RoCE IP |
-|---|---|---|
-| head / leader / rank 0 (API server) | `spark-0f0b.shawndo.intra` | `192.168.0.170` |
-| worker / follower / rank 1 (headless) | `spark-6d14.shawndo.intra` | `192.168.0.171` |
+## The cluster (fixed, do not re-derive)
 
-The recipe lives on BOTH nodes at `~/code/spark-recipes/<recipe>/` (a git checkout
-of `taoofshawn/spark-recipes`).
+Four nodes, switchless QSFP56 ring (rank0→1→2→3→0), SSH via DNS hostnames from the
+workstation, never fabric IPs:
+
+| rank | host | mgmt IP (`enP7s7`) | role |
+|---|---|---|---|
+| 0 | `spark-0f0b.shawndo.intra` | 10.69.42.170 | head — API server :8000 |
+| 1 | `spark-6d14.shawndo.intra` | 10.69.42.171 | worker |
+| 2 | `spark-6d90.shawndo.intra` | 10.69.42.172 | worker |
+| 3 | `spark-6d24.shawndo.intra` | 10.69.42.173 | worker |
+
+Transport: shared four-PF NCCL (`~/.local/lib/nccl-patched-4pf`, SHA `8de68def…`) over
+the shared 4-view netplan; legacy 2-PF lib (`nccl-patched`, `afe5f486…`) is the FP8
+rollback artifact. Both lanes live on ONE branch (`glm-v53-flash-nvfp4-4x-noswitch`) —
+no branch checkout at switch time, `git pull` on the nodes is enough.
+
 ## Scope boundary
 
-This skill ONLY brings a recipe up and keeps it serving — it does NOT research,
-review, or update recipe source code, and it does NOT create branches, commit, or
-push changes to the repo. Updating a recipe against its upstream sources is the
-`update-recipe` skill's job; run that first if the recipe needs refreshing, then
-bring the refreshed recipe up here.
+This skill brings a lane up and keeps it serving. It does NOT research/update recipe
+sources (`update-recipe`), benchmark an update (`bench-recipe-update`), or create new
+recipes (`adopt-recipe`). It never merges PRs.
 
-## When to use / not
+## The loop
 
-Use for any docker-compose recipe: `glm-v53-flash`, `deepseek-v4-flash-aiden`,
-`deepseek-v4-flash-tonyd2wild`, `mimo-v25-dflash-tonyd2wild`. The one sparkrun
-recipe (`deepseek-v4-flash-aiden-sparkrun`) is managed with `sparkrun run`,
-not this flow — but the teardown/health steps still apply.
+1. **Assess state** (all 4 nodes): `docker ps` for the other lane's containers
+   (`glm53_fp8_dflash_tp4` vs `glm53-nvfp4-r*`), node repo branch/log/status. One lane
+   at a time — tear down the other lane first.
+2. **Preflight (non-negotiable):** `bash
+   glm-v53-flash-4x-noswitch/noswitch-prep/scripts/verify-fabric-p2.sh` — must print
+   `ALL CHECKS PASS` (netplan vs generated, 16 interface addresses, two-view ping mesh,
+   both NCCL SHAs). Failure text names the fix; resolve before booting anything.
+3. **Stale-mirror check** (the gotcha that costs boots): the FP8 recipe's
+   `upstream/cluster.env` and `upstream/scripts/node/etc/<node>/*.yaml` are gitignored
+   derived files — `git pull` does NOT refresh them. After any repo config change:
+   copy `noswitch-prep/cluster.env` → `upstream/cluster.env` on all nodes, re-run
+   `render-netplan.sh --write && --check` on the head, then `scripts/deploy.sh` FROM
+   THE HEAD NODE (tp4ctl reads the DEPLOYED `~/.local/tp4/cluster.env`; the
+   workstation run hits the Windows python3 stub).
+4. **Tear down + bring up** per `LANE-SWITCHING.md` for the target direction:
+   - FP8: `tp4ctl up` from `glm-v53-flash-4x-noswitch/upstream` on the head.
+   - NVFP4: `./start.sh serve` from `glm-v53-flash-nvfp4-4x-noswitch/upstream`
+     (worker-first 3,2,1,0 is upstream's job). A relaunch after `stop` needs
+     `docker rm` of the stopped `glm53-nvfp4-r*` first — preflight refuses existing
+     names.
+   - Teardown always cycles ALL ranks together — never one rank.
+5. **Verify health**: `/health` 200 (not `/v1/models` — it returns 200 with a dead
+   engine), `/v1/models` shows `glm-5.3-flash` (NVFP4 max_model_len 1,048,576; FP8
+   262,144), boot log per rank shows `Connected all rings` + RouteFinal with ALL FOUR
+   PFs (`rocep1s0f0/f1` + `roceP2p1s0f0/f1`). Any NCCL WARN = stop, capture
+   `docker logs` BEFORE any `docker rm -f`.
+6. **Gates** (per lane, see the recipe README): corruption probe (0 U+FFFD, emoji +
+   CJK intact), forced tool call; NVFP4 additionally `bench/prefix_scan.py`
+   (`--base` WITHOUT `/v1`, `--model glm-5.3-flash`), `accept_probe`, `conc_bench`.
+7. **Record** the bring-up in the lane's `research.md` changelog (dated entry: boot
+   markers, gate results, gotchas hit).
 
-## Core principle
+## Hard rules
 
-**Worker (rank 1) starts first; head (rank 0) ~25-30 s later.** The multi-node TCP
-store on `master_addr:25000` must be up on the head's port before the follower
-connects; wrong order → `DistStoreError: 1/2 clients` / `Connection reset by peer`.
-Always `docker compose down` on BOTH nodes between relaunches (stale-head
-rendezvous otherwise hangs the head at "Init torch distributed begin").
+- **PR convention:** recipe changes flow topic-branch → PR → main. Open the PR but do
+  NOT merge it unless the user explicitly asked in that session.
+- **Never edit files on the nodes over SSH** (no sed/scp/heredocs on repo files). The
+  sanctioned node-side steps are exactly the derived-file mirrors named above.
+- **Never bench right after boot** — ~30 min warm-up first (cold JIT ~30% slow).
+- Invariants are per-image and NOT transferable between lanes: KV pins, max_model_len,
+  max_num_seqs, KV dtype, backend flags, scheduler classes. Don't "tidy" env vars.
+- Warm-boot tip: relaunching against the same overlay root keeps JIT/TRITON caches
+  (~3–4 min to /health vs ~7 cold). A fresh overlay should copy the old overlay's
+  `cache/` first.
 
-## The loop (docker-compose recipes)
-
-### 1. Assess current state (both nodes, parallel)
-
-```bash
-ssh spark-0f0b.shawndo.intra 'hostname; docker ps -a --format "{{.Names}}\t{{.Status}}\t{{.Image}}"; cd ~/code/spark-recipes && git rev-parse --abbrev-ref HEAD && git log --oneline -3 && git status --short'
-ssh spark-6d14.shawndo.intra 'same...'
-```
-
-Note: the spark `git` branches are independent of the workstation repo. The node may
-be on any branch (`main`, a recipe branch, a stale branch). If the recipe you want
-isn't checked out, `git checkout <recipe-branch> && git pull origin <recipe-branch>`.
-
-**GPU contention rule:** every vLLM recipe uses all reserved GPUs. Only one recipe
-serves at a time. If any other model container is Up (e.g. `qwen38fn-vllm`), tear it
-down.
-
-### 2. Tear down the running model + stale container (both nodes)
-
-```bash
-ssh spark-0f0b.shawndo.intra 'docker stop <other-container> 2>/dev/null; docker rm -f <other-container> 2>/dev/null; docker rm -f <recipe-container> 2>/dev/null; cd ~/code/spark-recipes && git checkout <recipe-branch> && git pull origin <recipe-branch>'
-ssh spark-6d14.shawndo.intra 'same'
-```
-
-### 3. Verify the model checkpoint(s) are cached (offline serving)
-
-Each recipe's `.env`/compose names the HF models + pinned revisions it needs on BOTH
-nodes. Check the HF cache dirs exist and are non-empty:
-
-```bash
-du -sh ~/.cache/huggingface/hub/models--<owner>--<model>
-ls ~/.cache/huggingface/hub/models--<owner>--<model>/snapshots/
-```
-
-If a drafter/aux checkpoint is missing (e.g. `incoai/GLM-5.3-Flash-DFlash2`), download
-it on BOTH nodes with the local `hf` CLI (`~/.local/bin/hf`):
-`~/.local/bin/hf download <owner>/<model> --revision <rev>`.
-
-BLOCK if the checkpoint is absent — serving is offline; it will not download at
-runtime. State exactly which revision is missing and that it must be cached on both nodes.
-
-### 3b. Verify the model-name proxy matches the backend (leader only)
-
-Every recipe serves on :8000; clients talk to the `model-name-proxy` on :4000
-with model `spark-llm` (see `model-name-proxy/README.md`). The proxy rewrites
-`"model"` in request bodies to `BACKEND_MODEL` — if it doesn't match the recipe
-you just brought up, chat requests fail with vLLM's model-not-found error while
-`/health` and `/v1/models` still return 200.
-
-```bash
-# The recipe's real served name:
-grep SERVED_MODEL_NAME ~/code/spark-recipes/<recipe>/.env   # or its compose default
-
-# What the proxy currently targets:
-ssh spark-0f0b.shawndo.intra 'grep ^BACKEND_MODEL ~/code/spark-recipes/model-name-proxy/.env'
-
-# Mismatch? Update it via the repo and restart (spoofed client name unchanged):
-#   1) Edit model-name-proxy/.env BACKEND_MODEL on the WORKSTATION repo.
-#   2) Land it: topic branch -> PR -> main (branch protection). Open the PR,
-#      do NOT merge it — merging is the user's call unless explicitly asked.
-#   3) Pull on the leader, then recreate the proxy:
-ssh spark-0f0b.shawndo.intra 'cd ~/code/spark-recipes && git pull origin main && cd model-name-proxy && docker compose --env-file .env up -d'
-
-# End-to-end check through the proxy (leader or from eve):
-curl -s http://spark.shawndo.intra:4000/v1/models | jq -r .data[].id   # -> spark-llm
-curl -s http://spark.shawndo.intra:4000/v1/chat/completions -H 'Content-Type: application/json' \
-  -d '{"model":"spark-llm","messages":[{"role":"user","content":"Say hi in one word"}],"max_tokens":5}' \
-  | jq -r '.model, .choices[0].message.content'
-# In mode A (SPOOF_RESPONSES=0) .model shows the REAL backend name — that is the
-# definitive "which model is actually serving" check. Mode B hides it; the chat
-# reply itself (vs 404 model-not-found) proves BACKEND_MODEL matched.
-```
-
-### 4. Set the target config in the recipe's `.env`
-
-Each recipe enables its flagship features via `.env` variables with documented
-defaults. Read the recipe README + `.env` to see the real knobs. For
-`glm-v53-flash`, enabling DFlash2 (the latest-commit feature) means:
-
-```
-DFLASH2=1
-SPEC_TOKENS=7        # DFlash2 block size 8 - 1; the compose FATAL-errors otherwise
-```
-
-The compose `command` block hard-enforces these invariants and FATAL-exits with a
-clear message if violated — treat those messages as authoritative. Land the `.env`
-change via the repo (topic branch -> PR -> `main`, then `git pull origin main` on
-BOTH nodes) — never edit or `scp` files directly onto the nodes.
-**Open the PR but do NOT merge it** — post the PR URL and stop there. Merging to
-`main` is the user's call unless they explicitly asked you to merge in that session;
-continue with the pull-on-nodes step only after the user merges (or says to).
-
-### 5. Cache ritual (both nodes, before every launch)
-
-GB10 is unified memory; heavy weight-load IO grows the page cache and starves the
-NVRM allocator (it counts **MemFree, not MemAvailable**). Run on both nodes right
-before `up`:
-
-```bash
-sync; echo 3 | sudo -n tee /proc/sys/vm/drop_caches
-```
-
-Optional during the long load: `sudo ./tools/cache_flusher.sh &` (recipes ship it).
-
-### 6. Validate compose config (each node with its own .env.nodeN)
-
-```bash
-cd ~/code/spark-recipes/<recipe> && docker compose --env-file .env --env-file .env.node0 config -q   # head
-docker compose --env-file .env --env-file .env.node1 config -q                                        # worker
-```
-
-### 7. Build + launch — worker first, then head
-
-```bash
-# worker (rank 1): start FIRST
-ssh spark-6d14.shawndo.intra 'cd ~/code/spark-recipes/<recipe> && docker compose --env-file .env --env-file .env.node1 up -d --build'
-# ~30 s later: head (rank 0, API server)
-ssh spark-0f0b.shawndo.intra 'cd ~/code/spark-recipes/<recipe> && docker compose --env-file .env --env-file .env.node0 up -d --build'
-```
-
-`--build` rebuilds the patched image (the recipes bake SM121 kernel patches into a
-local image). The first build pulls the ~10 GB digest-pinned base image + re-pins
-NCCL/cutlass/FlashInfer, then runs the patch chain — minutes. Run each as a
-background SSH job and watch them complete.
-
-DO NOT launch both `up` simultaneously; the worker must begin its rendezvous listen
-first. If the worker fails FAST (container `Restarting` / a FATAL log), fix before
-starting the head — a dead worker makes the head hang waiting to rendezvous.
-
-### 8. Watch boot and verify health (don't stop until serving)
-
-Weight load + engine init + kernel warmup takes ~15-25 min (GLM: 195 GB weights).
-Poll the head log for the readiness sequence and confirm the model actually serves:
-
-```bash
-# Boot progress
-ssh spark-0f0b.shawndo.intra 'docker logs --tail 5 glm53-nvfp4'
-# Health (use /health — /v1/models returns 200 even with a dead engine)
-curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8000/health
-curl -s http://127.0.0.1:8000/v1/models
-```
-
-Health = `/health` returns 200 AND `/v1/models` shows the right `id` + `max_model_len`.
-Confirm the recipe's boot markers in the log (README lists them per recipe; e.g.
-GLM: `Using 'MARLIN' NvFp4 MoE backend`, `GPU KV cache size`, `Using Eagle3
-auxiliary layers from config`, the rejection-sampler warmup line,
-`Uvicorn running` / `Application startup complete`).
-
-### 9. Feature-specific validation for the flagged feature
-
-For DFlash2 (glm-v53-flash), confirm in the head log that the LATEST commits are
-active, not a stale build:
-
-- `Resolved architecture: DFlash2DraftModel` and
-  `speculative_config=SpeculativeConfig(method='dflash', ... num_spec_tokens=7)`
-  — proves the drafter is wired and SPEC_TOKENS=7 took.
-- `Using Eagle3 auxiliary layers from config: (6, 15, 25, 34, 43)` — the raw
-  `target_layer_ids [5,14,24,33,42]` after the runner's +1; proves aux capture glue.
-- `reserved 3.0 GiB memory for KV Cache` — the DFlash2 3 GiB pin (upstream withdrew
-  the 7 GiB ceiling); tells you the latest KV-pin commit is running.
-- `Warming up spec-decode rejection sampler kernels (vocab=154880, num_spec=7, ...)`.
-
-Then measure acceptance (broken aux capture shows as acceptance pinned near 1.0 /
-position-0 under ~50%; healthy is position-0 acceptance ~0.6-0.8, per-position
-decaying gently):
-- Read `vllm:spec_decode_num_draft_tokens_total` + `...accepted_tokens_total` and
-  `..._per_pos_total ` from `/metrics` before and after a warm generation, and
-  compute the deltas. Skip the first inference (it JIT-compiles drafter kernels).
-- `http://127.0.0.1:8000/metrics`.
-
-### 10. Run the recipe's load test
-
-Each recipe ships a tool-carrying load test (e.g. `python3 tools/load_test_glm.py`)
-that normal smokes can't substitute for — it's the only thing that catches silent
-FP4-corruption loops / degenerate token repetition under concurrency. Run it on the
-head, expect a `VERDICT: PASS`.
-
-## Troubleshooting quick reference
+## Failure modes (4x-specific)
 
 | symptom | cause / fix |
 |---|---|
-| `FATAL: <feature> requires SPEC_TOKENS=7` | compose invariant; set the var in `.env` (see step 4) |
-| build fails at a `py_compile` / patch step | stale or wrong path in `patches/Dockerfile`; the patch script edits `vllm/models/...` (singular) while an older check may reference `model_executor/models/...` — fix the path, rebuild |
-| `DistStoreError: 1/2 clients` / `Connection reset by peer` | start order — worker first; `down` BOTH nodes first |
-| worker dies 1-2 min after "Initial free memory … reserved N GiB" | KV slab too big — drop `KV_CACHE_MEMORY` (README: default is the only safe value; do NOT raise pins) |
-| boot dies right after weight load | MTP/drafter head trips UMA OOM without the KV pin — keep `KV_CACHE_MEMORY` set |
-| health 200 but `/v1/models` empty/wrong | engine still initializing or a different model; keep polling |
-| `No available shared memory broadcast block found in 60 seconds` | BENIGN — other rank compiling; resolves |
-| `min_p and logit_bits won't work with speculative decoding` | expected under DFlash/MTP |
-| `SymmMemCommunicator: Device capability 12.1 not supported` | expected on GB10; falls back to PYNCCL |
-| every reply is garbage / repeated-token loop | silent FP4 MoE corruption — check `--moe-backend marlin` is set (auto FLASHINFER_CUTLASS corrupts on SM121) |
-
-Recipe invariants are per-image and NOT transferable between recipes: start order,
-`gpu_memory_utilization`, `max_num_seqs`, KV dtype, backend names, `--moe-backend`.
-Never "tidy" env vars / flags that look duplicated — they are image-specific.
-
-## Common mistakes
-
-- Starting the head before the worker → rendezvous hang.
-- Bringing up both nodes but tearing down between relaunches is skipped → stale-head
-  hang at "Init torch distributed begin".
-- Confirming health with `/v1/models` alone → returns 200 with a dead engine; use
-  `/health`.
-- Forgetting to `--build` → serves the OLD baked image without the new patch layers.
-- Editing `upstream/` vendored files (tonyd2wild recipe) → recipe-level files in the
-  parent dir are the customization layer; `upstream/` is for reference.
-- Benchmarking right after boot → fresh boots are ~30% slower until warmup.
-
-## Supporting file
-
-`scripts/deploy_recipe.sh` — automates steps 2, 4-7 (teardown, config check, cache
-ritual, worker-first build+launch) for a recipe directory. Review it before first
-use; it hard-codes the two node hostnames and this repo's branch + `.env` conventions.
+| NCCL init hangs / QP RTR timeout | wrong transport wiring — run the preflight; check the boot env shows `MERGE_NICS=0`, `SWITCHLESS_RING_ONLY=1`, `EXTENDED_IPV4_GIDS=1`, 4-PF HCA list |
+| `wrong listener count` at ncclCommInitRank | four-PF lib without `NCCL_IB_EXTENDED_IPV4_GIDS=1` |
+| FP8 launcher: "no usable automatic IPv4-mapped RoCE v2 fabric GID" on a P2 HCA | stale deployed cluster.env/gid-checker — see step 3; the allowlist must be `len(hcas)` entries |
+| FP8 boots old config after a repo change | tp4ctl reads the DEPLOYED `~/.local/tp4/cluster.env` — run `deploy.sh` from the head |
+| container name/overlay-path refused at launch | stopped containers from a previous `stop` not removed |
+| `DEVSELECT_BUILD_FAILED` ×1–2 at NVFP4 boot (rank 0) | known watch item — overlay catches it, decode continues on fallback; record it, don't block the bring-up |
+| ring decode far below the switched fleet | expected on this ring; c1 is latency-bound — compare against the lane's own bench history, not other operators' numbers |

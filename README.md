@@ -1,8 +1,8 @@
 
-# collection of recipes and scripts for starting models on a 2-node dgx spark cluster
+# collection of recipes and scripts for starting models on a 4-node dgx spark switchless ring
 
-- stable models will be in main
-- in-progress recipes will be in branches
+- active lanes: `glm-v53-flash-4x-noswitch` (FP8) and `glm-v53-flash-nvfp4-4x-noswitch` (NVFP4) — switching: [LANE-SWITCHING.md](LANE-SWITCHING.md)
+- everything else is archived under `.archived/` (2-node era); in-progress work on branches
 
 # links:
 - [lane switching runbook](LANE-SWITCHING.md): switching the GLM-5.3-Flash FP8/NVFP4 lanes on the 4-node switchless ring (start here for that task)

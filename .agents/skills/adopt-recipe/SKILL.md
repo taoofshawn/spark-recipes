@@ -1,202 +1,122 @@
 ---
 name: adopt-recipe
 description: >-
-  Use when creating a brand-new recipe in the spark-recipes repo from an NVIDIA
-  forum thread and/or a GitHub repo — reviewing the linked sources and generating
-  a new docker-compose recipe directory on a fresh branch for review. Triggers:
-  "adopt <link>", "create a recipe for <model>", "new recipe from <thread/repo>",
-  "port <author>'s recipe", "add <model> to spark-recipes". Does NOT update an
-  existing recipe (update-recipe) and does NOT bring anything up on the sparks
-  (bring-up-spark-recipe).
+  Use when creating a brand-new recipe (a new serving lane) in the spark-recipes repo
+  from an NVIDIA forum thread and/or a GitHub repo — reviewing the linked sources and
+  generating a new recipe directory in the 4x-switchless house style on a fresh branch
+  for review. Triggers: "adopt <link>", "create a recipe for <model>", "new recipe
+  from <thread/repo>", "port <author>'s recipe", "add <model> to spark-recipes". Does
+  NOT update an existing recipe (update-recipe) and does NOT bring anything up on the
+  sparks (bring-up-spark-recipe).
 ---
 
-# Adopt a Recipe
+# Adopt a Recipe (4x-switchless house style)
 
-Create a NEW `spark-recipes` recipe from an external source — an NVIDIA DGX Spark
-forum thread and/or a GitHub repo: review the links, extract the serving stack,
-and generate a docker-compose recipe directory in this repo's house style, on a
-new branch, **left uncommitted** for the user to review.
+Create a NEW `spark-recipes` serving lane from an external source — an NVIDIA DGX
+Spark forum thread and/or a GitHub repo: review the links, extract the serving stack,
+and generate a recipe directory in this repo's 4x-switchless house style, on a new
+branch, left uncommitted for the user to review.
+
+All 2-node recipes are archived under `.archived/` — do NOT model new work on them
+(their docker-compose pair flows, `.env.node0/.env.node1`, and 192.168.0.x wiring are
+the old cluster). The live reference for house style is the pair of 4x recipes:
+`glm-v53-flash-4x-noswitch/` (FP8) and `glm-v53-flash-nvfp4-4x-noswitch/` (NVFP4).
 
 ## Scope boundary
 
-This skill CREATES a new recipe directory and stops there. It does NOT:
+This skill CREATES a new recipe directory and stops there. It does NOT update an
+existing recipe (`update-recipe`), bring anything up on the sparks
+(`bring-up-spark-recipe`), or commit/push/PR/merge. The deliverable is an untracked
+directory on a fresh topic branch.
 
-- update an existing recipe against its upstreams — that is `update-recipe`;
-- bring the recipe up on the sparks, build images, or verify a live endpoint —
-  that is `bring-up-spark-recipe`, run AFTER the recipe lands;
-- commit, push, open a PR, or merge anything. The deliverable is an untracked
-  directory on a fresh topic branch.
-
-If the target looks like a variant of a recipe this repo already carries (same
-model + same quant, just newer pins), CHECK WITH THE USER before doing anything
-else — they may still want a separate recipe for the same model (different
-quant, different lane, or some other difference). Only fall back to
-`update-recipe` if the user says so.
-
-## Inputs
-
-| input | required | fallback |
-|---|---|---|
-| forum thread URL or thread ID | one of the two links | proceed with what you have; note the gap in `research.md` |
-| GitHub repo URL | one of the two links | " |
-| recipe name | no | derive from the model + distinguisher (step 3) |
+If the target looks like a variant of an existing 4x recipe (same model, different
+quant/lane), CHECK WITH THE USER first — they may want it as an update instead.
 
 ## The loop
 
 ### 1. Review the target links (before writing anything)
 
-Mine the sources the way AGENTS.md's "review how to query each source" section
-prescribes. Forum = Discourse JSON API (no auth; browser-ish User-Agent;
-paginate `/t/<id>.json` until you have every post). GitHub = raw README/docs +
-the API for commits/PRs/issues. Extract — each item WITH a receipt (post
-number, file path, commit SHA, log line):
+Mine the sources the way AGENTS.md's "sources" section prescribes. Forum = Discourse
+JSON API (no auth; browser-ish User-Agent; paginate `/t/<id>.json`). GitHub = raw
+README/docs + the API for commits/PRs/issues. Extract — each item WITH a receipt
+(post number, file path, commit SHA, log line):
 
 | extract | feeds |
 |---|---|
-| model repo + pinned revision + quant method (+ license) | `MODEL` / `MODEL_REVISION`; whether a surgery/adaptation step is needed |
-| serving image + digest/tag + vLLM version | `IMAGE`; which flag set applies |
-| spec-decode method + k + drafter checkpoint + revision | the compose spec-config block |
-| KV dtype / pin / pool, GMU, MAX_SEQS, MNBT, block size | the tuning rows |
+| model repo + pinned revision + quant method (+ license) | weight materialization; HF-cache invariant |
+| serving image + how it is built (Dockerfile, digest pins) | the image build step |
+| spec-decode method + k + drafter checkpoint + revision (license!) | the spec config |
+| KV dtype / pin / pool, GPU mem util, max_num_seqs, batched tokens, block size | the tuning rows (per-image, from the source) |
 | MoE/attention backend + why | boot-fatal on the wrong value |
-| patches / overlays / mods the stack carries | what must be vendored into the recipe dir |
-| measured claims (tok/s, TEB, acceptance) with their protocol | receipts for `research.md`; never adopt "in theory" numbers |
+| transport requirements (NCCL contract, HCAs, patches) | compatibility with the shared four-PF contract |
+| patches / overlays / mods the stack carries | what must be vendored + documented |
+| measured claims with their protocol | receipts for research.md; never adopt "in theory" numbers |
 | boot markers + known failure modes | the README boot-marker section |
 
-Also note the author handle(s) — the naming convention leans on them.
+### 2. Decide the shape (4x-switchless house style)
 
-### 2. Decide the shape
+A 4x lane is: a vendored/pinned upstream checkout (`upstream/`, pristine, with a
+`VENDORED-AT.md` recording pin + every site modification and its re-apply recipe) +
+a `site/` layer OUTSIDE the vendored tree (cluster env, netplan, weight
+materialization, per-lance additions) + a serving profile derived from upstream's with
+documented strip lists + a `README.md` (ops only) + `research.md` (provenance +
+changelog). See `glm-v53-flash-nvfp4-4x-noswitch/` for the cleanest example (knapcio
+vendored @ a pin, site env + profile + materializer) and `glm-v53-flash-4x-noswitch/`
+for the pinned-checkout + site-mods variant.
 
-Docker-compose recipe (this skill's output): `.env` + `.env.node0`/`.env.node1`
-+ `docker-compose.yml` + `README.md` + `research.md`, exactly like
-`glm-v53-flash-intel-w4a16` and the archived compose recipes. Upstream runtime
-mods live inside the container: bind-mounted `:ro` overlays, or baked into a
-locally built image (the `dflash2-pmu128/` pattern). Do NOT produce a sparkrun
-recipe unless explicitly asked.
+Non-negotiables for any new lane:
+
+- **TP4 across all four nodes**, switchless ring transport, four-PF NCCL contract
+  (shared lib `~/.local/lib/nccl-patched-4pf`; a lane needing a different NCCL build
+  stages its own dir and documents why — never swap the shared one in place).
+- **Serving contract**: port 8000, `SERVED_MODEL_NAME` = lowercase-hyphenated model
+  name; the model-name proxy's `BACKEND_MODEL` must match (see `model-name-proxy/`).
+  If the name differs, the proxy change is part of the recipe.
+- **Offline serving**: weights + drafter materialized from the HF cache with pinned
+  revisions on ALL FOUR nodes (`site/materialize-weights.sh` pattern — hardlink
+  snapshots; HF snapshot symlinks break inside container mounts).
+- **`HF_HUB_OFFLINE=1`/`TRANSFORMERS_OFFLINE=1`** semantics: no runtime downloads.
+- **LANE-SWITCHING.md integration**: distinct container names + overlay roots from the
+  existing lanes; add the new lane's column to that runbook.
+- **GPU contention**: the new lane must document the teardown requirement for the
+  others.
 
 ### 3. Name it
 
-Name given → use it verbatim as the subdirectory (lowercase-hyphenate it if it
-isn't already). No name → follow the existing pattern
-`<model>-<distinguisher>`, where the distinguisher is the forum author's
-handle, the quant, or the defining feature:
-
-    glm-v53-flash-intel-w4a16      # model-quant
-    deepseek-v4-flash-tonyd2wild   # model-author
-    mimo-v25-dflash-tonyd2wild     # model-feature-author
-    qwen-3.8-flash-next-tonyd2wild # model-author
-
-Check the directory doesn't collide with an existing one (`glob` the repo root
-first). If two candidates are equally good, pick one, say so, and record the
-alternatives in `research.md`.
+`<model>-<distinguisher>` where the distinguisher is the author, quant, or defining
+feature (existing pattern: `glm-v53-flash-4x-noswitch`, `...-nvfp4-4x-noswitch`).
+Check for collisions; record alternatives in research.md.
 
 ### 4. Branch, then create the directory
 
-`main` = stable recipes only; direct pushes to `main` are blocked (AGENTS.md).
-Branch from a fresh `main`:
+`main` = stable only; direct pushes are blocked. The per-lane working branch carries
+the active recipes — branch from it:
 
-    git checkout main && git pull origin main
+    git checkout glm-v53-flash-nvfp4-4x-noswitch && git pull
     git checkout -b adopt-<recipe-name>
     mkdir <recipe-name>
 
-### 5. Generate the recipe (house style)
+### 5. Generate, then finish uncommitted — and stop
 
-Model the files on `glm-v53-flash-intel-w4a16/` — the live reference. Copy its
-STRUCTURE, not its values. Every non-cluster value must trace to a reviewed
-source; every cluster value is THIS cluster's, verbatim (AGENTS.md table):
-
-- `.env` — shared config: `MASTER_ADDR=192.168.0.170`, `PORT=8000`,
-  `MPORT=29521`, host cache paths (`MODEL_HOST_PATH` / `HF_CACHE` /
-  `CACHE_HOST_PATH`), `ETH_IF=enp1s0f0np0` / `ETH_IF2=enP2p1s0f0np0` /
-  `IB_PORTS=rocep1s0f0,roceP2p1s0f0`, `NCCL_SUBNET=192.168.0.0/24`, `IMAGE`,
-  `MODEL` + `MODEL_REVISION`, `SERVED_MODEL_NAME`, lane/spec vars, `GMU`,
-  `MAX_LEN`, `MAX_SEQS`, `MNBT`, `BLOCK_SIZE`, `KV_DTYPE`,
-  `KV_CACHE_MEMORY`, `MOE_BACKEND`, `EAGER`, the sampling pins (step 6),
-  `HF_HUB_OFFLINE=1` + `TRANSFORMERS_OFFLINE=1`, and the NCCL/RoCE env block
-  (copy it from the reference recipe's compose `environment:` section).
-- `.env.node0` — `NODE_RANK=0`, `HEADLESS=`, `ROCE_IP=192.168.0.170`.
-- `.env.node1` — `NODE_RANK=1`, `HEADLESS=1`, `ROCE_IP=192.168.0.171`.
-- `docker-compose.yml` — the invariants below.
-- `README.md` — ACTIVE-RUNNING doc only: model + quant, profiles, one-time
-  provisioning (model/drafter `hf download` pins, any surgery script), image
-  build, deploy (worker FIRST, head ~30–35 s later), verify (`/health` then
-  `/v1/models`), boot markers, tuning rows, known issues, references.
-  Historical changelog and TODO/watch material NEVER go here.
-- `research.md` — provenance (which post/repo/file each value came from),
-  measured receipts, watchlist, dated changelog blocks.
-
-compose invariants (reference recipe + AGENTS.md): `entrypoint: []`;
-`restart: "no"`; `network_mode: host`; `ipc: host`; `shm_size: 32g`; memlock
-ulimits + `cap_add: IPC_LOCK`; `gpus: all`; `/dev/infiniband` device; a
-healthcheck that exits 0 when `HEADLESS` is set, with a generous
-`start_period`; volumes for the model dir / HF cache / cache root plus `:ro`
-patch overlays; `CUDA_VISIBLE_DEVICES=0` (one GPU per node, TP=2 across nodes);
-and a `command` block that auto-detects the RoCE v2 GID index from sysfs
-(fail-closed — it renumbers across reboots), preflights the model dir, builds
-the vLLM arg list, appends `--distributed-executor-backend mp --nnodes 2
---node-rank … --master-addr … --master-port …` (+ `--headless` on the worker),
-and `exec vllm "$${ARGS[@]}"`.
-
-**HF-cache invariant (never adopt upstream's cache/model paths):** the
-host-side HF cache source MUST stay the spark user's default HF cache —
-`HF_CACHE=/home/sdrew/.cache/huggingface`, the same location every other
-recipe downloads into — regardless of how upstream lays out its model paths
-(per-recipe model dirs, `DRAFT_MOUNT_DIR`, a relocated in-image `HF_HOME`,
-etc.). Map upstream's model/drafter layout INTO that shared cache: download
-with pinned revisions on BOTH nodes and resolve snapshot dirs at boot; do NOT
-mount a separate per-recipe cache or repoint the host side of `HF_HOME`.
-`HF_HUB_OFFLINE=1` + `TRANSFORMERS_OFFLINE=1` are mandatory in every recipe's
-compose env — serving is offline by convention, and an upstream config that
-expects runtime downloads is wrong for this cluster, not a knob to adopt.
-
-If the checkpoint needs a surgery/adaptation step (quant-config rewrite,
-drafter wiring), vendor it as an idempotent, fail-closed script in the recipe
-dir and document it as README step 0.
-
-### 6. Apply the standard defaults
-
-These override whatever the upstream ran — unless the upstream value is
-physically incompatible with the checkpoint/image, in which case keep
-upstream's value and flag the deviation in README + research.md:
-
-| setting | value |
-|---|---|
-| backend serve port | `PORT=8000` — repo invariant. Clients reach the model through the model-name proxy on **:4000** with model `spark-llm`; the proxy's `BACKEND_MODEL` must equal `SERVED_MODEL_NAME` |
-| `SERVED_MODEL_NAME` | `glm-5.3-flash` for any GLM-5.3-Flash variant; `deepseek-v4-flash` for any DeepSeek-V4-Flash variant; otherwise a similar lowercase-hyphenated name derived from the parent model (e.g. `mimo-v2.5`) |
-| temperature | `TEMPERATURE=1.0` |
-| top_p | `TOP_P=0.95` |
-| thinking | `THINKING=true` |
-| reasoning effort | `REASONING_EFFORT=high` |
-
-Pin them the way the reference recipe does — `--generation-config vllm` +
-`--override-generation-config` + `--default-chat-template-kwargs` — so a
-checkpoint/template refresh can't silently drift them. Use the model family's
-equivalent mechanism where it differs (GLM: chat-template kwargs; DSv4: the
-encoder's three-level reasoning-effort prompts).
-
-### 7. Finish uncommitted — and stop
+Model the files on the two live recipes — copy STRUCTURE, not values. Every
+non-cluster value traces to a reviewed source with a receipt; every cluster value
+(nodes, ring addressing, HCAs, netplan, NCCL dirs) is THIS cluster's, from AGENTS.md.
+README = active-running doc only (provisioning, build, deploy, verify, boot markers,
+tuning rows); history/TODO/watch material goes to research.md.
 
     git status    # recipe dir untracked on adopt-<recipe-name>; nothing staged
 
-Report: branch name, directory, what was adopted from where (with receipts),
-which defaults were overridden and why. Do NOT commit, push, PR, merge, build,
-or launch.
+Report: branch, directory, what was adopted from where (with receipts), deviations
+forced by this cluster. Do NOT commit, push, PR, merge, build, or launch.
 
 ## Common mistakes
 
-- Committing (or pushing/PRing) the recipe — the deliverable is UNCOMMITTED.
-- Writing changelog/watch material into README.md — that belongs in
-  `research.md`; README is the active-running doc only.
-- Copying upstream cluster IPs, NIC names, GMU/KV/backend values as-is —
-  cluster wiring is THIS cluster's (AGENTS.md); tuning knobs are per-image and
-  must come from the reviewed source for THIS image.
-- Forgetting `entrypoint: []` → the command block is appended to the image's
-  `vllm serve` argv and the container dies at argparse.
-- Hard-coding a GID index instead of the sysfs auto-detect loop.
-- Serving on any port other than 8000, or drifting `SERVED_MODEL_NAME` from
-  the parent-model convention — both break the model-name proxy contract.
-- Adopting a measured claim without a receipt (post number / commit / log line).
-- Repointing the HF cache away from the spark user's default
-  `/home/sdrew/.cache/huggingface` (upstream model-dir/`HF_HOME` layouts), or
-  dropping `HF_HUB_OFFLINE=1`/`TRANSFORMERS_OFFLINE=1` — all recipes share ONE
-  host cache and serve offline (HF-cache invariant, step 5).
-- Inventing hardware or a third node. Two fixed nodes; values in AGENTS.md.
+- Modeling on the archived 2-node recipes (docker-compose pairs, `.env.nodeN`,
+  192.168.0.x crossover IPs — that era is gone).
+- Committing/pushing the adoption — the deliverable is UNCOMMITTED.
+- Copying upstream cluster wiring as-is (HCAs, IPs, netplan) — this ring's contract is
+  in AGENTS.md; upstream values are receipts for the model stack only.
+- Adopting measured claims without receipts, or "in theory" improvements that touch the
+  fragile shared transport (NCCL contract, netplan).
+- Inventing hardware or a different topology. Four fixed nodes, switchless ring.
+- Writing changelog/watch material into README.md instead of research.md.

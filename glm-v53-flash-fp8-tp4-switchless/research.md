@@ -184,6 +184,39 @@ All of `noswitch-prep/` is site-owned, not upstream-owned:
 
 ## 5. Changelog
 
+- **2026-10-10 — Lane switch NVFP4 → FP8 over the directory rename: first post-rename
+  boot, PASS.** The switch executed the LANE-SWITCHING.md rename gotcha order (tear
+  down → pull → restore mirrors → preflight → up via the NEW paths):
+  - NVFP4 `./start.sh stop` from the OLD path (containers preserved, exited 0 on all
+    4 ranks; left stopped — not `docker rm`'d, so a future NVFP4 relaunch must remove
+    them first per its preflight).
+  - `git pull` on all 4 nodes → dirs renamed on disk as predicted; the gitignored
+    mirrors (`upstream/cluster.env`, `upstream/scripts/node/etc/<node>/*.yaml`) stayed
+    orphaned under `glm-v53-flash-4x-noswitch/` — confirmed, so the mirror restore was
+    MANDATORY (not the runbook's conditional "only if a repo config change is pending"):
+    `cp noswitch-prep/cluster.env upstream/cluster.env` on all 4, `render-netplan.sh
+    --write && --check` on the head (4/4 MATCH, 4/4 identical into the new paths), then
+    `scripts/deploy.sh` from the head (first attempt hit a 180 s SSH timeout mid-push —
+    the script is slow-but-idempotent; second run completed on every node). Deployed
+    `~/.local/tp4/cluster.env` verified: 4-PF HCA list + `GPU_MEM_UTIL=0.85`.
+  - Preflight `ALL CHECKS PASS` (netplan live==generated, 16 addrs, 16-ping two-view
+    mesh, both NCCL SHAs). Gotcha: non-interactive SSH PATH lacks `~/.local/bin` —
+    invoke `~/.local/bin/tp4ctl` by full path.
+  - **Boot PASS first attempt post-rename:** `/health` 200 at ~760 s (fresh overlay,
+    cold weight load), `/v1/models` `glm-5.3-flash` max_model_len 262,144. T1-style
+    four-PF proof: zero NCCL WARN lines, engine past `ncclCommInitRank`; live container
+    env on head + spark-6d24 = 4-PF HCA, `MERGE_NICS=0`, `SWITCHLESS_RING_ONLY=1`,
+    `EXTENDED_IPV4_GIDS=1`, `PRESERVE_PCI_DOMAIN=1`, four-PF lib mounted. Worker-first
+    start order observed (r3→r2→r1→head). Note: the SIRCL GID preflight line lists only
+    the two f-port devices — that is SIRCL's own 2-HCA view, not the NCCL transport.
+  - **Gates PASS:** corruption probe 0 U+FFFD (🚀 + 海洋 intact, `enable_thinking:false`)
+    and forced `tool_choice:"required"` + thinking-off → clean
+    `get_weather({"city":"Tokyo"})`. No bench (30-min warm-up rule; owner may bench
+    later per bench-recipe-update).
+  - Watch item for the NEXT switch (FP8 → NVFP4): same orphaned-mirror treatment may be
+    needed for NVFP4-side untracked files (e.g. its `.env`) left under the old
+    `glm-v53-flash-nvfp4-4x-noswitch/` dir.
+
 - **2026-10-10 — RECIPE RENAMED:** `glm-v53-flash-4x-noswitch` →
   `glm-v53-flash-fp8-tp4-switchless` (owner reorg; the NVFP4 sibling renamed to
   `glm-v53-flash-nvfp4-tp4-switchless` in the same commit). Docs updated to the new

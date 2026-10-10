@@ -55,20 +55,22 @@ the FP8 recipe; HF cache holds both checkpoints (nvidia `09b04e5e`, drafter `bf5
    zero modification) and guarantees `chat_template.jinja` exists in the model dir
    (start.sh requires it; falls back to the FP8 stack's zai template if the snapshot
    lacks it).
-2. **Fabric + NCCL contract check (the highest-risk item):** each 200G QSFP56 cable
-   presents 2×100G PFs; the four-PF contract needs all four addressed per node
-   (`rocep1s0f0,rocep1s0f1,roceP2p1s0f0,roceP2p1s0f1`). The FP8 recipe configures only
-   one PF per port — netplan-address the second PF of each port on all four nodes first
-   (fabric plan extends 4 → 8 logical links; site range `10.10.0.0/21`). Then let
-   `scripts/check_switchless_nccl.py` judge the existing `~/.local/lib/nccl-patched`
-   build — configured PFs alone don't satisfy the contract: the build needs four-device
-   support ("a two-device-only release is not sufficient merely because its filename is
-   the same"). If it fails: build othexmr's four-PF NCCL
-   (`feat/four-pf-source-integration` @ `94c2669`) against `10.10.0.0/21` per upstream
-   `docs/switchless.md`, pin its SHA256 into `site/env.switchless`, update
-   `NCCL_HOST_DIR`, and re-check. Fallback if the four-PF route stalls: run the FP8
-   recipe's proven fabric/NCCL env wiring against this image (jnardiello's fidelity arm
-   proved the tonyd2wild image family boots TP4 on exactly this fabric).
+2. **NCCL staging (the highest-risk item):** the site NCCL build (`~/.local/lib/nccl-patched`,
+   SHA `afe5f486…` — the josephdrose/SparkRing patch family the FP8 recipe proved on this
+   exact fabric) implements ring-only tree/PAT skipping under `NCCL_SKIP_TREE_CONNECT`, NOT
+   the four-PF build's `NCCL_SWITCHLESS_RING_ONLY`. The launcher therefore carries a
+   **documented site mod** adding `-e NCCL_SKIP_TREE_CONNECT=1` to the switchless render
+   (see `upstream/VENDORED-AT.md` "Site modifications" — re-apply on re-vendor). The staged
+   first boot runs the FP8-proven **2-PF-per-node** fabric: the second PCIe views
+   (`enP2p1s0f0np0`/`enP2p1s0f1np1`) stay MTU-only (no address) and `IB_HCA` is the two
+   addressed PFs (`site/env.switchless`). Filename gotcha: `start.sh` + the artifact check
+   + `LD_PRELOAD` all expect `libnccl.so.2.30.7`, but the site dir ships `libnccl.so.2` —
+   create the in-dir symlink on every node first:
+   `ln -s libnccl.so.2 ~/.local/lib/nccl-patched/libnccl.so.2.30.7`. The full four-PF
+   contract (all four PFs per node, othexmr build @ `94c2669` rebuilt against
+   `10.10.1–4.0/24`) is the Phase-E follow-up: it needs a one-line subnet-literal change
+   in `nccl-2.30.7-dual-pf.patch` + rebuild + validation. Fallback if a boot stalls in
+   NCCL init: FP8-recipe transport wiring (proven TP4 on this fabric with this lib).
 3. **Image build (every node, from the upstream checkout):**
    `docker build -f Dockerfile.roce -t glm53-roce:v11-b58f34ea .` — minutes, no CUDA
    compile. Digest/base pins per upstream `docs/install.md`.
@@ -85,6 +87,30 @@ the FP8 recipe; HF cache holds both checkpoints (nvidia `09b04e5e`, drafter `bf5
    scores 0/0/0 upstream). Then `accept_probe` / `conc_bench` for the baseline numbers.
 7. **Record** the ring-vs-switched decode delta in `research.md` — that number decides
    whether this lane stays or we revisit lossless8.
+
+## Switching between the FP8 and NVFP4 lanes
+
+GPU contention rule: only one lane serves at a time. The lanes were built to coexist
+without renames — switching is teardown + branch checkout:
+
+- **No proxy change either way:** both lanes serve `glm-5.3-flash` on `:8000` behind the
+  model-name-proxy (`BACKEND_MODEL=glm-5.3-flash` matches both); `SPOOF_FROM` already
+  lists it.
+- **No NCCL conflict:** both launchers use `~/.local/lib/nccl-patched` — the FP8 launcher
+  preloads `libnccl.so.2` directly, this lane uses the `libnccl.so.2.30.7` symlink; both
+  resolve to the same `afe5f486…` artifact. The FP8 stack's netplan (2 addressed PFs) is
+  also this lane's staged transport — no fabric change when switching (until Phase E).
+- **FP8 → NVFP4:** `tp4ctl down` in the FP8 recipe (`glm-v53-flash-4x-noswitch/upstream`)
+  on the head; confirm `glm53_fp8_dflash_tp4` is gone on all 4; on all 4 nodes
+  `cd ~/code/spark-recipes && git checkout glm-v53-flash-nvfp4-4x-noswitch && git pull`;
+  cache ritual; `./start.sh serve` from this recipe's `upstream/`.
+- **NVFP4 → FP8:** `./start.sh stop` here (stops, preserves containers for inspection —
+  a relaunch of this lane then needs `docker rm` of the stopped `glm53-nvfp4-r*` first,
+  upstream preflight refuses existing names); on all 4 nodes
+  `git checkout glm-v53-flash-4x-noswitch && git pull`; then the FP8 stack's normal
+  `tp4ctl up`.
+- **Branches are per-lane:** the node checkout follows whichever lane is serving. `main`
+  is never used on the nodes for either lane.
 
 ## Day-2 ops
 

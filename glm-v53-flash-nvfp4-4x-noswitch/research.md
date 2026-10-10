@@ -112,6 +112,41 @@ measured at bring-up, not assumed.
 
 ## Changelog
 
+- **2026-10-10 — pre-bring-up review + staged transport decision.** Full review against
+  the live 4-node cluster before first activation. Findings and fixes:
+  - **`FABRIC_IFACE` was wrong**: `site/env.switchless` had `enp1s0f0np0` (a fabric PF,
+    10.10.1.1 — reaches only rank 1). `transport.sh` renders it into
+    `NCCL_SOCKET_IFNAME`/`GLOO_SOCKET_IFNAME`/`MN_IF_NAME`/`TP_SOCKET_IFNAME`, which must
+    reach all ranks → fixed to `enP7s7` (the mgmt NIC, same value the FP8 launcher uses;
+    verified live: 10.69.42.170/16).
+  - **NCCL artifact gap pinned down.** Strings analysis of the site lib (`afe5f486…`,
+    josephdrose/SparkRing patch, FP8-proven): implements `NCCL_SKIP_TREE_CONNECT` +
+    `NCCL_IB_SUBNET_AWARE_ROUTING`/`..._PREFIX_LEN`; does NOT implement the four-PF
+    contract's `NCCL_SWITCHLESS_RING_ONLY`, `NCCL_IB_EXTENDED_IPV4_GIDS`,
+    `NCCL_IB_PRESERVE_PCI_DOMAIN`. With this lib, the launcher's `NCCL_SWITCHLESS_RING_ONLY=1`
+    is a no-op and NCCL init would attempt ring-impossible tree connects (the FP8 launcher
+    always sets `NCCL_SKIP_TREE_CONNECT=1`). `transport.sh` rejects `NCCL_*` keys in
+    `EXTRA_ENV`, so the only non-image-level path was the **documented site mod** to
+    `upstream/scripts/transport.sh` (one line, switchless branch; recorded in
+    `upstream/VENDORED-AT.md` "Site modifications" with re-apply instructions).
+  - **Staged transport (owner-approved)**: first boot runs the FP8-proven 2-PF-per-node
+    fabric (`IB_HCA=rocep1s0f0,rocep1s0f1`, second PCIe views stay unaddressed);
+    the four-PF upgrade is Phase E. Plan for Phase E: the othexmr four-PF build
+    (`feat/four-pf-source-integration` @ `94c2669`) hard-codes the listener IPv4-GID bytes
+    `10.100.224–227` in `patches/nccl-2.30.7-dual-pf.patch` (`tp4ValidateListener`) — our
+    `10.10.1–4.0/24` needs that one line changed + rebuild + validation; netplan then adds
+    the second PCIe-root address per node per cable **in the existing 4 cable subnets**
+    (the contract is 2 cable subnets/node × 2 PCI roots, NOT 8 new /24s — the validator
+    caps at 2 subnets per node and requires one address per PCI root within each).
+  - **Filename gotcha fixed at bring-up**: `start.sh`'s check + `LD_PRELOAD` expect
+    `libnccl.so.2.30.7`; the site dir ships `libnccl.so.2` → in-dir symlink on all 4 nodes.
+  - **Lane coexistence (owner requirement: switch back and forth with FP8)**: no renames
+    needed — distinct container/CTN names, distinct `OVERLAY_REMOTE` roots, NCCL dir
+    shared without conflict (`libnccl.so.2` vs symlink), proxy `BACKEND_MODEL`
+    (`glm-5.3-flash`) matches both lanes. Switch procedure documented in README.
+  - Weights verified present on all 4 nodes (nvidia `09b04e5e` + drafter `bf582e4e`,
+    identical inventory); nvidia snapshot ships `chat_template.jinja` → fallback path
+    never triggers.
 - **2026-09-29** — Recipe created: vendored knapcio `770d115`, site env + zero-mod
   profile + weight materialization script; decisions 1–5 recorded above. Uncommitted,
   awaiting owner review.

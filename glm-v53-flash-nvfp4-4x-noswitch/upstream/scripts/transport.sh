@@ -45,7 +45,12 @@ transport_args() {
     -e NCCL_IB_MERGE_NICS=0 -e NCCL_CROSS_NIC=0 -e NCCL_NVLS_ENABLE=0 -e NCCL_CUMEM_ENABLE=0 -e NCCL_DEBUG=WARN"
     return
   fi
-  printf '%s' "-e TORCH_USE_RTLD_GLOBAL=1 -e NCCL_SWITCHLESS_RING_ONLY=1 -e NCCL_ALGO=Ring \
+  # SITE MOD (shawndo, 2026-10-09 — see ../VENDORED-AT.md "Site modifications"): the
+  # site NCCL build (~/.local/lib/nccl-patched, SHA afe5f486…, the josephdrose/SparkRing
+  # patch family proven by the FP8 recipe) implements ring-only tree/PAT skipping under
+  # NCCL_SKIP_TREE_CONNECT, NOT the four-PF build's NCCL_SWITCHLESS_RING_ONLY. Without
+  # this line, NCCL init on a switchless ring attempts tree connects that cannot succeed.
+  printf '%s' "-e TORCH_USE_RTLD_GLOBAL=1 -e NCCL_SWITCHLESS_RING_ONLY=1 -e NCCL_SKIP_TREE_CONNECT=1 -e NCCL_ALGO=Ring \
 -e NCCL_NET=IB -e NCCL_IB_DISABLE=0 -e NCCL_IB_HCA==$IB_HCA -e NCCL_IB_ADDR_FAMILY=AF_INET \
 -e NCCL_IB_ADDR_RANGE=$SWITCHLESS_ADDR_RANGE -e NCCL_IB_ROCE_VERSION_NUM=2 \
 -e NCCL_IB_SUBNET_AWARE_ROUTING=1 -e NCCL_IB_SUBNET_PREFIX_LEN=${SWITCHLESS_SUBNET_PREFIX_LEN:-24} \

@@ -73,9 +73,12 @@ def validate_selection(
     fabric_list = fabric_value.split()
     if len(fabric_list) < 2:
         raise SelectionError("resolved fabric interface list has fewer than two entries")
-    # The repository contract defines the first two entries as the addressed ring ports.
-    fabric_ifaces = set(fabric_list[:2])
-    if len(fabric_ifaces) != 2:
+    # The repository contract defines the first N entries as the addressed ring ports,
+    # N = the number of selected HCAs: two for the upstream 2-PF plan, four for the
+    # cross-lane four-PF NCCL contract (FABRIC_P2_VIEWS=1 — the second PCIe views are
+    # addressed too; see ../noswitch-prep/cluster.env and ../research.md changelog).
+    fabric_ifaces = set(fabric_list[: len(hcas)])
+    if len(fabric_ifaces) != len(hcas):
         raise SelectionError("the two addressed fabric interface entries must be distinct")
 
     selected: list[str] = []

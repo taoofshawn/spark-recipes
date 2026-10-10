@@ -32,6 +32,16 @@ Full details and the update procedure: `../research.md` §2.
    `~/vllm-cache` → `$HOME/.cache/tp4-vllm-cache`, weights → HF-cache snapshot paths
    (details: `../research.md` §2.5). Rewrites are mechanical; re-apply to any file an
    update touches that references the old paths.
+6. `scripts/render-netplan.sh` — SITE EXTENSION (shawndo, 2026-10-10): opt-in
+   `FABRIC_P2_VIEWS` cluster.env flag (default 0 = upstream behavior byte-for-byte).
+   When 1, the second PCIe views (FABRIC_IFACES positions 3/4) are ADDRESSED — one
+   address per node per cable subnet, last octet = f-octet + 2 — and the yaml emission
+   order groups each P2 view after its parent f view. This matches the NVFP4 lane's
+   Phase-E-deployed live netplan (shared fabric), so `render-netplan.sh --check` and
+   `deploy-host.sh` regeneration are safe again; the old 2-address output would strip
+   the P2 addresses and break the NVFP4 lane. Re-apply on update: the flag plumbing is
+   the three `FABRIC_P2_VIEWS` blocks (doc header, validation, `render()` emission
+   order + address rule); see `../noswitch-prep/cluster.env` `FABRIC_P2_VIEWS` comment.
 
 ## Refresh procedure
 

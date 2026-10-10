@@ -117,6 +117,12 @@ without renames — switching is teardown + branch checkout:
 - Start/stop/status/logs: upstream `./start.sh` (`serve`, stop via
   `scripts/stop_preserving.py` paths, `logs`). Teardown/recreate always cycles **all
   four ranks together** — never one rank.
+- **Warm reboots:** the JIT/TRITON/tilelang caches live in the per-node overlay root
+  (`~/.local/nvfp4-tp4/`). Relaunching against the same `OVERLAY_REMOTE` keeps them
+  (warm `/health` ~3–4 min vs ~7 min cold, per tonyd2wild's measurements on the same
+  stack). If a change ever forces a FRESH overlay root (new `CTN`/`OVERLAY_REMOTE`),
+  copy the old overlay's `cache/` into the new root first — that alone reproduces the
+  warm-boot time.
 - KV ladder: 20 GiB/rank is the v1 pin (~3.25M tokens). 24 → ~3.9M and 28 → ~4.5M are
   proven ceilings on identical hardware but MUST be gated per rung (head rank binds;
   "boots, then dies on first concurrent prefill" is the documented failure shape).

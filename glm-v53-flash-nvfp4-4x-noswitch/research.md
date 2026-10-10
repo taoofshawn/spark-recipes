@@ -112,6 +112,56 @@ measured at bring-up, not assumed.
 
 ## Changelog
 
+- **2026-10-10 — update-recipe pass vs tonyd2wild/GLM-5.3-Flash-NVFP4-1M-KV-4x-DGX-Spark.**
+  Full review of his repo (README @ `96658cf0` 2026-09-30 tip, runs/2026-09-29-knapcio-stack +
+  -effort-low, docs, issues #1–#12) plus a forum sweep (t382459 jnardiello switchless,
+  t382939 2x-optimization, t381350 main GLM thread, t385075 kindling TP=3; posts after
+  2026-09-29). Headline findings:
+  - **His throughput headline is knapcio's lossless8 stack, not a config we lack.** His
+    2026-09-29 default runs knapcio's stack unmodified at pin `770d115` — our exact vendored
+    pin — but through the lossless8 weight conversion (8-bit dense grids + fp8blk drafter),
+    measured against HIS OWN previous lane (nvidia-glm53-attn, NVFP4-quantized attention).
+    The +36–57% prose decode is mostly that weight conversion; our lane deliberately serves
+    the pristine pack (§2 decision 5), so the delta is already priced into §3's strip list
+    (~10–15%). No engine-level change exists in his repo to adopt: knapcio's tip is still
+    `770d115`, and our `stock-nvfp4.env` inherits `current.env` live, so every kernel/scheduler
+    win from that profile already reaches this lane.
+  - **ADOPTED — `DEFAULT_EFFORT=low`** (in `stock-nvfp4.env` site section). His 2026-09-29
+    A/B on the same stack (runs/2026-09-29-knapcio-effort-low): 69-scenario tool-eval quality
+    93.5 low vs 92.8 high; output tokens 631 vs 978, thinking text 227 vs 602 chars; median
+    answer 1.3 s vs 1.8 s; decode tok/s unchanged (69.5 vs 70.1). This lane serves agents —
+    fewer burned thinking tokens is time-to-answer, the metric agents feel. Current.env ships
+    `high`; our bring-up benches ran at high, so accept_probe/latency baselines shift
+    slightly on the next bench. Frame honestly: tok/s does NOT rise; tokens-wasted falls.
+    Watch: if agent tasks need deeper thinking, request-level
+    `chat_template_kwargs {"reasoning_effort": "high"}` still works.
+  - **ADOPTED (docs) — warm-reboot cache note** in README Day-2 ops: fresh-overlay relaunch
+    should copy the old overlay's `cache/` first (his measurement: /health ~200 s warm vs
+    ~542 s cold on the same stack). Our normal relaunches reuse `~/.local/nvfp4-tp4/`, so this
+    only bites when a fresh `OVERLAY_REMOTE` is forced.
+  - **RECORDED (dead ends, don't spend a boot):** his "tried and did not keep" table — a
+    deeper draft table keeping all depths 1–7 (±3% every cell) and the `batch-max` scheduler
+    mode (±2%) are both measured no-ops on the same stack. Also recorded: `TRUNC_COST=r12` is
+    untried by anyone (reject — no measured claim); uncapped GPU clocks gave him +4–8% prefill
+    but he keeps the 2200 MHz cap for hard-power-off mitigation (watch item, not adopted);
+    keep the SPEC_TABLE's every-depth-1–7 shape — his runbook gotcha: replacing it with a
+    compact table broke DEVSELECT graph capture and halved single-stream prose.
+  - **REJECTED — weight-mod lanes:** his `nvidia-glm53-attn` (NVFP4 attention on the 403
+    BF16 tensors, needs `NVFP4_PATCH=1` glm5next mounts) and knapcio's lossless8 both
+    modify weights — contradicts this lane's premise (§2 decision 5). External validation
+    of the fallback lane's expected size: vedcsolution's TP2 eugr PR #421 (forum t382939
+    #187) reports +23–27% decode from online-NVFP4 of the BF16 dense layers — consistent
+    with §3's ~10–15% strip-list estimate direction (different lane/topology, not a receipt
+    for this stack).
+  - **REJECTED — lane parameters:** his 500K window / 24 GiB KV are fleet choices for the
+    lossless8 pack (43.76 GiB/rank weights vs our ~47.6); 1M ctx + 20 GiB pin here are owner
+    decisions (§4). His `MNBT=8192`/`max-num-seqs 64` findings are from the older fp8/marlin
+    lane and he explicitly flags them as not re-measured on the current one.
+  - Forum sweep: nothing adoptable landed after 2026-09-29 in the GLM threads (t382459,
+    t382939, t381350, t385075 are kindling/TensorFold/eugr/technigma stacks on other
+    topologies; the tool-loop thinking-loss bug discussed there is a different stack's chat
+    template — verify our lane still passes the tool-call gate at the next bring-up).
+
 - **2026-10-10 — FIRST BRING-UP COMPLETE: serving on the 4-node ring.** Staged transport
   (2 PFs/node + site SparkRing lib). Boot → `/health` 200 in ~7 min cold (JIT caches
   populate during first traffic; no model conversion steps). Record:

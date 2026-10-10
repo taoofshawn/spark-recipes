@@ -112,6 +112,46 @@ measured at bring-up, not assumed.
 
 ## Changelog
 
+- **2026-10-10 — FIRST BRING-UP COMPLETE: serving on the 4-node ring.** Staged transport
+  (2 PFs/node + site SparkRing lib). Boot → `/health` 200 in ~7 min cold (JIT caches
+  populate during first traffic; no model conversion steps). Record:
+  - **NCCL boot failure #1 (fixed as site mod #2, `upstream/VENDORED-AT.md`):** knapcio's
+    switchless render forces `NCCL_IB_MERGE_NICS=0` → two separate virtual devices → NCCL
+    pairs channel c → vdev (c mod 2) with no subnet knowledge → the rank3→rank0 channel
+    used 10.10.1.x at rank 0 against 10.10.4.x at rank 3 → `ibv_modify_qp` 110 timeout →
+    `Connected` never reached, engine init failed. Fix: `MERGE_NICS=1` (FP8 launcher's
+    proven value) — one merged vdev + the site lib's subnet-aware routing picks the PF per
+    connection. After fix: `Connected all rings, use ring PXN 0 GDR 0` on all ranks;
+    merged vdev `rocep1s0f0+rocep1s0f1` speed=400000 ndevs=2.
+  - **First-boot gotchas fixed on the way:** `start.sh` missing +x (index fix, `3ac8622`);
+    `stock-nvfp4.env` strip leak (EXTRA_ENV line-start switches `QMIX_FP8_BLOCK=1` and
+    `GLM_DENSE_FAST_PREFILL=1` reached the containers — caught by the DRY render, fixed
+    by flattening EXTRA_ENV before the strip, `7afa37b`); `bench/prefix_scan.py` wants
+    `--base` WITHOUT `/v1` and `--model glm-5.3-flash` (its default is upstream's
+    `GLM-5.3-Flash-FP8`).
+  - **Gates:** corruption probe 0 U+FFFD (emoji + 海洋 intact); forced `tool_choice:required`
+    → clean `get_weather({"city": "Tokyo"})` (TC-45 watch item: no structural-tag override
+    needed here — the upstream glm47 parser handles it); `prefix_scan.py` **PASS**
+    (0 errors, 0 degenerate, 0 false-anomalies; drift 0.0338 cold-cold / 0.0347 cold-warm
+    vs 0.06 limit; 96,768-token warm prefix hits; sizing P≈97.4K, mod 2304 in-window).
+  - **accept_probe (c1, k=7 family):** prose accept 2.20 / 50.3 ms-step / **43.8 tok/s**;
+    code 4.40 / 57.9 / **76.3**; json 5.79 / 59.5 / **97.1**. pos-0 acceptance
+    0.638 / 0.882 / 0.97 — healthy, gentle per-position decay.
+  - **conc_bench (full ladder, wall-aggregate tok/s prose/code/json, U+FFFD 0 everywhere):**
+    c1 43.8/87.4/91.6 · c2 62.1/102.8/128.6 · c4 92.4/155.1/189.6 · c8 133.6/204.6/199.8 ·
+    c16 192.2/282.6/280.7.
+  - **The lane-defining number:** ring decode is ~45–55% of knapcio's switched fleet
+    (c1 90.3/124.0/168.8 → 43.8/76.3/97.1; c16 331–879 → 192–342). Two stacked causes:
+    (a) ring transport (NCCL ring latency + opposite-node transit; a 200G/cable four-PF
+    upgrade is Phase E's lever), and (b) this lane's zero-mod strip list (~10–15% per
+    §3). If Phase E doesn't close the gap, the lossless8 fallback decision comes here.
+  - **Watch items:** prefix_scan misquotes 2/1 + incorrect 7/7 (non-strict PASS; consider a
+    `--strict` rerun); json TTFT ~6.5 s at c8/c16 (structured prefill chunking under the
+    6919-token budget — monitor); numbers taken ~30 min after first traffic (warm-up
+    penalty mostly paid but not fully).
+  - Endpoint verified end-to-end through the proxy: `spark-llm` → real backend
+    `glm-5.3-flash` (mode A).
+
 - **2026-10-10 — pre-bring-up review + staged transport decision.** Full review against
   the live 4-node cluster before first activation. Findings and fixes:
   - **`FABRIC_IFACE` was wrong**: `site/env.switchless` had `enp1s0f0np0` (a fabric PF,

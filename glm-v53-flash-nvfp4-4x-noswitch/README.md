@@ -3,7 +3,9 @@
 GLM-5.3-Flash **NVFP4** (the pristine [nvidia/GLM-5.3-Flash-NVFP4](https://huggingface.co/nvidia/GLM-5.3-Flash-NVFP4)
 checkpoint @ `09b04e5e` — **zero weight modification**) served on the **4-node switchless
 ConnectX-7 ring** with vLLM TP4, DFlash2 speculative decoding, 1M-token context, and the
-site's existing patched NCCL. Adapted from the
+site's four-PF switchless NCCL build (`~/.local/lib/nccl-patched-4pf`, SHA `8de68def…`,
+research.md "PHASE E COMPLETE"; the FP8 lane keeps its own `nccl-patched` lib — do not
+merge the directories). Adapted from the
 [knapcio recipe](https://github.com/knapcio/GLM-5.3-Flash-4x-DGX-Spark-TP4)
 @ `770d115` (vendored at [upstream/VENDORED-AT.md](upstream/VENDORED-AT.md)).
 
@@ -44,8 +46,9 @@ to all nodes (same as the FP8 recipe).
 
 On the nodes: `~/code/spark-recipes` on branch `glm-v53-flash-nvfp4-4x-noswitch` (all
 four, same as the FP8 recipe); `~/.local/nvfp4-tp4/` = deployed overlay (`OVERLAY_REMOTE`)
-+ materialized weights; `~/.local/lib/nccl-patched/` = the site NCCL rebuild shared with
-the FP8 recipe; HF cache holds both checkpoints (nvidia `09b04e5e`, drafter `bf582e4e`).
++ materialized weights; `~/.local/lib/nccl-patched-4pf/` = this lane's four-PF NCCL build
+(SHA `8de68def…`; the FP8 lane's `~/.local/lib/nccl-patched/` is a DIFFERENT artifact —
+keep both); HF cache holds both checkpoints (nvidia `09b04e5e`, drafter `bf582e4e`).
 
 ## Bring-up (first time)
 
@@ -55,22 +58,19 @@ the FP8 recipe; HF cache holds both checkpoints (nvidia `09b04e5e`, drafter `bf5
    zero modification) and guarantees `chat_template.jinja` exists in the model dir
    (start.sh requires it; falls back to the FP8 stack's zai template if the snapshot
    lacks it).
-2. **NCCL staging (the highest-risk item):** the site NCCL build (`~/.local/lib/nccl-patched`,
-   SHA `afe5f486…` — the josephdrose/SparkRing patch family the FP8 recipe proved on this
-   exact fabric) implements ring-only tree/PAT skipping under `NCCL_SKIP_TREE_CONNECT`, NOT
-   the four-PF build's `NCCL_SWITCHLESS_RING_ONLY`. The launcher therefore carries a
-   **documented site mod** adding `-e NCCL_SKIP_TREE_CONNECT=1` to the switchless render
-   (see `upstream/VENDORED-AT.md` "Site modifications" — re-apply on re-vendor). The staged
-   first boot runs the FP8-proven **2-PF-per-node** fabric: the second PCIe views
-   (`enP2p1s0f0np0`/`enP2p1s0f1np1`) stay MTU-only (no address) and `IB_HCA` is the two
-   addressed PFs (`site/env.switchless`). Filename gotcha: `start.sh` + the artifact check
-   + `LD_PRELOAD` all expect `libnccl.so.2.30.7`, but the site dir ships `libnccl.so.2` —
-   create the in-dir symlink on every node first:
-   `ln -s libnccl.so.2 ~/.local/lib/nccl-patched/libnccl.so.2.30.7`. The full four-PF
-   contract (all four PFs per node, othexmr build @ `94c2669` rebuilt against
-   `10.10.1–4.0/24`) is the Phase-E follow-up: it needs a one-line subnet-literal change
-   in `nccl-2.30.7-dual-pf.patch` + rebuild + validation. Fallback if a boot stalls in
-   NCCL init: FP8-recipe transport wiring (proven TP4 on this fabric with this lib).
+2. **NCCL + netplan staging (the highest-risk item):** this lane ships its own four-PF
+   NCCL build and fabric netplan (Phase E, `site/nccl-4pf/` + `site/netplan/<node>/`):
+   stage `~/.local/lib/nccl-patched-4pf/libnccl.so.2.30.7` (real file; SHA pinned in
+   `site/env.switchless` — the launcher's preflight enforces it) with an in-dir
+   `libnccl.so.2 → libnccl.so.2.30.7` symlink, and install the per-node netplan
+   (`sudo cp site/netplan/<node>/40-cx7.yaml /etc/netplan/40-cx7.yaml && sudo netplan
+   apply`). The netplan addresses BOTH PCIe views of every cable (f-port octet + 2 on the
+   P2 views) — additive over the FP8 plan, so the FP8 lane keeps working, but **never
+   re-deploy the FP8 recipe's 2-address netplan here** (it strips the P2 addresses).
+   All four PFs must carry QPs per rank at boot (`Connected all rings` + RouteFinal
+   lines). Rollback if a boot stalls in NCCL init: point `NCCL_HOST_DIR` back at
+   `~/.local/lib/nccl-patched` and re-apply the staged-transport mods documented in the
+   `upstream/scripts/transport.sh` comment (FP8-proven 2-PF wiring).
 3. **Image build (every node, from the upstream checkout):**
    `docker build -f Dockerfile.roce -t glm53-roce:v11-b58f34ea .` — minutes, no CUDA
    compile. Digest/base pins per upstream `docs/install.md`.
@@ -96,10 +96,12 @@ without renames — switching is teardown + branch checkout:
 - **No proxy change either way:** both lanes serve `glm-5.3-flash` on `:8000` behind the
   model-name-proxy (`BACKEND_MODEL=glm-5.3-flash` matches both); `SPOOF_FROM` already
   lists it.
-- **No NCCL conflict:** both launchers use `~/.local/lib/nccl-patched` — the FP8 launcher
-  preloads `libnccl.so.2` directly, this lane uses the `libnccl.so.2.30.7` symlink; both
-  resolve to the same `afe5f486…` artifact. The FP8 stack's netplan (2 addressed PFs) is
-  also this lane's staged transport — no fabric change when switching (until Phase E).
+- **No NCCL conflict:** the lanes use DIFFERENT NCCL builds — this lane
+  `~/.local/lib/nccl-patched-4pf/` (`8de68def…`, hardened four-PF), the FP8 stack
+  `~/.local/lib/nccl-patched/` (`afe5f486…`, 2-PF SparkRing). Keep both directories; the
+  per-lane `NCCL_HOST_DIR` in each launcher/env picks the right one (the four-PF lib
+  hard-rejects the FP8 launcher's merged-vdev config, and vice versa). The fabric netplan
+  (all 4 PCIe views addressed) serves both lanes — the FP8 one uses the f-port subset.
 - **FP8 → NVFP4:** `tp4ctl down` in the FP8 recipe (`glm-v53-flash-4x-noswitch/upstream`)
   on the head; confirm `glm53_fp8_dflash_tp4` is gone on all 4; on all 4 nodes
   `cd ~/code/spark-recipes && git checkout glm-v53-flash-nvfp4-4x-noswitch && git pull`;

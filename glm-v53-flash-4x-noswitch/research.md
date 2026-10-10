@@ -184,6 +184,20 @@ All of `noswitch-prep/` is site-owned, not upstream-owned:
 
 ## 5. Changelog
 
+- **2026-10-10 — cross-lane note (no action taken on this recipe): the host netplan now
+  also carries the NVFP4 lane's Phase-E P2-view addresses.** The sibling recipe
+  `glm-v53-flash-nvfp4-4x-noswitch` completed its four-PF NCCL upgrade (its research.md
+  "PHASE E COMPLETE"): `/etc/netplan/40-cx7.yaml` on all 4 nodes gained one address per
+  node per cable on the second PCIe views (`enP2p1s0f0np0`/`enP2p1s0f1np1`, last octet =
+  f-port octet + 2). This lane is UNAFFECTED — the f-port addresses are unchanged and the
+  2-PF subset it uses still works; the FP8 NCCL build (`afe5f486…` in
+  `~/.local/lib/nccl-patched/`) stays in its own directory (the four-PF lib lives in
+  `~/.local/lib/nccl-patched-4pf/` and would hard-reject this lane's merged-vdev
+  config). **Do NOT re-run this recipe's netplan re-deploy** (`scripts/node/etc/` 2-address
+  files): it strips the P2 addresses and breaks the NVFP4 lane. If a netplan regeneration
+  is ever needed, additively re-add the P2 addresses per the NVFP4 recipe's
+  `site/netplan/<node>/40-cx7.yaml`.
+
 - **2026-09-30 — Upstream refresh 080fe09 → ed365a6: the SparkCache disk-capacity fix lands (branch `glm-v53-flash-4x-noswitch-sparkcache-diskbound`).**
   Upstream moved 15 commits (Sep 27–30) with NO image bump (digest stays
   `sha256:0d40…`/IMAGE_ID `5e32aaa1bbe3…`) — everything is runtime overlay/config. The

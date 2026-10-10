@@ -126,15 +126,18 @@ measured at bring-up, not assumed.
     (~10–15%). No engine-level change exists in his repo to adopt: knapcio's tip is still
     `770d115`, and our `stock-nvfp4.env` inherits `current.env` live, so every kernel/scheduler
     win from that profile already reaches this lane.
-  - **ADOPTED — `DEFAULT_EFFORT=low`** (in `stock-nvfp4.env` site section). His 2026-09-29
+  - **ADOPTED then REVERTED same day — `DEFAULT_EFFORT=low`** (in `stock-nvfp4.env` site
+    section). His 2026-09-29
     A/B on the same stack (runs/2026-09-29-knapcio-effort-low): 69-scenario tool-eval quality
     93.5 low vs 92.8 high; output tokens 631 vs 978, thinking text 227 vs 602 chars; median
     answer 1.3 s vs 1.8 s; decode tok/s unchanged (69.5 vs 70.1). This lane serves agents —
     fewer burned thinking tokens is time-to-answer, the metric agents feel. Current.env ships
     `high`; our bring-up benches ran at high, so accept_probe/latency baselines shift
     slightly on the next bench. Frame honestly: tok/s does NOT rise; tokens-wasted falls.
-    Watch: if agent tasks need deeper thinking, request-level
-    `chat_template_kwargs {"reasoning_effort": "high"}` still works.
+    **Owner reverted to the inherited `high` the same day** — deeper default thinking is
+    wanted; per-request `chat_template_kwargs {"reasoning_effort": "low"}` remains available
+    for short answers. A comment in `stock-nvfp4.env` records the finding and the one-line
+    revert path so a future pass doesn't re-research it.
   - **ADOPTED (docs) — warm-reboot cache note** in README Day-2 ops: fresh-overlay relaunch
     should copy the old overlay's `cache/` first (his measurement: /health ~200 s warm vs
     ~542 s cold on the same stack). Our normal relaunches reuse `~/.local/nvfp4-tp4/`, so this

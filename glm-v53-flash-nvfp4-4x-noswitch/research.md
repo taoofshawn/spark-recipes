@@ -112,6 +112,37 @@ measured at bring-up, not assumed.
 
 ## Changelog
 
+- **2026-10-10 — CROSS-LANE VALIDATION COMPLETE: switch FP8 → this lane PASS, T3 watch
+  items closed.** (T1 — the FP8 lane's own four-PF boot — is recorded in the FP8
+  recipe's research.md; this lane was torn down for it and re-adopted after.)
+  - **T2 switch-back (FP8 → this lane): PASS, parity with the Phase-E record.**
+    Maintenance window: `tp4ctl down` + container rm (FP8), `verify-fabric-p2.sh` ALL
+    PASS, `./start.sh serve` worker-first 3,2,1,0. Warm boot (`/health` 200 ~6 min).
+    Boot markers identical to Phase E: `Connected all rings` ×2/rank, RouteFinal with
+    all four PFs on every rank (f0/f1/P2f0/P2f1). Gates: corruption probe 0 U+FFFD;
+    forced `tool_choice:required` clean; `prefix_scan.py` **PASS** (cold-cold drift
+    0.0517, cold-warm 0.042 vs limit 0.0776 — well away from the limit, vs Phase E's
+    0.1367/0.0392 vs 0.205; misquotes 0/1; scan-incorrect 5/6+6/6 — the known watch
+    item, slightly better than Phase E's 6/6+6/6 and the staged boot's 7/7; warm hit
+    96,768 tokens). accept_probe c1: prose 45.0 (+0.7%), code 77.3 (+2.0%), json 95.2
+    (−1.1%) vs Phase E. conc_bench full ladder within −2.3%…+3.8% of Phase E (c16
+    190.6/282.4/316.8 vs 192.6/283.2/322.3), U+FFFD 0 everywhere, json TTFT still
+    0.47/0.58 s at c8/c16. **The lane switch is clean and the Phase-E transport numbers
+    reproduce.** Raw: `bench-results/20261010-t2-switchback/`.
+  - **T3a — `DEVSELECT_BUILD_FAILED` RECURS: watch item stays OPEN.** Fresh boot:
+    1× on rank 0 (ranks 1–3 clean) — same signature as the Phase-E boot (which showed
+    ×2 on r0): `glm_devselect.py:596 build` → `torch.cuda.graph capture_end` →
+    `AcceleratorError: CUDA error: invalid argument`, caught by the overlay, decode
+    continues on the dev-0 fallback; benches unaffected. Unknown whether it predates
+    Phase E (the staged-boot containers were removed before log comparison); it is
+    reproducible at boot on rank 0 — investigate the devselect pool/capture order
+    separately from transport work.
+  - **T3b — prefix_scan cold-cold drift: CLOSED (no flag).** Fresh 0.0517 vs Phase E
+    0.1367 (limits differ per run: 0.0776 vs 0.205 — the tool computes its own limit
+    from the run's spread); trending AWAY from the limit, treat the Phase-E 0.1367 as
+    first-boot-of-the-lib variance, not a trend.
+  - Branch does NOT merge yet — explicit owner gate (T1 PASS + T2 PASS + T3 recorded
+    are met; the merge itself is the owner's call).
 - **2026-10-10 — PHASE E COMPLETE: serving on the full four-PF NCCL contract.** The
   staged 2-PF transport (previous entry) is replaced by the real four-PF build; both
   staged-transport site mods to `upstream/scripts/transport.sh` are REVERTED — the

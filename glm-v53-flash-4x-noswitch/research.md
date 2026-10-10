@@ -184,8 +184,87 @@ All of `noswitch-prep/` is site-owned, not upstream-owned:
 
 ## 5. Changelog
 
-- **2026-10-10 — Phase-E cross-lane adoption, prepared on the sibling branch (UNTESTED
-  here until the gated bring-up; do not treat as validated until then).** Three coupled
+- **2026-10-10 — T1 four-PF bring-up COMPLETE (the gated cross-lane boot): PASS after
+  two fast, diagnosed failures + one engine-level finding.** All work on branch
+  `glm-v53-flash-nvfp4-4x-noswitch` (per the cross-lane handoff; the FP8 node checkout
+  picks this branch up at the lane switch).
+  - **Failure #1 — launcher GID preflight (fixed: site fix #7, `7844258`).** First
+    `tp4ctl up` with the coupled flip died before Docker on every rank:
+    `NCCL HCA/GID selection invalid: roceP2p1s0f0/1: no usable automatic IPv4-mapped
+    RoCE v2 fabric GID` (same for the P2 f1 device). Root cause:
+    `scripts/nccl_gid_check.py` hard-coded the addressed-netdev allowlist to the FIRST
+    TWO `FABRIC_IFACES` entries (upstream 2-PF contract) — the P2-view HCAs could never
+    pass. Fix: allowlist = first `len(hcas)` entries (N=2 reproduces upstream
+    byte-for-byte; N=4 admits the P2 views). Re-verified on spark-0f0b: 4-PF PASS
+    (GID 3 on all four HCAs, each mapped to its own netdev/address), 2-PF control PASS.
+    **Also found that attempt: the stale-mirror gotcha has a second layer — `tp4ctl`/
+    the launcher read the DEPLOYED `~/.local/tp4/cluster.env`, not the repo checkout.
+    After any repo config change run `scripts/deploy.sh` (from the HEAD node — the
+    workstation run hits the Windows python3 stub) before any boot.**
+  - **Failure #2 — listener contract at ncclCommInitRank (fixed: coupled-edit fix,
+    `253ae8f`).** Second boot failed ~30 s after distributed init on rank 0:
+    `NCCL WARN TP4 listener contract: wrong listener count` → worker
+    `RuntimeError: NCCL error: invalid usage` → engine init failed, container exited 1.
+    Root cause: the four-PF lib's listener publishes the legacy TWO-GID handle unless
+    `NCCL_IB_EXTENDED_IPV4_GIDS=1` (the NVFP4 render always sets it; this launcher
+    never did). Fix: added `-e NCCL_IB_EXTENDED_IPV4_GIDS=1` and
+    `-e NCCL_IB_PRESERVE_PCI_DOMAIN=1` (the NVFP4-validated PCI-root-preserving
+    profile) to the `EXTRA_DOCKER_ENV` 4-PF append in `cluster.env` (the rollback line
+    stays "delete the whole append"). Docker logs captured BEFORE teardown per the
+    README rule.
+  - **PASS boot (third attempt):** container env verified live — 4-PF HCA,
+    `MERGE_NICS=0`, `SWITCHLESS_RING_ONLY=1`, `EXTENDED_IPV4_GIDS=1`,
+    `PRESERVE_PCI_DOMAIN=1`, `LD_PRELOAD` mounted from `~/.local/lib/nccl-patched-4pf`
+    (8de68def…), zero NCCL WARN lines, engine past `ncclCommInitRank` (attempt #2's
+    failure point), weight load 186 s, E36 ready, `/health` 200 (max_model_len 262,144).
+    The lib's listener contract passing IS the four-PF admission proof ("wrong listener
+    count" is its hard gate).
+  - **Functional gates:** chat gate "Rome" PASS; tool gate `auto` →
+    `get_weather({"city": "Milan"})` PASS; corruption probe 0 U+FFFD (emoji + 海洋
+    intact); forced `tool_choice:"required"` with `enable_thinking:false` → clean
+    `get_weather({"city": "Tokyo"})` PASS.
+  - **ENGINE-LEVEL FINDING (not transport): `tool_choice:"required"` WITH thinking
+    enabled kills the engine.** The first required probe (default thinking) died on the
+    first scheduled spec-decode step: `structured_outputs.py apply_grammar_bitmask
+    assert num_masks == len(mapping)` → EngineDeadError → /health 000. `tp4ctl restart`
+    recovered; required+thinking-off passes (above); auto+thinking passes. The crash
+    path is vLLM grammar-bitmask × spec-decode scheduling — zero NCCL involvement — and
+    the TC-45 structural-tag override is active. Almost certainly pre-existing on the
+    E35/E36 stack (the thinking-on required combination may not have been exercised
+    since those promotions; the documented TC-45 gate uses thinking-off or auto), but
+    NOT A/B-verified — flagged for the owner as a separate bug; a rollback-config boot
+    could isolate it, though the mechanics make a transport cause implausible.
+  - **check-f0.py / verify-node.sh FAIL — explained, expected:** both compare against
+    the frozen E36 identity whose NCCL staging SHA is `afe5f486…`; with `NCCL_DIR` at
+    the four-PF lib they fail exactly the NCCL rows ("patched NCCL sha FAIL 8de68def…
+    expected afe5f486…" ×4 + "patched NCCL not loaded by GPU worker" preload-pattern
+    detection). 152 PASS / 5 FAIL / 4 WARN; fabric-check 8/8 PASS. The identity delta
+    is the intended change; refreshing the frozen baseline (or dual-lib-aware checks)
+    is a follow-up for the owner.
+  - **deploy-host.sh --check DRIFT ×8 (orthogonal):** `/etc/netplan/40-cx7.yaml`
+    (comment-header-only diff — the live file carries the NVFP4 Phase-E header;
+    `verify-fabric-p2.sh`'s comment-stripped compare PASSES; do NOT re-deploy netplan
+    while serving) and `/etc/default/grub.d/zz-tp4-perf.cfg` (unrelated to this work,
+    likely pre-existing).
+  - **Bench (measurement caveat recorded): `bench_recipe.py`'s boot-log gate counts the
+    benign vLLM `usage_lib`/py-cpuinfo background-thread traceback that fires on every
+    boot of this build and refuses to bench. Ran a SCRATCH copy (node /tmp, not repo)
+    whose gate whitelists only that traceback (real tracebacks still block). Results
+    (`noswitch-prep/benchmarks-fp8-4pf/`, tier 1, temp 0): c1_prose_short 94.4 tok/s
+    (TTFT 0.50 s), c1_code_short 90.3, c1_prose_medium 53.9, c1_prose_long 27.3,
+    **c4_prose_short 170.2 tok/s** (per-stream TTFT 1.11–1.27 s), spec acceptance
+    0.981, KV pool 1,194,033 tokens. `pmu_replay_long` FAILs by lane design (no
+    `--prefix-match-unit`; `cached_tokens` unreported — pre-existing, not transport).
+    **No same-config 2-PF baseline exists for the E36 era** (2026-09-23 glmAB numbers
+    are a different bench script + E21 config); the clean transport A/B on this lane
+    would need one rollback-config boot + one re-adoption boot — owner decision,
+    recommended before treating the bench comparison as conclusive. The T1 hypothesis
+    (prefill-phase TTFT improves) is supported directionally by the NVFP4 Phase-E
+    profile (json TTFT 6.5 → 0.5 s) but NOT re-measured here against a same-config
+    control. The client-side 18.9 s mean TTFT (2026-09-28 agent traffic) is a different
+    measurement (100K-token turn bodies through the proxy), not comparable to bench cells.
+- **2026-10-10 — Phase-E cross-lane adoption, prepared on the sibling branch
+  (**status: VALIDATED — see the T1 entry above, three-boot sequence recorded there**).** Three coupled
   pieces, all landing in the same commit on `glm-v53-flash-nvfp4-4x-noswitch` (worktree
   stays on the per-lane branch rule: the FP8 node checkout picks this up at the next
   switch):

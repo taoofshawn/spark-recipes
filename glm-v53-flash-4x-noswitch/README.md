@@ -220,6 +220,9 @@ OOM (`NV_ERR_NO_MEMORY`), or a rank container exiting while others stay up.
 
 ## Invariants — do not break
 
+> Switching to/from the NVFP4 lane? **Runbook: [`../LANE-SWITCHING.md`](../LANE-SWITCHING.md)**
+> (preflight, both directions, verification, gotchas).
+
 - **One model at a time.** All recipes use every reserved GPU; run `tp4ctl down`
   before starting anything else.
 - **Never hand-edit generated files**: per-node netplan/iptables (`upstream/scripts/node/etc/*`,

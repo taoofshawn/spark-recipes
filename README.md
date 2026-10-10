@@ -5,6 +5,7 @@
 - in-progress recipes will be in branches
 
 # links:
+- [lane switching runbook](LANE-SWITCHING.md): switching the GLM-5.3-Flash FP8/NVFP4 lanes on the 4-node switchless ring (start here for that task)
 - [discussion forum](https://forums.developer.nvidia.com/c/accelerated-computing/dgx-spark-gb10/719): the source for most/all of this information
 - [dgx spark hardware](https://marketplace.nvidia.com/en-us/developer/dgx-spark/)
 - [connectx-7 cable](https://docs.nvidia.com/sync/latest/cluster-assistant.html#check-network-performance) : model `NJAAKK-N911`- interconnect 2 sparks

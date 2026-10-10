@@ -1,7 +1,7 @@
 
 # collection of recipes and scripts for starting models on a 4-node dgx spark switchless ring
 
-- active lanes: `glm-v53-flash-4x-noswitch` (FP8) and `glm-v53-flash-nvfp4-4x-noswitch` (NVFP4) — switching: [LANE-SWITCHING.md](LANE-SWITCHING.md)
+- active lanes: `glm-v53-flash-fp8-tp4-switchless` (FP8) and `glm-v53-flash-nvfp4-tp4-switchless` (NVFP4) — switching: [LANE-SWITCHING.md](LANE-SWITCHING.md)
 - everything else is archived under `.archived/` (2-node era); in-progress work on branches
 
 # links:

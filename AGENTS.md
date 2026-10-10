@@ -14,8 +14,8 @@ decoding:
 
 | recipe | weights | context / KV | control | upstream |
 |---|---|---|---|---|
-| `glm-v53-flash-nvfp4-4x-noswitch` | stock `nvidia/GLM-5.3-Flash-NVFP4` @ `09b04e5e` (zero weight mod — the lane's premise) | 1M / 20 GiB/rank pin (~3.25M tokens) | `./start.sh` | vendored knapcio `770d115` |
-| `glm-v53-flash-4x-noswitch` | zai FP8 + the E36 conversion stack | 262K / 14 GiB pool (1,194,033 tokens) | `tp4ctl` | pinned jnardiello `ed365a6` |
+| `glm-v53-flash-nvfp4-tp4-switchless` | stock `nvidia/GLM-5.3-Flash-NVFP4` @ `09b04e5e` (zero weight mod — the lane's premise) | 1M / 20 GiB/rank pin (~3.25M tokens) | `./start.sh` | vendored knapcio `770d115` |
+| `glm-v53-flash-fp8-tp4-switchless` | zai FP8 + the E36 conversion stack | 262K / 14 GiB pool (1,194,033 tokens) | `tp4ctl` | pinned jnardiello `ed365a6` |
 
 Both serve `glm-5.3-flash` on `:8000` behind the model-name proxy; clients never
 change at switch time. **Switch procedure: [`LANE-SWITCHING.md`](LANE-SWITCHING.md)**

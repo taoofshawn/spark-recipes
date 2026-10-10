@@ -1,8 +1,8 @@
 ---
 name: update-recipe
 description: >-
-  Use when reviewing one of the two active 4x-switchless recipes (glm-v53-flash-4x-noswitch
-  FP8, glm-v53-flash-nvfp4-4x-noswitch NVFP4) against its upstream sources for updates,
+  Use when reviewing one of the two active 4x-switchless recipes (glm-v53-flash-fp8-tp4-switchless
+  FP8, glm-v53-flash-nvfp4-tp4-switchless NVFP4) against its upstream sources for updates,
   fixes, or improvements — checking the NVIDIA forum, the upstream GitHub repos
   (knapcio, jnardiello, tonyd2wild), HF model revisions, and other sources — then
   committing and pushing on the working branch. Triggers: "review recipe <name> for
@@ -28,8 +28,8 @@ the recipe up on the sparks, restart containers, or verify a live endpoint — t
 
 | recipe | upstream | pin (verify at review time) |
 |---|---|---|
-| `glm-v53-flash-nvfp4-4x-noswitch` | `github.com/knapcio/GLM-5.3-Flash-4x-DGX-Spark-TP4` (vendored, detached — see its `upstream/VENDORED-AT.md`) | `770d115` (2026-09-29 tip at last review) |
-| `glm-v53-flash-4x-noswitch` | `github.com/jnardiello/GLM-5.3-Flash-FP8-4-DGX-Spark-Switchless` (pinned checkout, its `upstream/VENDORED-AT.md` carries site mods to re-apply on refresh) | `ed365a6` (E36) |
+| `glm-v53-flash-nvfp4-tp4-switchless` | `github.com/knapcio/GLM-5.3-Flash-4x-DGX-Spark-TP4` (vendored, detached — see its `upstream/VENDORED-AT.md`) | `770d115` (2026-09-29 tip at last review) |
+| `glm-v53-flash-fp8-tp4-switchless` | `github.com/jnardiello/GLM-5.3-Flash-FP8-4-DGX-Spark-Switchless` (pinned checkout, its `upstream/VENDORED-AT.md` carries site mods to re-apply on refresh) | `ed365a6` (E36) |
 
 Sibling repos worth checking (the GLM serving family): `tonyd2wild/GLM-5.3-Flash-NVFP4-1M-KV-4x-DGX-Spark`,
 `tonyd2wild/GLM-5.3-Flash-NVFP4-DFlash2-2x-DGX-Spark`, plus kindlingai/eugr/technigma

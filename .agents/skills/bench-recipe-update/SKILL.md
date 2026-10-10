@@ -46,7 +46,7 @@ and the verdict is the stopping point.
 
 ## Tooling per lane
 
-- **NVFP4 lane** (`glm-v53-flash-nvfp4-4x-noswitch/upstream/bench/`):
+- **NVFP4 lane** (`glm-v53-flash-nvfp4-tp4-switchless/upstream/bench/`):
   `accept_probe` (c1 acceptance + ms/step + tok/s per prompt type), `conc_bench`
   (the concurrency ladder — the discriminator), `prefix_scan.py` (correctness gate —
   run it too; a bench on a corrupting boot is meaningless). Flags: `--base` WITHOUT

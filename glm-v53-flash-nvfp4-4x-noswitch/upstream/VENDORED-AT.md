@@ -17,12 +17,22 @@
 | `VENDORED-AT.md` | this file |
 | `profiles/stock-nvfp4.env` | site-added serving profile: sources upstream `profiles/current.env`, then strips the lossless8/fp8-drafter-only switches and applies the shawndo site serving values (1M ctx, 20 GiB/rank KV pin, port 8000, `glm-5.3-flash`) |
 
-**Zero upstream-file modifications by design** — this recipe's premise is the stock
-`nvidia/GLM-5.3-Flash-NVFP4` checkpoint with no conversion step, so unlike the FP8
-4x-noswitch recipe there is no lossless8/drafter-fp8 build to wire in. The site `.env`
-lives OUTSIDE upstream (see `../site/env.switchless`) because upstream's `.gitignore`
-ignores `.env`; bring-up copies it to `upstream/.env` on the head (ignored file, node
-tree stays pristine).
+The recipe's premise is the stock `nvidia/GLM-5.3-Flash-NVFP4` checkpoint with no
+conversion step, so unlike the FP8 4x-noswitch recipe there is no lossless8/drafter-fp8
+build to wire in. The site `.env` lives OUTSIDE upstream (see `../site/env.switchless`)
+because upstream's `.gitignore` ignores `.env`; bring-up copies it to `upstream/.env` on
+the head (ignored file, node tree stays pristine).
+
+### Site modifications (upstream files changed — MUST be re-applied on re-vendor)
+
+| file | mod | why | how to re-apply |
+|---|---|---|---|
+| `scripts/transport.sh` | one line added to the `switchless` branch of `transport_args`: `-e NCCL_SKIP_TREE_CONNECT=1` (marked with a `SITE MOD` comment block) | The site NCCL build (`~/.local/lib/nccl-patched`, SHA `afe5f486…`, the josephdrose/SparkRing patch family proven by the FP8 recipe) implements ring-only tree/PAT skipping under `NCCL_SKIP_TREE_CONNECT`, not the four-PF build's `NCCL_SWITCHLESS_RING_ONLY`. Without it, NCCL init on a switchless ring attempts tree connects that cannot succeed (the FP8 launcher always sets this env). `transport.sh` rejects `NCCL_*` keys in `EXTRA_ENV`, so there is no non-mod way to pass it. | After re-vendoring, add `-e NCCL_SKIP_TREE_CONNECT=1` to the `printf` in the `switchless` branch of `transport_args` (switchless case only; the switched render stays byte-identical to upstream). |
+
+The Phase-E four-PF NCCL upgrade (research.md) supersedes this mod: once the rebuilt
+four-PF library is pinned, `NCCL_SWITCHLESS_RING_ONLY` works natively and this site line
+becomes redundant (drop it then — othexmr's docs call the alias-only tree-skip bypass
+weaker than the four-PF build's strict listener admission).
 
 ## Update procedure
 

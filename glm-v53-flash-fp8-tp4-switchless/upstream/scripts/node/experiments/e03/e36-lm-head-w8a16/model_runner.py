@@ -2398,6 +2398,15 @@ def _e35_execute_model(self, scheduler_output, *args, **kwargs):
         # never re-slice a later step's grammar bitmask.
         self._e35_grammar_trim = None
         return _e35_original_execute_model(self, scheduler_output, *args, **kwargs)
+    # SITE GRAMMAR-FIX (fp8 recipe, 2026-10-10): never trim a grammar step. The
+    # engine's grammar bitmask AND FSM advancement are both computed for the
+    # full draft plan; a worker-side trim leaves the bonus-row mask in a
+    # too-advanced FSM state, so the sampled token can be rejected by the FSM
+    # ("Failed to advance FSM ... Terminating request") even with the row-count
+    # re-slice in place. Grammar steps always verify the full K_HI drafts.
+    if getattr(scheduler_output, "has_structured_output_requests", False):
+        self._e35_grammar_trim = None
+        return _e35_original_execute_model(self, scheduler_output, *args, **kwargs)
     state = self.__dict__.get("_e35_state")
     if state is None:
         try:

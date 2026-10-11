@@ -217,11 +217,15 @@ All of `noswitch-prep/` is site-owned, not upstream-owned:
     (prefill-cache-trim/gpu_worker.py, prefill-step-cap/scheduler.py,
     e36-lm-head-w8a16/model_runner.py) after
     `docs/operational-identities/2026-09-30-e36-lm-head.json` froze their hashes
-    (e.g. model_runner: pinned d8fbfa51…, actual 598f9fd7…). The LIVE cluster check is
-    unaffected (it hashes the DEPLOYED files, which the crash-fix rollout updated together
-    with the mounts — the 2026-10-10 validation gates ran against the live stack). The
-    workstation-side identity record needs a refresh entry for the three files — owner
-    decision, separate item, do NOT auto-remeasure (same rule as the 2026-09-29 note).
+    (e.g. model_runner: pinned d8fbfa51…, actual 598f9fd7…). The deployed files MATCH the
+    working tree (verified live on the head node: `~/.local/tp4/experiments/e03/…` hashes
+    598f9fd7/ae2bdaf5/c5d8b99f = workstation) — the crash-fix rollout deployed correctly.
+    But `check-f0.py` in operational-identity mode hashes the WORKING-TREE copies against
+    the frozen record, so the live check currently reports exactly that one problem
+    (verified live 2026-10-11; the e36 BASELINE mode's 24 problems are frozen historical
+    identity drift — that baseline predates the later site additions, needs no action).
+    Refreshing the identity record for the three files is an owner decision (separate
+    item, do NOT auto-remeasure — same rule as the 2026-09-29 note).
 - **2026-10-11 — Clean transport A/B closed as MOOT (owner decision: 4-PF is permanent).**
   The A/B's only remaining purpose after the engine-crash root cause landed (2026-10-10 entry)
   was attributing this lane's bench numbers to the transport change; with the owner committing

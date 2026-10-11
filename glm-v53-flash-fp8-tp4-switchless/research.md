@@ -184,6 +184,33 @@ All of `noswitch-prep/` is site-owned, not upstream-owned:
 
 ## 5. Changelog
 
+- **2026-10-11 — OOM crash of the running lane + restart (no lane/config change).**
+  - **What happened:** while the prior agent session ran its E20/GRAMMAR diagnostic probe
+    campaign (`/tmp/probe*.py` on the head), `probe45.py` deliberately near-exhausted VRAM
+    ("OO post-pressure" test: `torch.empty(64Mi×…, device='cuda')` in a loop until the CUDA
+    allocation fails, then a conditional-node graph capture). On GB10, GPU memory is unified
+    host LPDDR; with the model's ~101.6 GiB CUDA footprint resident there was no headroom.
+    Timeline (UTC): 19:29:55 + 19:30:07Z earlier probe-container iterations died; 19:34:21 →
+    19:36:55Z rank-0 worker's 1 Hz `E20_MEMORY_PROBE` thread stalled; 19:36:27Z kernel
+    `docker invoked oom-killer` `CONSTRAINT_NONE` (host-wide); 19:36:47–19:37:02Z NVRM
+    `NV_ERR_NO_MEMORY` @ `_memdescAllocInternal`/`system_mem.c`; 19:36:55Z the OOM killer
+    killed `vllm` (pid 2625577) among pipewire/dbus/wireplumber; 19:36:58Z
+    `glm53_fp8_dflash_tp4` died `OOMKilled=true` exit 137. Host had `Memory=0` (no cgroup
+    limit); GPU allocator itself was healthy to the end (`num_ooms=0`).
+  - **Root cause:** deliberate VRAM exhaustion by the probe on a memory-unified device —
+    self-inflicted by the probe campaign, NOT a lane/engine/fabric fault.
+  - **Restart:** `verify-fabric-p2.sh` ALL CHECKS PASS → `tp4ctl down` (all 4 ranks, hung
+    workers 1–3 cleared) → `tp4ctl up`. Clean boot: 62/62 shards loaded, zero NCCL WARN,
+    `/health` 200 at ~20:05Z, `/v1/models` `glm-5.3-flash` `max_model_len` 262144.
+  - **Gates:** corruption probe exact ("echo test 🚀 海函数 ✅", 0× U+FFFD); forced
+    `tool_choice:"required"` returned a structured `get_weather{"city":"Tokyo"}` call
+    (thinking-on + required path confirmed working post-fix). No bench run — cold-boot
+    JIT warm-up rule (~30 min) applies before any performance numbers.
+  - **Watch item:** the probe scripts are part of the live GRAMMAR-DIAG/E20 instrumentation
+    still compiled into the deployed overrides — any future probe that allocates GPU memory
+    must run against a torn-down lane or stay strictly within a pre-reserved ballast budget;
+    a repeat of probe45-style near-exhaustion while serving WILL kill the lane the same way.
+
 - **2026-10-11 — Dual-lib NCCL SHA manifest: check-f0.py / verify-node.sh gate repaired
   (VENDORED-AT mod 12; closes the T1 entry's "check-f0.py / verify-node.sh FAIL — explained,
   expected" follow-up).**

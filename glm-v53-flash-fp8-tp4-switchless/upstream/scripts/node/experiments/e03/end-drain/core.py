@@ -742,6 +742,15 @@ class EngineCore:
                     future = self.model_executor.sample_tokens(
                         grammar_output, non_block=True
                     )
+                    # SITE GRAMMAR-DIAG: immediate-path visibility.
+                    if os.environ.get("VLLM_GRAMMAR_DIAG") == "1":
+                        logger.info(
+                            "GRAMMAR-DIAG-CORE immediate step spec_lens=%s",
+                            {
+                                k: len(v)
+                                for k, v in scheduler_output.scheduled_spec_decode_tokens.items()
+                            },
+                        )
                 else:
                     # We need to defer sampling until we have processed the model output
                     # from the prior step.
@@ -810,6 +819,17 @@ class EngineCore:
             grammar_output = self.scheduler.get_grammar_bitmask(
                 deferred_scheduler_output
             )
+            # SITE GRAMMAR-DIAG: deferred-path visibility (spec lens AFTER the
+            # draft-id validation rewrite, i.e. the dict the bitmask is built
+            # from, vs the dict the worker's exec saw).
+            if os.environ.get("VLLM_GRAMMAR_DIAG") == "1":
+                logger.info(
+                    "GRAMMAR-DIAG-CORE deferred step spec_lens=%s",
+                    {
+                        k: len(v)
+                        for k, v in deferred_scheduler_output.scheduled_spec_decode_tokens.items()
+                    },
+                )
             future = self.model_executor.sample_tokens(grammar_output, non_block=True)
             batch_queue.appendleft((future, deferred_scheduler_output, exec_future))
 

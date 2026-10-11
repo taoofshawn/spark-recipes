@@ -1173,6 +1173,14 @@ class GPUModelRunner(LoRAModelRunnerMixin):
 
         # Get the number of draft tokens for each request.
         draft_tokens = scheduler_output.scheduled_spec_decode_tokens
+        # SITE GRAMMAR-DIAG: worker's dispatch-time view of the scheduled spec
+        # dict (pairs with GRAMMAR-DIAG-SCHED to expose step/dict divergence).
+        if _e36_os.environ.get("VLLM_GRAMMAR_DIAG") == "1":
+            logger.info(
+                "GRAMMAR-DIAG-EXEC dispatch reqs=%s spec_lens=%s",
+                req_ids,
+                {k: len(v) for k, v in draft_tokens.items()},
+            )
         num_draft_tokens_per_req = None
         if not draft_tokens:
             # No draft token scheduled (common case).

@@ -1052,6 +1052,17 @@ class Scheduler(SchedulerInterface):
                     if len(spec_token_ids) > num_scheduled_spec_tokens:
                         spec_token_ids = spec_token_ids[:num_scheduled_spec_tokens]
                     scheduled_spec_decode_tokens[request.request_id] = spec_token_ids
+                    # SITE GRAMMAR-DIAG: dict construction view (schedule-loop
+                    # entry, pre-dispatch).
+                    if os.environ.get("VLLM_GRAMMAR_DIAG") == "1":
+                        logger.info(
+                            "GRAMMAR-DIAG-SCHED-BUILD req=%s len=%d "
+                            "scheduled_spec=%d spec_field_len=%d",
+                            request.request_id,
+                            len(spec_token_ids),
+                            num_scheduled_spec_tokens,
+                            len(request.spec_token_ids),
+                        )
 
                 # New spec tokens will be set in `update_draft_token_ids` before the
                 # next step when applicable.
@@ -2891,6 +2902,15 @@ class Scheduler(SchedulerInterface):
             if num_invalid_tokens:
                 spec_token_ids.extend([-1] * num_invalid_tokens)
                 num_invalid_spec_tokens[req_id] = num_invalid_tokens
+            # SITE GRAMMAR-DIAG: draft-id validation rewrite view.
+            if os.environ.get("VLLM_GRAMMAR_DIAG") == "1":
+                logger.info(
+                    "GRAMMAR-DIAG-UPD req=%s orig=%d final=%d invalid=%d",
+                    req_id,
+                    orig_num_spec_tokens,
+                    len(spec_token_ids),
+                    num_invalid_tokens,
+                )
 
             sched_spec_tokens[req_id] = spec_token_ids
 

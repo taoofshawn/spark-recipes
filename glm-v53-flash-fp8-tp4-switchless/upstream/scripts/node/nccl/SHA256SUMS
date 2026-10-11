@@ -1,1 +1,2 @@
-afe5f48626284eae89988516e450c7f20cc303904ba4b7083b88aa3ca1e9b85f  libnccl.so.2
+afe5f48626284eae89988516e450c7f20cc303904ba4b7083b88aa3ca1e9b85f  nccl-patched/libnccl.so.2
+8de68def30bcde20fabded468bd60f0df82ea12d3ead02d5120c7feda7a41a87  nccl-patched-4pf/libnccl.so.2

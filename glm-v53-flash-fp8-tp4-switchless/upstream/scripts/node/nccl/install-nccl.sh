@@ -92,7 +92,11 @@ done
 
 if [ -z "$EXPECT_SHA" ]; then
   [ -f "$SUMS_FILE" ] || die "SHA256SUMS missing: $SUMS_FILE (pass --expect-sha)"
-  EXPECT_SHA=$(awk '$2 == "libnccl.so.2" {print $1}' "$SUMS_FILE")
+  # Dual-lib manifest: lines are '<sha>  <staging-dir>/libnccl.so.2'. Select by NCCL_DIR's
+  # basename (matches verify-node.sh's expect_sha); the legacy 2-PF line stays for rollback.
+  DEST_BASE=$NCCL_DIR; DEST_BASE=${DEST_BASE%/}; DEST_BASE=${DEST_BASE##*/}
+  EXPECT_SHA=$(awk -v d="$DEST_BASE" '$2 == d "/libnccl.so.2" {print $1}' "$SUMS_FILE")
+  [ -n "$EXPECT_SHA" ] || die "no '$DEST_BASE/libnccl.so.2' line in $SUMS_FILE for NCCL_DIR='$NCCL_DIR'"
 fi
 [[ "$EXPECT_SHA" =~ ^[0-9a-f]{64}$ ]] \
   || usage_die "the expected sha must be 64 lowercase hex chars (got: '${EXPECT_SHA:-<none>}')"

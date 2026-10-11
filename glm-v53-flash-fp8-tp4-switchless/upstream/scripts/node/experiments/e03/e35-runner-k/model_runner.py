@@ -1386,6 +1386,18 @@ class GPUModelRunner(LoRAModelRunnerMixin):
         input_batch: InputBatch,
         grammar_output: GrammarOutput | None,
     ) -> tuple[SamplerOutput, torch.Tensor, torch.Tensor]:
+        # SITE GRAMMAR-DIAG (fp8 recipe, 2026-10-10): pre-shard row accounting for
+        # the grammar bitmask/mapping crash; only with VLLM_GRAMMAR_DIAG=1.
+        if grammar_output is not None and _e35_os.environ.get("VLLM_GRAMMAR_DIAG") == "1":
+            logger.info(
+                "GRAMMAR-DIAG-MR pre-shard num_masks=%d n_grammar=%s "
+                "ndpr=%s cu_num_logits_np=%s",
+                grammar_output.grammar_bitmask.shape[0],
+                grammar_output.structured_output_request_ids,
+                None if input_batch.num_draft_tokens_per_req is None
+                else input_batch.num_draft_tokens_per_req.tolist(),
+                input_batch.cu_num_logits_np.tolist(),
+            )
         shard_metadata = None
         global_input_batch = input_batch
         if self.batch_sharder is not None:

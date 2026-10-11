@@ -129,7 +129,7 @@ change at switch time. **Switch procedure: [`LANE-SWITCHING.md`](LANE-SWITCHING.
 | FP8 launcher GID preflight rejects a P2 HCA | stale deployed config/gid-checker allowlist (site fix #7) — redeploy from the head |
 | FP8 boots old config after a repo change | tp4ctl reads the DEPLOYED `~/.local/tp4/cluster.env` — `deploy.sh` from the head |
 | container name/overlay path refused | stopped containers from a previous `stop` not removed |
-| `DEVSELECT_BUILD_FAILED` ×1–2 at NVFP4 boot (rank 0) | known watch item — overlay catches it; record, don't block |
+| `DEVSELECT_BUILD_FAILED` ×1 at NVFP4 boot (EVERY rank, ~20:22:30 boot-moment) | RESOLVED 2026-10-11: upstream platform limitation — stream-captured conditional-node CUDA-graph parents reject NCCL-collective child graphs at `capture_end` (`cudaErrorInvalidValue`; reproducible with stock NCCL, mode/registration-independent). Device-side select NEVER arms on this driver stack; host fallback is the validated baseline. Zero action — expected boot line. Re-verify only if the kernel/driver pin changes (nvfp4 research.md 2026-10-11 entry). |
 | `tool_choice:"required"` + thinking-on killed the engine (grammar-bitmask assert) | FIXED 2026-10-10: the E35 runner-k worker-side draft trim desynced the grammar bitmask (8 rows) from the trimmed logit mapping (4) — grammar steps no longer trim + the worker re-slices the bitmask; thinking-on + required is now a supported combination (fp8 research.md 2026-10-10 entry) |
 | ring decode far below switched fleets | expected — c1 is latency-bound; compare against the lane's own bench history only |
 | bench right after boot reads ~30% slow | JIT/TRITON warm-up — wait ~30 min, never bench cold |

@@ -112,6 +112,76 @@ measured at bring-up, not assumed.
 
 ## Changelog
 
+- **2026-10-11 — T3a ROOT-CAUSED: `DEVSELECT_BUILD_FAILED` is an upstream platform
+  limitation, not a lane/overlay bug. Watch item CLOSED (understood; no fix reachable on
+  this stack).** Diagnosis-only session (handoff
+  `.research/handoffs/01-nvfp4-devselect-rank0.md`); FP8 was serving → log capture +
+  standalone ring probes, no lane restart, no overlay/weight touch. Probe scripts +
+  raw logs archived under this recipe's `.research/` (untracked); node scratch cleaned.
+  - **Correction of the T3a / Phase-E record: the failure is NOT rank-0-only.** The
+    preserved 2026-10-10 20:22 boot logs (T2 boot; all four exited containers still
+    inspectable) show `DEVSELECT_BUILD_FAILED` exactly **once on EVERY rank**, all within
+    40 ms (r0 20:22:30.297Z, r2 .320, r3 .332, r1 .336), byte-identical tracebacks. The
+    "ranks 1–3 clean" observation was a worker-log gap. It therefore predates Phase E
+    trivially: the device-select feature has NEVER armed on this driver stack.
+  - **Failure point (exact, rank 0):**
+    ```
+    glm-devselect: target graph M=8 node types {'Kernel: 0>': 1594, 'WaitEvent: 6>': 2, 'Host: 3>': 101, 'EventRecord: 7>': 202, 'Memcpy: 1>': 17}; int-ws extents {2: 856064, ...}; GDN qsl buffers 4; indexer builders 1; slot groups 7; ctx groups 1
+    glm-devselect: DEVSELECT_BUILD_FAILED AcceleratorError: CUDA error: invalid argument
+      File "/overlay/overlay/glm_devselect.py", line 1458, in capture_model   -> build(self)
+      File "/overlay/overlay/glm_devselect.py", line 596, in build            -> with torch.cuda.graph(parent, pool=mgr.pool):
+      File "torch/cuda/graphs.py", line 477, in __exit__                       -> self.cuda_graph.capture_end()
+    torch.AcceleratorError: CUDA error: invalid argument
+    ```
+    The whole body (select Triton kernel + 7× begin_capture_to_if_node / fixups /
+    child-graph embed / end_capture) ran without a Python exception; the failure is
+    strictly at `capture_end`. Consequence per rank: `_D.failed` set → `eligible()`
+    False forever → the parent never launches (`glm-draft-trunc: v0 steps N: … dev 0`
+    at every status line; devselect TIMELINE shows only `v0H` = host-chosen graph,
+    20k steps, zero parent launches). Decode continues on the proven host path;
+    benches unaffected — the fallback IS the lane's validated baseline.
+  - **Root cause (isolated on the live 4-node ring with the lane DOWN, 4-rank torchrun
+    in the lane image with the exact NCCL-4pf contract + `LD_PRELOAD` of
+    `libnccl.so.2.30.7`; tiny tensors):** a stream-captured CUDA-graph **parent holding
+    conditional IF nodes rejects a child-graph node whose graph contains NCCL
+    collectives** — `cudaStreamEndCapture` returns `cudaErrorInvalidValue` (= the boot
+    signature). Full matrix (all 4 ranks agree in every cell):
+    | case | result |
+    |---|---|
+    | plain parent + NCCL-child (embedded instantiated graph w/ all_reduce) | PASS |
+    | IF-parent, no child embed | PASS |
+    | IF-parent + NCCL-child — instantiated OR uninstantiated | **FAIL invalid argument** |
+    | IF-parent + NCCL-child captured direct in the body (no child node) | **FAIL** |
+    | IF-parent + D2D-only child (no collective) | PASS |
+    | IF-parent + NCCL-child under `capture_error_mode` global / thread_local / relaxed | FAIL in all three |
+    | same, with a concurrent allocating background thread | FAIL (noise-independent) |
+    | IF-parent + NCCL-child with NCCL graph registration env off (`NCCL_GRAPH_REGISTER=0`, `NCCL_CUDA_GRAPH_REGISTER=0`) | FAIL |
+    | **stock** torch-bundled NCCL 2.30.7, NET=Socket TCP, no 4pf lib: IF + NCCL-child | **FAIL identically** |
+    The stock-NCCL cell rules out our 4pf patch stack: the rejection is upstream —
+    CUDA 13.0 driver / NCCL 2.30.7 on GB10 — not config/env/transport. Note the earlier
+    probe-campaign OOM incident (owner record in the FP8 recipe's research.md,
+    2026-10-11) happened during the offline phase of this same campaign; probe45-style
+    VRAM exhaustion was the cause; every probe since ran within a few-MB budget.
+  - **Manual (non-capture) parent construction: dead end on CUDA 13.0.** CUDA 13 moved
+    conditional nodes to the handle API (`cudaGraphConditionalHandleCreate` +
+    `cudaConditionalNodeParams{handle, type, size}`); cuda-python 13.3.1 exposes **no
+    device-condition binding** (no `conditionData`/device-pointer field, no
+    `cudaGraphConditionalAddNode`), so `glm_devselect`'s premise — the IF condition is a
+    device-computed L written by the captured select kernel — cannot be expressed
+    without stream capture. Capture-time conditionals (torch `begin_capture_to_if_node`)
+    are the only binding path, and that path is what fails with NCCL children.
+  - **Decision: no fix lands.** No env/config knob exists (mode/registration/noise all
+    ruled out); a `glm_devselect.py` rewrite cannot express the semantics under CUDA
+    13.0; driver/CUDA are pinned by the NCCL contract. The overlay's catch-and-fallback
+    is working as designed and the fallback is the validated baseline — the ×1-per-rank
+    `DEVSELECT_BUILD_FAILED` line at boot is now EXPECTED and understood, zero action.
+  - **Re-verification protocol (when the kernel/driver pin ever changes):** boot the
+    lane normally; `docker logs glm53-nvfp4-r0 | grep DEVSELECT_BUILD_FAILED` — if the
+    line is GONE, the upstream limitation is fixed: confirm arming via
+    `glm-draft-trunc: v0 steps` status lines showing `dev` > 0 and devselect TIMELINE
+    rows `v0P` (parent ran), then bench. If still present, re-run the archived probes
+    (`.research/nccl_embed_probe*.py`) to re-classify.
+
 - **2026-10-10 — RECIPE RENAMED:** `glm-v53-flash-nvfp4-4x-noswitch` →
   `glm-v53-flash-nvfp4-tp4-switchless` (owner reorg; the FP8 sibling renamed to
   `glm-v53-flash-fp8-tp4-switchless` in the same commit). The working BRANCH keeps its
@@ -136,7 +206,10 @@ measured at bring-up, not assumed.
     190.6/282.4/316.8 vs 192.6/283.2/322.3), U+FFFD 0 everywhere, json TTFT still
     0.47/0.58 s at c8/c16. **The lane switch is clean and the Phase-E transport numbers
     reproduce.** Raw: `bench-results/20261010-t2-switchback/`.
-  - **T3a — `DEVSELECT_BUILD_FAILED` RECURS: watch item stays OPEN.** Fresh boot:
+  - **T3a — `DEVSELECT_BUILD_FAILED` RECURS: watch item stays OPEN.** (ROOT-CAUSED
+    2026-10-11, Changelog entry below: upstream platform limitation, all four ranks,
+    feature never armed on this driver stack — this entry's "ranks 1–3 clean" was a
+    worker-log observation gap.) Fresh boot:
     1× on rank 0 (ranks 1–3 clean) — same signature as the Phase-E boot (which showed
     ×2 on r0): `glm_devselect.py:596 build` → `torch.cuda.graph capture_end` →
     `AcceleratorError: CUDA error: invalid argument`, caught by the overlay, decode
@@ -211,7 +284,9 @@ measured at bring-up, not assumed.
     ~50 min after boot, after prefix_scan + accept traffic (fully warm).
   - **Watch item (new):** `glm-devselect: DEVSELECT_BUILD_FAILED` ×2 at boot (cuda graph
     `capture_end` invalid argument, caught by the overlay; decode continues with the
-    dev-0 fallback; benches unaffected). Unknown whether it predates Phase E (staged-boot
+    dev-0 fallback; benches unaffected). (ROOT-CAUSED 2026-10-11, Changelog below:
+    upstream platform limitation on every rank; the ×2-on-r0 reading was the same
+    worker-log gap.) Unknown whether it predates Phase E (staged-boot
     containers were removed before logs could be compared) — check on the next reboot.
   - Raw build/deploy trace: site patch GID line =
     `gids[i][12]!=10 || gids[i][13]!=10 || gids[i][14]<1 || gids[i][14]>4`;

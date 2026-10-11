@@ -184,6 +184,55 @@ All of `noswitch-prep/` is site-owned, not upstream-owned:
 
 ## 5. Changelog
 
+- **2026-10-11 — TTFT-stall attribution (handoff 04): the 09-28 80–160 s agent-tail is ENGINE-side — bounded-admission queueing under burst concurrency + ~100K-token chunked prefill + E31 barrier ticks. The proxy's "buffered to temporary file" is a same-second passthrough marker, exonerated with hard numbers. No fix prepared (proxy is not the cause).**
+  - Scope note: the 09-28 window's node logs and client logs are gone (both lane
+    containers recreated at today's 21:55/22:14 UTC boot; omp client logs start 10-09),
+    so the historical tail requests cannot be reconstructed per-request. Attribution is
+    by live measurement of the SAME traffic class (the 2026-10-11 session's own agent
+    turns, ~100K-token bodies through the model-name proxy) plus bounding arithmetic —
+    all passive SSH reads, zero restarts, lane untouched.
+  - Method: joined three server-side per-request signals on the head —
+    `TP4_ADMISSION_STATE` admit/acquire/release (arrival + slot), `GRAMMAR-DIAG-EXEC`
+    per-step dispatch (first appearance of a chatcmpl id = first schedule; first
+    `spec_lens>0` = decode start ≈ first token), and 10-s Engine ticks; proxy warn
+    events paired 1:1 by order with admit events (counts matched exactly, 112=112).
+    Scratch: `.research/ttft-20261011/` (parser + per-request CSV, untracked).
+  - **Proxy EXONERATED (the handoff's leading hypothesis, killed):** 112/112 requests
+    were buffered to a temp file — `client_body_buffer_size` is unset in the proxy
+    config (16 KB default) so every agent body exceeds it — but the warn→admit gap is
+    **0 s median AND 0 s max over all 112 requests**: vLLM ingests the spilled body the
+    same second it is written. With `proxy_request_buffering off` the temp file is
+    spillover under upstream backpressure, not a staging stall. Temp-dir I/O measured
+    **6.3 GB/s** (container overlay, 3.7 T disk 37% used) → worst-case 64 MB body
+    (`client_max_body_size`) ≈ 10 ms. A stage bounded at <1 s cannot produce 80–160 s
+    TTFTs. The warn is a MARKER of large turn bodies, not a cause of delay — and it is
+    a useful one: it fires 1:1 with big-body arrivals.
+  - **Engine-side serial ceiling (this session was fully serial: max active=1, max
+    queued=1, queue wait ≈ 0 s for everyone):** server TTFT (admit→decode-start) mean
+    8.7 s / med 6.5 s / p90 20 s / **max 25 s**; 74/112 ≤10 s, 38 in 10–30 s, 0 >30 s.
+    100% of TTFT is first-schedule→decode-start (prefill): ~100K-token turns (KV
+    8–14% of the 1.19M-token pool) prefill at ~6.8K tok/s (8192-token chunks) ≈ 15 s raw.
+  - **Barrier amplifier quantified:** 28/175 ticks (16%) with a request in-system were
+    zero-progress (`pp=0 tg=0 run=1`), with 20 E31 KV-transfer `wait` events
+    (`held_ranks=[0,1,2,3]`) — each adds a ~10 s tick to a turn's prefill window. The
+    known self-recovering between-turn barrier, now priced at +10–20 s on affected turns.
+  - **80–160 s band arithmetic (the 09-28 bursts):** queueing behind bounded admission
+    is the only term with the magnitude. At 6 active (`MAX_NUM_SEQS=6` /
+    `TP4_ADMISSION_MAX_ACTIVE=6`), a request arriving behind k big turns pays
+    k × (15–25 s prefill+barrier) ≈ 45–150 s, + its own 15 s prefill → the 80–160 s
+    band for k≈3–5. Cross-check: mean server TTFT 8.7 s on this serial session vs
+    18.9 s client-side on 09-28 is exactly what added burst queue time predicts.
+  - **Verdict:** 80–160 s tail = engine queueing under burst concurrency (bounded
+    admission working as designed) + ~100K-token chunked prefill + E31 barrier ticks;
+    proxy contributes <1 s. Not a fault — the price of 6-active × 262K-context on this
+    latency-bound ring.
+  - No fix prepared (handoff step 4 is conditional on the proxy being the cause — it is
+    not). Optional cosmetic-only tuning for a future owner window (NOT applied, NOT
+    pushed, zero expected TTFT effect): `client_body_buffer_size 1m;` in the proxy
+    server block to keep typical agent bodies (≤1 MB) in memory and silence the warn
+    spam. Open item for a future agreed window: a 6-concurrent ~100K-probe burst would
+    measure the queue-wait term directly; skipped per the passive-observation constraint.
+
 - **2026-10-11 — SparkCache capacity gauge VERDICT: `healthy=no used=0.0/0.0GiB` was the gauge truthfully reporting "no capacity policy configured" on the pre-E31-MB boot — cache data path was fine throughout; gauge live and healthy since the 09-30 capacity rollout (watch item closed).**
   - Mechanism (source-verified in the running image, read-only): the worker emits
     `report["capacity"]` only when `self._capacity_policy.enabled`
@@ -706,7 +755,9 @@ All of `noswitch-prep/` is site-owned, not upstream-owned:
   in the tail, but everything completed. `model-name-proxy` (OpenResty) logged "client
   request body buffered to temporary file" ~every 45–90 s during the last burst,
   correlating 1:1 with the agent's ~100K+-token turn bodies; agent traffic reaches vLLM via
-  that proxy (vLLM sees 127.0.0.1). Idle-period stats-tick gaps (2.4 h / 75 min) are the
+  that proxy (vLLM sees 127.0.0.1). **Tail attributed 2026-10-11 (see the dated entry above):
+  engine queueing under burst concurrency + ~100K-token chunked prefill + E31 barrier ticks —
+  the proxy's temp-file buffering measured at 0 s warn→admit and ≤10 ms of disk I/O; exonerated.** Idle-period stats-tick gaps (2.4 h / 75 min) are the
   logger going quiet with zero requests — NOT stalls (**refines the 09-27 lesson: judge
   stats-line gaps only while requests are in-system**). Hardware/fabric exonerated: all 4
   nodes P0, zero throttle counters, worker logs clean. Boundary marker if a real wedge

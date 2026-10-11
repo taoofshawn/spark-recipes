@@ -1295,6 +1295,17 @@ class Worker(WorkerBase):
     def execute_model(
         self, scheduler_output: "SchedulerOutput"
     ) -> ModelRunnerOutput | AsyncModelRunnerOutput | None:
+        # SITE GRAMMAR-DIAG: first touch of the received scheduler output on the
+        # worker — pins whether the spec dict arrived as 3 or was trimmed
+        # inside the worker. Gated by VLLM_GRAMMAR_DIAG=1.
+        if os.environ.get("VLLM_GRAMMAR_DIAG") == "1":
+            _sd = getattr(scheduler_output, "scheduled_spec_decode_tokens", None)
+            if _sd is not None:
+                logger.info(
+                    "GRAMMAR-DIAG-WORKER-RECV spec_lens=%s ids=%s",
+                    {k: len(v) for k, v in _sd.items()},
+                    {k: id(v) for k, v in _sd.items()},
+                )
         # ensure any previous non-blocking PP sends are complete
         if self._pp_send_work:
             for handle in self._pp_send_work:

@@ -710,6 +710,20 @@ class EngineCore:
         deferred_scheduler_output = None
         if self.scheduler.has_requests():
             scheduler_output = self.scheduler.schedule(self._should_throttle_prefills())
+            # SITE GRAMMAR-DIAG: engine-side dispatch view (pairs with the
+            # worker's GRAMMAR-DIAG-EXEC to catch wire divergence).
+            if os.environ.get("VLLM_GRAMMAR_DIAG") == "1":
+                logger.info(
+                    "GRAMMAR-DIAG-CORE-DISPATCH spec_lens=%s ids=%s",
+                    {
+                        k: len(v)
+                        for k, v in scheduler_output.scheduled_spec_decode_tokens.items()
+                    },
+                    {
+                        k: id(v)
+                        for k, v in scheduler_output.scheduled_spec_decode_tokens.items()
+                    },
+                )
             with self.log_error_detail(scheduler_output):
                 exec_future = self.model_executor.execute_model(
                     scheduler_output, non_block=True

@@ -1057,11 +1057,12 @@ class Scheduler(SchedulerInterface):
                     if os.environ.get("VLLM_GRAMMAR_DIAG") == "1":
                         logger.info(
                             "GRAMMAR-DIAG-SCHED-BUILD req=%s len=%d "
-                            "scheduled_spec=%d spec_field_len=%d",
+                            "scheduled_spec=%d spec_field_len=%d id=%d",
                             request.request_id,
                             len(spec_token_ids),
                             num_scheduled_spec_tokens,
                             len(request.spec_token_ids),
+                            id(spec_token_ids),
                         )
 
                 # New spec tokens will be set in `update_draft_token_ids` before the
@@ -1710,6 +1711,7 @@ class Scheduler(SchedulerInterface):
             )
 
         scheduler_output = SchedulerOutput(
+            # SITE GRAMMAR-DIAG is logged just after construction below.
             scheduled_new_reqs=new_reqs_data,
             scheduled_cached_reqs=cached_reqs_data,
             num_scheduled_tokens=num_scheduled_tokens,
@@ -1770,6 +1772,22 @@ class Scheduler(SchedulerInterface):
                 "RESILIENCE_STEP_TOKEN_CAP %s",
                 json.dumps(receipt, sort_keys=True),
             )
+        # SITE GRAMMAR-DIAG: post-construction view of the scheduled spec dict
+        # (after _update_after_schedule ran, right before schedule() returns).
+        if os.environ.get("VLLM_GRAMMAR_DIAG") == "1":
+            logger.info(
+                "GRAMMAR-DIAG-SCHED-RETURN spec_lens=%s ids=%s resolved_k=%s",
+                {
+                    k: len(v)
+                    for k, v in scheduler_output.scheduled_spec_decode_tokens.items()
+                },
+                {
+                    k: id(v)
+                    for k, v in scheduler_output.scheduled_spec_decode_tokens.items()
+                },
+                scheduler_output.num_spec_tokens_to_schedule,
+            )
+
         return scheduler_output
 
     def _e27b_admit(self, remaining: int) -> bool:

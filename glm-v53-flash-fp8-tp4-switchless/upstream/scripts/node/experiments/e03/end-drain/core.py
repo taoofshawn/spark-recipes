@@ -787,18 +787,7 @@ class EngineCore:
             return None, False
 
         # Block until the next result is available.
-        if batch_queue:
-            future, scheduler_output, exec_model_fut = batch_queue.pop()
-        else:
-            # SITE GRAMMAR-FIX (fp8 recipe, 2026-10-10): the deferred path
-            # queues nothing during the schedule phase, so an isolated deferred
-            # step right after a full drain (e.g. a grammar request's first
-            # step after the previous request finished) pops an empty deque.
-            # Retire the deferred step's own execute_model directly; the
-            # deferred block below then has its drafts available as usual.
-            future = exec_future
-            scheduler_output = deferred_scheduler_output
-            exec_model_fut = exec_future
+        future, scheduler_output, exec_model_fut = batch_queue.pop()
         with (
             self.capture_iteration_details(scheduler_output) as iteration_details,
             self.log_error_detail(scheduler_output),

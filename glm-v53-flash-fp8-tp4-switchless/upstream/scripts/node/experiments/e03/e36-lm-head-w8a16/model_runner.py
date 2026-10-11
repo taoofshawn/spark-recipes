@@ -1394,6 +1394,30 @@ class GPUModelRunner(LoRAModelRunnerMixin):
         input_batch: InputBatch,
         grammar_output: GrammarOutput | None,
     ) -> tuple[SamplerOutput, torch.Tensor, torch.Tensor]:
+        # SITE GRAMMAR-FIX (fp8 recipe, 2026-10-10): the E35 runner-k trim in
+        # execute_model rewrote this step's scheduled draft count (K_HI -> k)
+        # AFTER the engine built the grammar bitmask for the untrimmed plan.
+        # Re-slice the bitmask to the verified-prefix layout: the first k draft
+        # rows plus the bonus row (last row) — matching the worker's logit
+        # mapping (k drafts + bonus) row-for-row. The trim only fires on
+        # single-request batches (e35_participating_request), so one block is
+        # guaranteed. Rows for the trimmed-away drafts are dropped: those
+        # tokens are never verified nor sampled.
+        _e35_trim_state = getattr(self, "_e35_grammar_trim", None)
+        if grammar_output is not None and _e35_trim_state is not None:
+            _t_req, _t_k = _e35_trim_state
+            self._e35_grammar_trim = None
+            if _t_req in grammar_output.structured_output_request_ids:
+                _mask = grammar_output.grammar_bitmask
+                if _mask.shape[0] == _E35_K_HI + 1 and _t_k < _E35_K_HI:
+                    grammar_output = GrammarOutput(
+                        structured_output_request_ids=(
+                            grammar_output.structured_output_request_ids
+                        ),
+                        grammar_bitmask=np.concatenate(
+                            (_mask[:_t_k], _mask[-1:]), axis=0
+                        ),
+                    )
         # SITE GRAMMAR-DIAG (fp8 recipe, 2026-10-10): pre-shard row accounting for
         # the grammar bitmask/mapping crash; only with VLLM_GRAMMAR_DIAG=1.
         # NOTE: this file is the EFFECTIVE runtime model_runner (the E36 append in
@@ -2370,6 +2394,9 @@ def _e35_execute_model(self, scheduler_output, *args, **kwargs):
         return _e35_original_execute_model(self, scheduler_output, *args, **kwargs)
     req_id = e35_participating_request(scheduler_output)
     if req_id is None:
+        # SITE GRAMMAR-FIX: reset the per-step trim record so a stale entry can
+        # never re-slice a later step's grammar bitmask.
+        self._e35_grammar_trim = None
         return _e35_original_execute_model(self, scheduler_output, *args, **kwargs)
     state = self.__dict__.get("_e35_state")
     if state is None:
@@ -2409,6 +2436,16 @@ def _e35_execute_model(self, scheduler_output, *args, **kwargs):
     state.log(policy)
     if k < _E35_K_HI:
         scheduler_output = e35_trim(scheduler_output, req_id, k)
+        # SITE GRAMMAR-FIX (fp8 recipe, 2026-10-10): record the trim so sample()
+        # can re-slice the engine-built grammar bitmask — the engine sized it
+        # for the untrimmed draft count (_E35_K_HI rows + bonus), but this step
+        # now verifies only k drafts, so the worker's logit mapping covers only
+        # k + bonus positions. Without the re-slice the row-count assert
+        # num_masks == len(mapping) kills the engine on the first trimmed
+        # grammar step (measured 8 vs 4 with required+thinking-on).
+        self._e35_grammar_trim = (req_id, k)
+    else:
+        self._e35_grammar_trim = None
     return _e35_original_execute_model(self, scheduler_output, *args, **kwargs)
 
 

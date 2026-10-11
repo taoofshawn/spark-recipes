@@ -186,13 +186,15 @@ curl -s http://10.69.42.170:8000/v1/chat/completions -H 'Content-Type: applicati
 # pass: coherent "Rome" in content (thinking-off template adapter)
 
 curl -s http://10.69.42.170:8000/v1/chat/completions -H 'Content-Type: application/json' \
-  -d '{"model":"glm-5.3-flash","max_tokens":256,
-       "messages":[{"role":"user","content":"What is the weather in Milan?"}],
+  -d '{"model":"glm-5.3-flash","max_tokens":512,
+       "messages":[{"role":"user","content":"What is the weather in Tokyo? Use the get_weather tool. Think step by step."}],
        "tools":[{"type":"function","function":{"name":"get_weather",
          "description":"Get weather for a city",
          "parameters":{"type":"object","properties":{"city":{"type":"string"}},
-         "required":["city"]}}}],"tool_choice":"auto"}'
-# pass: tool_calls[0].function.name == get_weather with {"city":"Milan"}
+         "required":["city"]}}}],"tool_choice":"required"}'
+# pass (fixed 2026-10-10, E35-trim grammar desync — research.md changelog): tool_calls
+# with get_weather/{"city":"Tokyo"}, reasoning preserved, ENGINE ALIVE. This gate also
+# exercises the E35 trim × grammar interaction — keep it in every bring-up.
 ```
 
 Simple chat (thinking on by default; use the gate's `enable_thinking:false` for direct

@@ -51,6 +51,29 @@ Full details and the update procedure: `../research.md` §2.
    behavior byte-for-byte, N=4 admits the P2 views. 2-PF control re-verified PASS on
    spark-0f0b after the fix. Re-apply on update: the one slice + comment block in
    `validate_selection`.
+8. `scripts/node/overrides/vllm/v1/worker/gpu/structured_outputs.py` — SITE OVERRIDE
+   (mod 8, 2026-10-10): exact image copy + the bare `assert num_masks == len(mapping)`
+   in `apply_grammar_bitmask` replaced by a state-dumping RuntimeError
+   (GRAMMAR-DIAG-WORKER). Re-apply: re-extract the image file, re-apply the assert
+   block (see the file header).
+9. `scripts/node/overrides/vllm/v1/structured_output/__init__.py` — SITE OVERRIDE
+   (mod 8, 2026-10-10): exact image copy + a per-call row-accounting INFO line in
+   `grammar_bitmask` (GRAMMAR-DIAG-SCHED, gated by `VLLM_GRAMMAR_DIAG=1`). Re-apply:
+   re-extract + re-apply the DIAG block before the `return bitmask_tensor.numpy()`.
+10. `scripts/node/overrides/vllm/distributed/device_communicators/shm_broadcast.py` —
+   SITE OVERRIDE (mod 10, 2026-10-10): exact image copy + a pickle-boundary
+   observation in `enqueue` (GRAMMAR-DIAG-PICKLE, gated by `VLLM_GRAMMAR_DIAG=1`).
+   Re-apply: re-extract + re-apply the block at the top of `enqueue`.
+11. `scripts/node/experiments/e03/e36-lm-head-w8a16/model_runner.py` (THE effective
+   runtime model_runner — the E36 cluster.env append substitutes the e35-runner-k
+   mount path with this file) — SITE GRAMMAR-FIX (9b, 2026-10-10): (a) the E35
+   runner-k trim (`e35_trim`) records `(req_id, k)` and grammar steps
+   (`has_structured_output_requests`) never trim; (b) `sample()` re-slices the
+   engine-built grammar bitmask to the verified-prefix layout (first k draft rows +
+   bonus row) whenever a trim did fire. Root cause + evidence: `../research.md`
+   2026-10-10 changelog. Re-apply on update: re-diff against the new image's file,
+   re-apply the three `SITE GRAMMAR-FIX` blocks + the `SITE GRAMMAR-DIAG` blocks in
+   `sample()`/`prepare_inputs`, refresh `SHA256SUMS`.
 
 ## Refresh procedure
 

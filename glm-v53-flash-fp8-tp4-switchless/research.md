@@ -184,6 +184,41 @@ All of `noswitch-prep/` is site-owned, not upstream-owned:
 
 ## 5. Changelog
 
+- **2026-10-11 — SparkCache capacity gauge VERDICT: `healthy=no used=0.0/0.0GiB` was the gauge truthfully reporting "no capacity policy configured" on the pre-E31-MB boot — cache data path was fine throughout; gauge live and healthy since the 09-30 capacity rollout (watch item closed).**
+  - Mechanism (source-verified in the running image, read-only): the worker emits
+    `report["capacity"]` only when `self._capacity_policy.enabled`
+    (`spark_context_cache_connector.py:6432` in the deployed ram-budget copy;
+    `CapacityPolicy.enabled` = `max_bytes > 0 or ttl_seconds > 0`,
+    `persistent_context_cache/cache_manifest.py:443`). The engine-side gauge
+    (`SparkCacheStats.reduce` → `format_log_lines`) sums the `capacity` dicts across rank
+    reports and only sets `sparkcache_used_gib/limit_gib/healthy` when at least one rank
+    reported one — with no capacity dict those keys default to `0.0/0.0` and
+    `healthy=no`, while the separate `publication` field still populates the
+    publications/writes counters. So `healthy=no used=0.0/0.0GiB` alongside
+    `publications 460.9 GiB failed=0B` is exactly the signature of "policy disabled,
+    data path healthy" — the gauge reads a different source than the publisher by
+    construction, not by breakage.
+  - Dating: the 09-28-observed boot predated the E31-MB rollout —
+    `SPARK_CONTEXT_CACHE_MAX_BYTES` first appeared in the site mirror at `b51e8b6`
+    (2026-09-30 23:48 ET); before that the env defaulted to `"0"`
+    (`spark_context_cache_config.py:608`), i.e. the unbounded store E31-MB was written
+    to fix (1.7 TB/node at audit). The gauge had no data source by design.
+  - Current state (verified live 2026-10-11, read-only SSH only; container created
+    21:55Z): every emission `healthy=yes used=703.6/800.0GiB` (4 ranks × 200 GiB
+    E31-MB cap), publications `count=212 payload=54.2GiB`, writes `failed=0B`, deployed
+    connector sha256 `aa046965…` == pinned `SPARKCACHE_CONNECTOR_SHA256`, deployed
+    `~/.local/tp4/sparkcache/kv-transfer-config.json` leaves the capacity keys unset so
+    the env applies as documented, and External prefix cache hit rate 24.8% — SparkCache
+    restores are actively being served.
+  - Deferral correlation (the 09-28 open question): live burst capture shows
+    `Waiting: 1 reqs, Deferred: 1 reqs` at run≤2 — the Deferred counter is the E31
+    deferred-admission path (KV transfer in progress), by design and unrelated to the
+    gauge; no fault indicated.
+  - Verdict: cosmetic AND already resolved — not a gauge bug, not a cache fault. The
+    unhealthy readings were the designed "unwired" state of a capacity policy that did
+    not exist pre-E31-MB; the 09-30 refresh wired it. No fix, no config change, no
+    restart. Watch item closed.
+
 - **2026-10-11 — py-spy installed host-side on all 4 nodes; live stack capture of the containerized vLLM workers VERIFIED (runbook gap from 09-27/09-28 closed).**
   - **What was done:** py-spy 0.4.2 installed at `~/.local/bin/py-spy` on every node's HOST
     (aarch64). Install path differs by node: `uv tool install py-spy` on spark-0f0b and
@@ -679,11 +714,14 @@ All of `noswitch-prep/` is site-owned, not upstream-owned:
   probe after the report = `chatcmpl-875d4284a282190c` at 05:36:56 UTC.
   **Runbook gap found:** py-spy is NOT installed on the nodes or in the container — the
   "capture worker stacks BEFORE restarting" step of the 09-27 recurrence plan currently has
-  only the destructive SIGQUIT fallback. Watch item: the sparkcache capacity line has read
-  `healthy=no used=0.0/0.0GiB` on every emission since boot (entries 5337→6361, publications
-  460.9 GiB, failed=0B) — cosmetic vs unwired gauge unknown; correlate with the request
-  deferrals seen during bursts (`wait=1` at run≤2, below the MAX_NUM_SEQS=6 cap; reason
-  breakdown not captured live — likely the 'deferred'/KV-transfer reason).
+  only the destructive SIGQUIT fallback. Watch item (RESOLVED 2026-10-11 — see the dated
+  verdict entry above): the sparkcache capacity line read
+  `healthy=no used=0.0/0.0GiB` on every emission on that boot (entries 5337→6361, publications
+  460.9 GiB, failed=0B) because the capacity policy did not exist yet pre-E31-MB — the gauge
+  truthfully reports the absent policy while the data path (publications) stays healthy.
+  Live and healthy (`yes`, real usage) on every boot since the 09-30 rollout. The burst
+  deferrals (`wait=1` at run≤2) were captured live 2026-10-11: `Deferred: 1 reqs` is the
+  E31 deferred-admission path (KV transfer in progress), by design, unrelated to the gauge.
 
 - **2026-09-27 — Migration completion: five bring-up failures after the path moves, all fixed; identity re-verified.**
   After the §2.5 relocation, `tp4ctl up` failed until five issues were resolved:

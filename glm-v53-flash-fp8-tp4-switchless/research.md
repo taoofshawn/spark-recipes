@@ -184,6 +184,57 @@ All of `noswitch-prep/` is site-owned, not upstream-owned:
 
 ## 5. Changelog
 
+- **2026-10-10 — REQUIRED+THINKING-ON ENGINE CRASH ROOT-CAUSED AND FIXED (site mods 8,
+  9b, 10; the engine-level finding from the T1 four-PF boot entry below is closed).**
+  - **Root cause (instrumented reproduction, four diagnostic boots):** the E35 runner-k
+    worker-side draft trim (`e35_trim` in the e36 model_runner, promoted with the E35/E36
+    stack) rewrites the step's `scheduled_spec_decode_tokens` AFTER arrival when its
+    host-confidence policy trims drafts (K_HI=7 → K_LO=3). The engine built that step's
+    grammar bitmask for the UNTRIMMED plan (rows = 7 drafts + bonus = 8) while the
+    worker's logit mapping covers only the trimmed layout (3 + bonus = 4) —
+    `apply_grammar_bitmask assert num_masks == len(mapping)` (measured 8 vs 4),
+    EngineDeadError. Evidence trail: `GRAMMAR-DIAG-*` logs (scheduler BUILD/RETURN, core
+    DISPATCH, shm_broadcast PICKLE, worker RECV/EXEC/MR) — wire carried 7, worker exec
+    applied e35_trim to 3. The trim only fires on single-request batches verifying exactly
+    K_HI drafts (`e35_participating_request`), which is why the batch-1
+    dynamic_sd_table's k values (7/3) matched the two sides exactly.
+  - **Why thinking-on + required:** thinking-phase drafts are low-confidence → the E35
+    policy trims → first grammar step of the request arms the mismatch (deterministic).
+    Thinking-off + required: structural-tag tokens are high-confidence → no trim → no
+    crash. auto+thinking: no grammar request → no bitmask → trim harmless. NVFP4 lane:
+    no E35 runner-k → unaffected (its old-style mapping + stock stack verified by source
+    diff).
+  - **Fix (two layers, e36 model_runner):** (1) when the E35 trim fires on a grammar
+    step, sample() re-slices the bitmask to the verified-prefix layout (first k draft rows
+    + bonus row) so row counts align; (2) grammar steps (`has_structured_output_requests`)
+    never trim at all — the bonus-row mask and FSM advancement are computed for the full
+    plan, and a trim leaves the FSM too-advanced (sampled tokens rejected: "Failed to
+    advance FSM ... Terminating request" — observed at ~2/6 probes before layer 2 was
+    added). Layer 2 makes layer 1 defense-in-depth.
+  - **Withdrawn experiment (mod 9):** an async_scheduler pairing override (defer
+    structured-output sampling on every grammar step) was tried first and withdrawn —
+    instrumentation proved RPC dispatch is in-order (sample(N) always reaches the worker
+    before exec(N+1)) and the pairing race never existed; the override instead caused
+    empty-deque pops on isolated deferred steps and None-exec failures under the async
+    runner protocol.
+  - **Found-and-fixed en route — cluster.env 4-PF append regression:** the gitignored
+    mirror had lost `-e NCCL_IB_EXTENDED_IPV4_GIDS=1 -e NCCL_IB_PRESERVE_PCI_DOMAIN=1`
+    (noswitch-prep still had them); the first diagnostic boot failed on the four-PF
+    listener contract. Restored to match noswitch-prep + the AGENTS.md shared contract.
+  - **Diagnostics kept (mod 8/10, env-gated by `VLLM_GRAMMAR_DIAG=1`):** scheduler row
+    accounting (GRAMMAR-DIAG-SCHED), worker state-dumping RuntimeError replacing the bare
+    assert (GRAMMAR-DIAG-WORKER, always on — strictly better failure mode), pre-shard row
+    view (GRAMMAR-DIAG-MR), pickle-boundary + worker first-touch views (GRAMMAR-DIAG-
+    PICKLE/WORKER-RECV), e03 core immediate-vs-deferred visibility.
+  - **Validation gates (all on the fixed stack, health 200 throughout, zero 500s):**
+    required+thinking-on ×10 → tool_calls 10/10; required+`enable_thinking:false` →
+    tool_calls + clean arguments; auto+thinking → tool_calls; corruption probe (🚀 + 海洋)
+    intact; chat gate PASS. The engine survived the full suite back-to-back.
+  - **Upstream context:** the crash family is vLLM #50924 (guided decode × spec decode
+    engine death); the worker-side mapping fix #52436 is already in this image, the
+    scheduler-side row-padding fix #50952 never merged, and #49738/#52477 are still open
+    — the site fix supersedes them for this stack.
+
 - **2026-10-10 — Lane switch NVFP4 → FP8 over the directory rename: first post-rename
   boot, PASS.** The switch executed the LANE-SWITCHING.md rename gotcha order (tear
   down → pull → restore mirrors → preflight → up via the NEW paths):

@@ -128,7 +128,7 @@ change at switch time. **Switch procedure: [`LANE-SWITCHING.md`](LANE-SWITCHING.
 | FP8 boots old config after a repo change | tp4ctl reads the DEPLOYED `~/.local/tp4/cluster.env` — `deploy.sh` from the head |
 | container name/overlay path refused | stopped containers from a previous `stop` not removed |
 | `DEVSELECT_BUILD_FAILED` ×1–2 at NVFP4 boot (rank 0) | known watch item — overlay catches it; record, don't block |
-| `tool_choice:"required"` + thinking-on kills the engine (grammar-bitmask assert) | known engine bug, likely pre-E36; required+thinking-off is the gate workaround |
+| `tool_choice:"required"` + thinking-on killed the engine (grammar-bitmask assert) | FIXED 2026-10-10: the E35 runner-k worker-side draft trim desynced the grammar bitmask (8 rows) from the trimmed logit mapping (4) — grammar steps no longer trim + the worker re-slices the bitmask; thinking-on + required is now a supported combination (fp8 research.md 2026-10-10 entry) |
 | ring decode far below switched fleets | expected — c1 is latency-bound; compare against the lane's own bench history only |
 | bench right after boot reads ~30% slow | JIT/TRITON warm-up — wait ~30 min, never bench cold |
 

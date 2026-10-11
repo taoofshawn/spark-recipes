@@ -184,6 +184,48 @@ All of `noswitch-prep/` is site-owned, not upstream-owned:
 
 ## 5. Changelog
 
+- **2026-10-11 — py-spy installed host-side on all 4 nodes; live stack capture of the containerized vLLM workers VERIFIED (runbook gap from 09-27/09-28 closed).**
+  - **What was done:** py-spy 0.4.2 installed at `~/.local/bin/py-spy` on every node's HOST
+    (aarch64). Install path differs by node: `uv tool install py-spy` on spark-0f0b and
+    spark-6d14 (uv present); on spark-6d90 and spark-6d24 (no uv) the manylinux_2_17
+    aarch64 wheel was downloaded and the binary extracted with the node's python3:
+    `curl -sL -o /tmp/pyspy.whl https://github.com/benfred/py-spy/releases/download/v0.4.2/py_spy-0.4.2-py2.py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl`
+    then `python3 -c "import zipfile; zipfile.ZipFile('/tmp/pyspy.whl').extract('py_spy-0.4.2.data/scripts/py-spy', '.')"`
+    + `install -m 755 py_spy-0.4.2.data/scripts/py-spy ~/.local/bin/py-spy`. Plain
+    `pip install --user` is BLOCKED by PEP 668 (externally-managed env). Host Python is
+    3.12.3 everywhere — same major version as the container's `/usr/bin/python3` (3.12),
+    which is why host-side capture resolves container frames correctly.
+  - **Verified live (lane serving, `/health` 200, zero disruption):** host-side
+    `sudo ~/.local/bin/py-spy dump --pid <pid>` successfully attached to and dumped ALL
+    rank processes from the host — head: `VLLM::Worker_TP0` + `VLLM::EngineCore`;
+    spark-6d14: `Worker_TP1`; spark-6d90: `Worker_TP2`; spark-6d24: `Worker_TP3`.
+    `sudo -n` works (NOPASSWD). Proof stack (Worker_TP0 idle-busy state, 2026-10-11):
+    MainThread in `sched_yield (vllm/distributed/utils.py:48)` ← `wait
+    (shm_broadcast.py:204)` ← `acquire_read (shm_broadcast.py:794)` ← `dequeue
+    (shm_broadcast.py:907)` ← `worker_busy_loop (multiproc_executor.py:1033)` ←
+    `worker_main (multiproc_executor.py:935)` — with the expected side threads
+    (WorkerAsyncOutputCopy, DeathPipeMonitor, tqdm_monitor, spark-cache-capacity). Worker
+    TP1–3 idle shape: MainThread blocked in zmq `poll` ← `recv (shm_broadcast.py:931)` ←
+    `dequeue (shm_broadcast.py:922)` ← `worker_busy_loop`.
+  - **The procedure for next wedge (capture BEFORE any restart):**
+    1. On each node, find the worker pids: `docker top glm53_fp8_dflash_tp4 -eo pid,args
+       | grep 'VLLM::'` (pids are per-boot — never reuse old ones).
+    2. On the head, dump EngineCore + Worker_TP0; on each worker node, dump that node's
+       `VLLM::Worker_TPr`: `sudo ~/.local/bin/py-spy dump --pid <pid>` (run from the node
+       the process lives on; py-spy is at `~/.local/bin/py-spy`, which is NOT on the
+       default SSH PATH — use the full path).
+    3. A wedged rank will NOT look like the idle shapes above — expect a stuck frame in
+       `shm_broadcast` (`acquire_read`/`wait`) with no progress across repeated dumps
+       seconds apart. Take 2–3 dumps a few seconds apart per rank and save all of them.
+    4. Only then `tp4ctl restart`. SIGQUIT (to a worker pid) remains the last resort if
+       py-spy somehow fails.
+  - **Constraints found:** container processes are root-owned and `yama/ptrace_scope=1`,
+    so non-sudo capture fails with `Permission Denied: Try running again with elevated
+    permissions` — `sudo` is REQUIRED (no CAP_SYS_PTRACE image change needed for
+    host-side capture). The container itself still has no py-spy and does not need one:
+    host capture works across the container boundary. Do NOT exec into the container to
+    run py-spy — it is not there. Non-disruptive: no signals sent, lane kept serving.
+
 - **2026-10-11 — OOM crash of the running lane + restart (no lane/config change).**
   - **What happened:** while the prior agent session ran its E20/GRAMMAR diagnostic probe
     campaign (`/tmp/probe*.py` on the head), `probe45.py` deliberately near-exhausted VRAM
@@ -706,7 +748,11 @@ All of `noswitch-prep/` is site-owned, not upstream-owned:
   **Recovery**: `tp4ctl restart` (full-cluster procedure, per the single-rank invariant).
   Cold boot ~13 min (checkpoint load + flashinfer autotune + graph capture), `/health` 200
   at 775 s, smoke gate passed, `check-f0.py` → 2026-09-25-e29 CHECK PASS.
-  **If it recurs**: capture worker stack state (py-spy or SIGQUIT) BEFORE restarting, and
+  **If it recurs**: capture worker stack state BEFORE restarting — py-spy is now installed
+  host-side on all 4 nodes and verified against the live workers (see the 2026-10-11
+  entry for the exact procedure: `docker top glm53_fp8_dflash_tp4 -eo pid,args | grep
+  'VLLM::'` for pids, then `sudo ~/.local/bin/py-spy dump --pid <pid>` per rank, 2–3 dumps
+  a few seconds apart); SIGQUIT remains the last-resort fallback only. Then
   instrument the E29 end-drain scheduler + async-scheduling path as prime suspects; also
   note the last completed SparkCache ticket/request-id from the logs (this time
   `chatcmpl-a78184e6c18fa28c`, ticket `e216673e`) as the boundary marker. First such wedge

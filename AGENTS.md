@@ -87,12 +87,14 @@ change at switch time. **Switch procedure: [`LANE-SWITCHING.md`](LANE-SWITCHING.
 
 - The working branch `glm-v53-flash-nvfp4-4x-noswitch` carries BOTH recipes (since the
   2026-10-10 reorg). `main` = stable only; direct pushes to `main` are blocked — all
-  changes land via PR from a topic branch.
-- **Never merge PRs yourself.** Creating the PR and posting its URL is the stopping
-  point; merging is the user's call unless explicitly asked in that session.
+  changes land via topic branch pushed to origin (no PR opened by agents).
+- **Do NOT open PRs.** Push the commits to the topic branch and report the branch name +
+  commit range; that is the stopping point. The user opens/merges PRs themselves once the
+  remaining open issues are complete (previously PR #82 was opened by an agent — stop doing
+  that; existing PRs stay until the user merges).
 - **Never edit files on the nodes over SSH** (`sed -i`, `scp`, heredocs). Recipe
-  changes flow: repo → topic branch → PR → main (or the working branch) → `git pull`
-  on the nodes. Node working trees stay pristine.
+  changes flow: repo → topic branch (pushed) → user opens PR → main (or the working
+  branch) → `git pull` on the nodes. Node working trees stay pristine.
 - **Derived-file mirrors are gitignored on the nodes** (FP8 `upstream/cluster.env`,
   `upstream/scripts/node/etc/<node>/*.yaml`): after a repo config change, copy the
   mirror + re-render on the head + `scripts/deploy.sh` FROM THE HEAD NODE (tp4ctl

@@ -184,6 +184,44 @@ All of `noswitch-prep/` is site-owned, not upstream-owned:
 
 ## 5. Changelog
 
+- **2026-10-11 — Dual-lib NCCL SHA manifest: check-f0.py / verify-node.sh gate repaired
+  (VENDORED-AT mod 12; closes the T1 entry's "check-f0.py / verify-node.sh FAIL — explained,
+  expected" follow-up).**
+  - **Mechanism:** after the 4-PF adoption `NCCL_DIR` points at `~/.local/lib/nccl-patched-4pf`
+    (sha `8de68def…`) while the single legacy line in `scripts/node/nccl/SHA256SUMS` pinned
+    `afe5f486…` — so every healthy 4-PF boot failed exactly the NCCL rows: "patched NCCL sha
+    FAIL 8de68def… expected afe5486…" ×4 (verify-node.sh:656) + check-f0.py's
+    "patched NCCL not loaded by GPU worker" (its maps check compares the END of
+    `/proc/<pid>/maps` lines against `VLLM_NCCL_SO_PATH=/opt/patched-nccl/libnccl.so.2`, but
+    the kernel resolves the symlink and maps the REAL path `…/libnccl.so.2.30.7` — checked
+    live on the running rank-0 worker, pid 342). The frozen e36 `baseline.json` needed NO
+    change: it pins the container-side mount destination `/opt/patched-nccl/libnccl.so.2`,
+    identical for both libs.
+  - **Fix (dual-lib manifest, Option B):** SHA256SUMS now carries one
+    `<sha>  <staging-dir>/libnccl.so.2` line per generation (`nccl-patched/` legacy 2-PF
+    afe5f486… = rollback artifact, kept; `nccl-patched-4pf/` 8de68def… = production).
+    `verify-node.sh` gains `expect_sha` (selects by `NCCL_DIR` basename; unlisted dir =
+    hard abort, keeping the no-silent-fallback invariant); `install-nccl.sh` selects the
+    same way; `build.sh` pins the `nccl-patched/` line (it builds the legacy lib only);
+    `expected.env`/README updated (legacy shape annotated, 4-PF provenance recorded).
+    TDD: `scripts/tests/test-verify-node.py` covers both selections + the unlisted abort
+    (RED verified: block failed exit 127 before implementation).
+  - **Rollout:** read-only verification scripts — no boot, no restart, lane stays serving.
+    deploy.sh fans SHA256SUMS to the nodes via the verify-manifest flow.
+  - **Watch item:** verify-node.sh's patched-NCCL-sha row detail prints the selection
+    source; the acceptance README section documents the dual-line procedure for future
+    candidate adoption.
+  - **Pre-existing, OUT OF SCOPE here:** `check.sh` (and test-check-f0.py) fail with
+    "operational identity runtime source hash mismatch" on the CLEAN tree too — the
+    grammar-fix commits (08b048c/34aa09e, dd1a039) modified three e03 override sources
+    (prefill-cache-trim/gpu_worker.py, prefill-step-cap/scheduler.py,
+    e36-lm-head-w8a16/model_runner.py) after
+    `docs/operational-identities/2026-09-30-e36-lm-head.json` froze their hashes
+    (e.g. model_runner: pinned d8fbfa51…, actual 598f9fd7…). The LIVE cluster check is
+    unaffected (it hashes the DEPLOYED files, which the crash-fix rollout updated together
+    with the mounts — the 2026-10-10 validation gates ran against the live stack). The
+    workstation-side identity record needs a refresh entry for the three files — owner
+    decision, separate item, do NOT auto-remeasure (same rule as the 2026-09-29 note).
 - **2026-10-11 — Clean transport A/B closed as MOOT (owner decision: 4-PF is permanent).**
   The A/B's only remaining purpose after the engine-crash root cause landed (2026-10-10 entry)
   was attributing this lane's bench numbers to the transport change; with the owner committing

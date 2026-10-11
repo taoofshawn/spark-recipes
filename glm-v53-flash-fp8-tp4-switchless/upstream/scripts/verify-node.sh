@@ -120,13 +120,25 @@ if [ -n "${MODEL_REV:-}" ]; then
     || die "cannot read chat_template.jinja hash from $MODEL_MANIFEST"
 fi
 
-# scripts/node/nccl/SHA256SUMS is the SINGLE source for the patched library's sha (install-nccl.sh
-# reads the same file). No built-in fallback: a stale literal here would silently validate the
-# wrong library, so a missing or unparsable SHA256SUMS aborts the run instead.
+# scripts/node/nccl/SHA256SUMS is the SINGLE source for the staged libraries' shas
+# (install-nccl.sh reads the same file). Each line is `<sha256>  <staging-dir>/libnccl.so.2`;
+# the line whose staging dir matches NCCL_DIR's basename is the expected sha, so one manifest
+# pins both transport generations (nccl-patched = legacy 2-PF, nccl-patched-4pf = four-PF).
+# No built-in fallback: a stale literal here would silently validate the wrong library, so a
+# missing/unparsable SHA256SUMS or an NCCL_DIR with no matching line aborts the run instead.
 NCCL_SHA_SRC="scripts/node/nccl/SHA256SUMS"
 [ -f "$REPO/scripts/node/nccl/SHA256SUMS" ] || die "scripts/node/nccl/SHA256SUMS missing: it is the only source for the patched NCCL sha"
-NCCL_SHA=$(awk '/libnccl\.so\.2/{print $1; exit}' "$REPO/scripts/node/nccl/SHA256SUMS")
-[ -n "$NCCL_SHA" ] || die "no libnccl.so.2 line in scripts/node/nccl/SHA256SUMS"
+expect_sha() {   # expect_sha <NCCL_DIR> -> expected sha256 for that staging dir, or die
+  local dir=$1 base
+  base=${dir%/}; base=${base##*/}; base=${base:-$dir}
+  [ -n "$base" ] || die "cannot derive the NCCL staging dir name from NCCL_DIR='$dir'"
+  local sha
+  sha=$(awk -v d="$base" '$2 == d "/libnccl.so.2" {print $1; exit}' "$REPO/scripts/node/nccl/SHA256SUMS")
+  [ -n "$sha" ] || die "no '$base/libnccl.so.2' line in scripts/node/nccl/SHA256SUMS for NCCL_DIR='$dir'"
+  printf '%s' "$sha"
+}
+NCCL_SHA=$(expect_sha "$NCCL_DIR")
+[ -n "$NCCL_SHA" ] || die "expect_sha returned empty for NCCL_DIR='$NCCL_DIR'"
 GID_CHECK="$REPO/scripts/nccl_gid_check.py"
 [ -r "$GID_CHECK" ] || die "scripts/nccl_gid_check.py missing"
 GID_CHECK_SHA=$(shasum -a 256 "$GID_CHECK" | awk '{print $1}')

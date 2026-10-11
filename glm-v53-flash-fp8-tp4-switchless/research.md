@@ -184,6 +184,24 @@ All of `noswitch-prep/` is site-owned, not upstream-owned:
 
 ## 5. Changelog
 
+- **2026-10-11 — Clean transport A/B closed as MOOT (owner decision: 4-PF is permanent).**
+  The A/B's only remaining purpose after the engine-crash root cause landed (2026-10-10 entry)
+  was attributing this lane's bench numbers to the transport change; with the owner committing
+  to the 4-PF configuration permanently there is no config choice left for the A/B to inform,
+  so the rollback-config boot + re-adoption boot will NOT be performed. The 2026-10-10 T1
+  bench (`noswitch-prep/benchmarks-fp8-4pf/`: c1_prose_short 94.4 tok/s, TTFT 0.50 s,
+  c4_prose_short 170.2, acceptance 0.981) is adopted as the lane's 4-PF baseline for all
+  future tuning comparisons; the NVFP4 Phase-E profile (json TTFT 6.5 → 0.5 s) remains the
+  directional cross-lane evidence. Residual kept: the legacy 2-PF rollback path
+  (`~/.local/lib/nccl-patched`, afe5f486…; rollback documented at `NCCL_IB_HCA` in
+  `noswitch-prep/cluster.env`) stays staged and documented but is UNTESTED on the E36 stack —
+  a future rollback boot under failure pressure would execute it for the first time.
+  4-PF-active verification on 2026-10-11 (repo mirror `upstream/cluster.env` + deployed
+  `~/.local/tp4/cluster.env` on spark-0f0b + live container env of `glm53_fp8_dflash_tp4`,
+  up ~7 h, /health 200): 4-PF HCA list, `NCCL_DIR=nccl-patched-4pf` (lib mounted
+  `/opt/patched-nccl`, v2.30.7), MERGE_NICS=0, SWITCHLESS_RING_ONLY=1,
+  EXTENDED_IPV4_GIDS=1, PRESERVE_PCI_DOMAIN=1, zero NCCL WARN in boot logs.
+
 - **2026-10-10 — REQUIRED+THINKING-ON ENGINE CRASH ROOT-CAUSED AND FIXED (site mods 8,
   9b, 10; the engine-level finding from the T1 four-PF boot entry below is closed).**
   - **Root cause (instrumented reproduction, four diagnostic boots):** the E35 runner-k

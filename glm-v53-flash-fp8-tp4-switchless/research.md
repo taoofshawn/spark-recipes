@@ -184,6 +184,66 @@ All of `noswitch-prep/` is site-owned, not upstream-owned:
 
 ## 5. Changelog
 
+- **2026-10-11 — Dual-lib NCCL SHA manifest: check-f0.py / verify-node.sh gate repaired
+  (VENDORED-AT mod 12; closes the T1 entry's "check-f0.py / verify-node.sh FAIL — explained,
+  expected" follow-up).**
+  - **Mechanism:** after the 4-PF adoption `NCCL_DIR` points at `~/.local/lib/nccl-patched-4pf`
+    (sha `8de68def…`) while the single legacy line in `scripts/node/nccl/SHA256SUMS` pinned
+    `afe5f486…` — so every healthy 4-PF boot failed exactly the NCCL rows: "patched NCCL sha
+    FAIL 8de68def… expected afe5486…" ×4 (verify-node.sh:656) + check-f0.py's
+    "patched NCCL not loaded by GPU worker" (its maps check compares the END of
+    `/proc/<pid>/maps` lines against `VLLM_NCCL_SO_PATH=/opt/patched-nccl/libnccl.so.2`, but
+    the kernel resolves the symlink and maps the REAL path `…/libnccl.so.2.30.7` — checked
+    live on the running rank-0 worker, pid 342). The frozen e36 `baseline.json` needed NO
+    change: it pins the container-side mount destination `/opt/patched-nccl/libnccl.so.2`,
+    identical for both libs.
+  - **Fix (dual-lib manifest, Option B):** SHA256SUMS now carries one
+    `<sha>  <staging-dir>/libnccl.so.2` line per generation (`nccl-patched/` legacy 2-PF
+    afe5f486… = rollback artifact, kept; `nccl-patched-4pf/` 8de68def… = production).
+    `verify-node.sh` gains `expect_sha` (selects by `NCCL_DIR` basename; unlisted dir =
+    hard abort, keeping the no-silent-fallback invariant); `install-nccl.sh` selects the
+    same way; `build.sh` pins the `nccl-patched/` line (it builds the legacy lib only);
+    `expected.env`/README updated (legacy shape annotated, 4-PF provenance recorded).
+    TDD: `scripts/tests/test-verify-node.py` covers both selections + the unlisted abort
+    (RED verified: block failed exit 127 before implementation).
+  - **Rollout:** read-only verification scripts — no boot, no restart, lane stays serving.
+    deploy.sh fans SHA256SUMS to the nodes via the verify-manifest flow.
+  - **Watch item:** verify-node.sh's patched-NCCL-sha row detail prints the selection
+    source; the acceptance README section documents the dual-line procedure for future
+    candidate adoption.
+  - **Pre-existing, OUT OF SCOPE here:** `check.sh` (and test-check-f0.py) fail with
+    "operational identity runtime source hash mismatch" on the CLEAN tree too — the
+    grammar-fix commits (08b048c/34aa09e, dd1a039) modified three e03 override sources
+    (prefill-cache-trim/gpu_worker.py, prefill-step-cap/scheduler.py,
+    e36-lm-head-w8a16/model_runner.py) after
+    `docs/operational-identities/2026-09-30-e36-lm-head.json` froze their hashes
+    (e.g. model_runner: pinned d8fbfa51…, actual 598f9fd7…). The deployed files MATCH the
+    working tree (verified live on the head node: `~/.local/tp4/experiments/e03/…` hashes
+    598f9fd7/ae2bdaf5/c5d8b99f = workstation) — the crash-fix rollout deployed correctly.
+    But `check-f0.py` in operational-identity mode hashes the WORKING-TREE copies against
+    the frozen record, so the live check currently reports exactly that one problem
+    (verified live 2026-10-11; the e36 BASELINE mode's 24 problems are frozen historical
+    identity drift — that baseline predates the later site additions, needs no action).
+    Refreshing the identity record for the three files is an owner decision (separate
+    item, do NOT auto-remeasure — same rule as the 2026-09-29 note).
+- **2026-10-11 — Clean transport A/B closed as MOOT (owner decision: 4-PF is permanent).**
+  The A/B's only remaining purpose after the engine-crash root cause landed (2026-10-10 entry)
+  was attributing this lane's bench numbers to the transport change; with the owner committing
+  to the 4-PF configuration permanently there is no config choice left for the A/B to inform,
+  so the rollback-config boot + re-adoption boot will NOT be performed. The 2026-10-10 T1
+  bench (`noswitch-prep/benchmarks-fp8-4pf/`: c1_prose_short 94.4 tok/s, TTFT 0.50 s,
+  c4_prose_short 170.2, acceptance 0.981) is adopted as the lane's 4-PF baseline for all
+  future tuning comparisons; the NVFP4 Phase-E profile (json TTFT 6.5 → 0.5 s) remains the
+  directional cross-lane evidence. Residual kept: the legacy 2-PF rollback path
+  (`~/.local/lib/nccl-patched`, afe5f486…; rollback documented at `NCCL_IB_HCA` in
+  `noswitch-prep/cluster.env`) stays staged and documented but is UNTESTED on the E36 stack —
+  a future rollback boot under failure pressure would execute it for the first time.
+  4-PF-active verification on 2026-10-11 (repo mirror `upstream/cluster.env` + deployed
+  `~/.local/tp4/cluster.env` on spark-0f0b + live container env of `glm53_fp8_dflash_tp4`,
+  up ~7 h, /health 200): 4-PF HCA list, `NCCL_DIR=nccl-patched-4pf` (lib mounted
+  `/opt/patched-nccl`, v2.30.7), MERGE_NICS=0, SWITCHLESS_RING_ONLY=1,
+  EXTENDED_IPV4_GIDS=1, PRESERVE_PCI_DOMAIN=1, zero NCCL WARN in boot logs.
+
 - **2026-10-10 — REQUIRED+THINKING-ON ENGINE CRASH ROOT-CAUSED AND FIXED (site mods 8,
   9b, 10; the engine-level finding from the T1 four-PF boot entry below is closed).**
   - **Root cause (instrumented reproduction, four diagnostic boots):** the E35 runner-k

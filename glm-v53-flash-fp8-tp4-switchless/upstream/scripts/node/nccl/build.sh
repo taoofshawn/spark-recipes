@@ -97,9 +97,12 @@ DEST=${DEST%/}
 : "${NCCL_TAG:?NCCL_TAG missing from expected.env}"
 : "${NCCL_COMMIT:?NCCL_COMMIT missing from expected.env}"
 
-EXPECT_SHA=$(awk '$2 == "libnccl.so.2" {print $1}' "$SUMS_FILE")
+# Dual-lib manifest: lines are '<sha>  <staging-dir>/libnccl.so.2'. THIS script rebuilds the
+# legacy 2-PF library (scripts/node/nccl/Dockerfile + the vendored patch), so it pins the
+# 'nccl-patched' line; the four-PF build lives in the NVFP4 recipe's site/nccl-4pf/.
+EXPECT_SHA=$(awk '$2 == "nccl-patched/libnccl.so.2" {print $1}' "$SUMS_FILE")
 [[ "$EXPECT_SHA" =~ ^[0-9a-f]{64}$ ]] \
-  || die "SHA256SUMS must carry a 'libnccl.so.2' line with 64 lowercase hex chars (got: '${EXPECT_SHA:-<none>}')"
+  || die "SHA256SUMS must carry a 'nccl-patched/libnccl.so.2' line with 64 lowercase hex chars (got: '${EXPECT_SHA:-<none>}')"
 
 PATCH_NAME=${PATCH_FILE##*/}
 SSH_OPTS=("${TP4_SSH_OPTS[@]}")

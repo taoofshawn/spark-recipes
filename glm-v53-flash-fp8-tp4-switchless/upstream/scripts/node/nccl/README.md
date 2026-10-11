@@ -11,7 +11,7 @@ Topology and diagnosis are in [`docs/fabric.md`](../../../docs/fabric.md).
 | `Dockerfile` | pinned CUDA/Ubuntu builder environment |
 | `nccl-v2.30.7-1-spark-switchless.patch` | overlay applied to the pinned NCCL tag |
 | `expected.env` | base tag/commit, expected binary size, and dynamic-symbol count |
-| `SHA256SUMS` | checksum of the library accepted for production |
+| `SHA256SUMS` | one `<sha256>  <staging-dir>/libnccl.so.2` line per staged transport generation: `nccl-patched/` = the legacy 2-PF library this directory builds (rollback artifact), `nccl-patched-4pf/` = the four-PF library in production since 2026-10-10 (built by the NVFP4 recipe's `site/nccl-4pf/build-4pf.sh`). `verify-node.sh` and `install-nccl.sh` select the line whose staging dir matches `NCCL_DIR`'s basename |
 | `build.sh` | remote clean checkout, patch, container build, and shape comparison |
 | `install-nccl.sh` | verified atomic fan-out to selected nodes |
 
@@ -96,7 +96,8 @@ mixed-checksum result; the saved binaries remain the rollback for an existing cl
 
 The launcher mounts `$NCCL_DIR` read-only and sets `LD_PRELOAD`, `VLLM_NCCL_SO_PATH`,
 `NCCL_SKIP_TREE_CONNECT=1`, and `NCCL_ALGO=Ring`. It checks file existence;
-`scripts/verify-node.sh` checks the production hash recorded in `SHA256SUMS`.
+`scripts/verify-node.sh` checks the production hash selected from `SHA256SUMS` by
+`NCCL_DIR`'s basename (dual-lib manifest — both transport generations stay pinned).
 
 First prove that every installed file has the candidate hash, then run all other static
 and fabric checks while the stack is down:
@@ -120,8 +121,9 @@ Within the same authorized full-stack window, start once and run the
 A candidate is accepted only if the engine initializes on all four ranks, the gates
 pass, and the owner accepts the result.
 
-After acceptance, replace the single hash in `scripts/node/nccl/SHA256SUMS` with
-`candidate_sha`, record the change in `CHANGELOG.md`, and rerun:
+After acceptance, update the matching staging-dir line in `scripts/node/nccl/SHA256SUMS`
+with `candidate_sha` (keep the other generation's line — both libs stay staged), record
+the change in `CHANGELOG.md`, and rerun:
 
 ```sh
 ./scripts/verify-node.sh

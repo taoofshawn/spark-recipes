@@ -74,6 +74,18 @@ Full details and the update procedure: `../research.md` §2.
    2026-10-10 changelog. Re-apply on update: re-diff against the new image's file,
    re-apply the three `SITE GRAMMAR-FIX` blocks + the `SITE GRAMMAR-DIAG` blocks in
    `sample()`/`prepare_inputs`, refresh `SHA256SUMS`.
+12. `scripts/node/nccl/SHA256SUMS` + `scripts/verify-node.sh` (the sha-selection block) +
+    `scripts/node/nccl/install-nccl.sh` + `scripts/node/nccl/build.sh` + `scripts/node/nccl/
+    README.md`/`expected.env` — SITE DUAL-LIB MANIFEST (2026-10-11): SHA256SUMS now carries
+    one line per staged transport generation (`nccl-patched/libnccl.so.2` = legacy 2-PF
+    afe5f486…, `nccl-patched-4pf/libnccl.so.2` = the four-PF production lib 8de68def…);
+    verify-node.sh's `expect_sha` and install-nccl.sh select the line whose staging dir
+    matches NCCL_DIR's basename, and an unlisted dir aborts. Reason: after the 4-PF
+    adoption the single legacy line failed exactly the NCCL rows on every healthy
+    4-PF boot ("patched NCCL sha FAIL … expected afe5f486…" ×4, research.md T1 entry).
+    Re-apply on update: re-apply the `expect_sha` block in verify-node.sh, the basename
+    selection in install-nccl.sh, and the `nccl-patched/libnccl.so.2` awk selector in
+    build.sh; keep both SHA256SUMS lines.
 
 ## Refresh procedure
 

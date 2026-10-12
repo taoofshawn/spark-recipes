@@ -92,23 +92,50 @@ measured at bring-up, not assumed.
 
 ## 5. Watchlist / open items
 
-- **Second-PF netplan plan** — address the unconfigured PF (one per port, 2/node) on all
-  four nodes; 8 logical links need 8 /24 subnets within `10.10.0.0/21`; record the final
-  per-link map here once rendered (extend the FP8 recipe's netplan approach).
-- **NCCL four-device verdict** on the existing `afe5f486…` rebuild — record pass/fail and,
-  if a four-PF build is made, its SHA256 + validation notes here.
-- **1M ctx on this stack** — knapcio validated 262K switched; tonyliu312 validated 1M on
-  the sibling tonyd2wild stack. First 1M-context gate on this exact stack is ours to
-  record.
-- **Ring decode penalty** — the lane-defining number; measure
-  (`accept_probe`/`conc_bench`) and compare against knapcio's switched tables.
-- **GLM_ROCE_ALLREDUCE / GATHER_ROUTE behavior under `TRANSPORT=switchless`** — CPU-tested
-  upstream, never hardware-qualified; if the ring misbehaves, first suspects.
-- **glm47 tool-call `tool_choice:required` handling** — the FP8 recipe needed a
-  structural-tag override (TC-45); upstream here ships its own `glm47_moe.py` overlay.
-  Verify forced tool calls at bring-up before declaring parity with the FP8 lane.
-- **Upstream churn** — knapcio's `main` moves fast (two releases + a hotfix in the last
-  three days of September); re-run the VENDORED-AT update procedure on any adopted change.
+Refreshed 2026-10-11 against the changelog (superseded rows closed with pointers; no
+open item dropped). The 2026-10-11 T3a root-cause CLOSED the `DEVSELECT_BUILD_FAILED`
+watch item raised in the Phase E entry (upstream platform limitation, every rank, never
+armed on this driver stack — see that entry; re-verify only if the kernel/driver pin
+changes). §5 never carried it separately, so no row here.
+
+- **CLOSED 2026-10-10 — Second-PF netplan plan** — superseded by Phase E: the full
+  four-PF netplan was rendered and deployed 4/4 (P2-view octet = f-port octet + 2,
+  additive over the FP8 plan), 16/16 pings verified across both PCIe views per cable.
+  Per-link map in the Phase E changelog entry; deployed mirror at
+  `site/netplan/<node>/40-cx7.yaml`. (The original "8 new /24s" reading was corrected
+  pre-bring-up: the contract is 2 cable subnets/node × 2 PCI roots, one address each.)
+- **CLOSED 2026-10-10 — NCCL four-device verdict** — superseded by Phase E: the four-PF
+  lib (othexmr stack @ `94c2669` + one-line site GID-range patch, SHA `8de68def…`) is
+  built, identity-check PASS ×4, fully reproducible via `site/nccl-4pf/build-4pf.sh`;
+  RouteFinal shows all four PFs carrying QPs on every rank, reproduced at T2 the same
+  day. The `afe5f486…` 2-PF rebuild question is moot — that lib stays staged only as
+  the FP8 lane's rollback artifact.
+- **OPEN — true 1M-token context gate** — the boot serves `max_model_len 1,048,576`
+  (Phase E) and the KV pool is sized ~3.25M tokens, but no single ~1M-token REQUEST has
+  run on this exact stack; the largest recorded context is prefix_scan's 96,768-token
+  warm prefix. Next action: one real ~1M-token prefill+decode request at a future
+  bring-up (run warm, after JIT settles). Closes with a completed request + receipt
+  recorded here.
+- **CLOSED 2026-10-10 — Ring decode penalty** — measured and compared at first bring-up
+  and Phase E: c1 is latency-bound at ~45–55% of knapcio's switched fleet (44.7/75.8/
+  96.3 tok/s at Phase E); the four-PF transport pays off at concurrency (json c8 +26%,
+  c16 +15%) and prefill TTFT (json c8/c16 ~6.5 s → 0.48/0.58 s); T2 reproduced within
+  −2.3%…+3.8%. Lane stays zero-mod; lossless8 fallback NOT triggered — that remains an
+  explicit owner decision per §2 decision 5, not a watch item.
+- **OPEN — GLM_ROCE_ALLREDUCE / GATHER_ROUTE hardware qualification** — still never
+  hardware-qualified (no changelog entry covers them). Under `TRANSPORT=switchless` the
+  launcher forces `GLM_ROCE_ALLREDUCE=0` and `GATHER_ROUTE` is inert (upstream
+  `docs/switchless.md`), so every collective runs on the patched NCCL ring. Stays on
+  the list as the first suspects if the ring ever misbehaves.
+- **CLOSED 2026-10-10 — glm47 `tool_choice:required` parity** — forced tool calls are
+  clean at every boot on this lane (first bring-up, Phase E, T2: clean
+  `get_weather({"city": "Tokyo"})`); NO structural-tag override (TC-45) is needed —
+  the upstream glm47 parser handles it. Parity with the FP8 lane confirmed.
+- **OPEN — Upstream churn** — knapcio's `main` moves fast. Latest full pass 2026-10-10
+  (tonyd2wild review + forum sweep): knapcio tip still `770d115`, nothing adoptable
+  landed after 2026-09-29. Next action: re-run the VENDORED-AT update procedure
+  periodically and on any adopted change — especially any upstream
+  `profiles/current.env` change, which needs the §3 stock-compat review.
 
 ## Changelog
 

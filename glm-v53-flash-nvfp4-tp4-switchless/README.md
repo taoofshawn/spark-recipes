@@ -13,8 +13,9 @@ merge the directories). Adapted from the
 and its dense layers BF16; knapcio's lossless8 conversion (dense → 8-bit grids, 0.25%
 output error) is deliberately NOT applied. Expected cost vs his switched-fleet numbers:
 ~10–15% decode (the −7.5 ms/step dense read) and ~9 GiB total KV; the ring transport
-costs more (unquantified — bring-up's job to measure). If the result is too slow, the
-fallback lane is the lossless8 conversion (see research.md §5).
+costs more (measured 2026-10-10: c1 latency-bound at ~45–55% of the switched fleet,
+recovered at concurrency — research.md changelog, "PHASE E COMPLETE"). If the result is
+too slow, the fallback lane is the lossless8 conversion (see research.md §2 decision 5).
 
 **Endpoint (after bring-up):** `http://10.69.42.170:8000/v1` — model name
 `glm-5.3-flash`, 1,048,576-token context, ~3.25M-token fp8 KV pool (20 GiB/rank pin →

@@ -184,6 +184,29 @@ All of `noswitch-prep/` is site-owned, not upstream-owned:
 
 ## 5. Changelog
 
+- **2026-10-12 — Proxy `client_body_buffer_size 1m` deployed (handoff 02, cosmetic
+  follow-up to the 10-11 TTFT attribution): the per-request "client request body
+  buffered to temporary file" warn is silenced for bodies <=1 MB (nginx default buffer
+  is 16 KB, so every ~100K-token agent body spilled). Zero TTFT intent — the 10-11
+  entry exonerated the spill (<10 ms worst case, 6.3 GB/s temp dir); this is hygiene
+  only. Bodies >1 MB (up to `client_max_body_size 64m`) still spill — expected,
+  harmless.**
+  - Change: one directive + comment in `model-name-proxy/nginx.conf.template` server
+    block (after `client_max_body_size 64m;`); nothing else touched. Landed via topic
+    branch `fp8-proxy-body-buffer-20261011` (commit `a5390b7`), PR opened/merged by the
+    owner. Lane untouched throughout — no `tp4ctl`, no lane container restarts; :8000
+    never blipped.
+  - Deploy: owner-agreed quiet moment; proxy container recreated from the head node
+    (`docker compose --env-file .env up -d --build`), created 2026-10-12T00:34:34Z,
+    status `Up (healthy)`. Container recreate cuts in-flight proxied :4000 requests —
+    window was quiet, nothing dropped.
+  - Verification: `:4000/health` → 200; `/v1/models` → `spark-llm`; rendered config
+    inside the container shows `client_body_buffer_size 1m;` (nginx.conf line 49).
+    Probe: one ~100K-token body (625 KB, <1 MB) through `:4000/v1/chat/completions` →
+    HTTP 200, completed normally (53 s wall, thinking model, unremarkable); proxy logs
+    before/after the probe: **0** "temporary file"/"buffered" warn lines — the warn
+    that previously fired on every such body is gone.
+
 - **2026-10-11 (late) — TTFT queue-wait term measured DIRECTLY (handoff 01): 6-concurrent × 3 rounds of ~91K-token (tokenizer) prose probes, owner-agreed window. Verdict: the admission layer never queued (cap 6 == burst 6) — the wait term lives INSIDE the engine scheduler, which first-schedules big prefills one-at-a-time at ~40 s/position; measured worst server TTFT 240 s ≈ k×40 + 43, i.e. the k×(15–25 s) arithmetic UNDER-predicts ~1.7–2×. Stand pat: documented cost, no fix.**
   - Method / constraints: HTTP request load ONLY (no GPU-allocating probe — the OOM
     watch item stood), direct `:8000` (proxy latency excluded by design), lane UP

@@ -188,6 +188,44 @@ changes). §5 never carried it separately, so no row here.
   - Warm-up rule: no performance numbers before ~08:33 EDT; FIX-2 (mixed-batch
     draft-truncation cliff) and FIX-3 (1M-token gate + deep-context ladder) run on
     THIS boot after warm-up.
+- **2026-10-12 — FIX-2 (handoff 06): mixed-batch draft-truncation cliff check
+  (knapcio issue #7 tip 1) — CLIFF PRESENT via `response_format: json_schema` (NOT via
+  `tool_choice: "required"`, which fast-paths on this stack). No config change; the
+  workaround goes to a bench-recipe-update PLAN (owner decision).**
+  - Method: A/B at c4, temp 0, `ignore_eos`, ~3.5K-token prose in / 500 out, idle gate
+    (`num_requests_running/waiting == 0`) before every round, 3 rounds each; step math
+    from `/metrics` deltas (`spec_decode_num_(drafts|accepted_tokens)_total`), direct
+    `:8000` (no proxy), boot age ~35 min at first round. Receipts:
+    `.research/scratch/fix2fix3-20261012/` (`fix2-rounds.json`, `fix2-verdict.json`,
+    `fix2-control-c5.json`, stdout captures).
+  - Run A (4 prose): ms/step 26.9/27.6/26.2 (mean **26.5**), accept/step 3.23–3.57,
+    prose streams 33–40 tok/s.
+  - Run B (4 prose + 1 grammar-constrained): **36.0/36.8/36.4 ms/step (mean 36.4,
+    +37.2% vs A)**, prose streams drop to 27–33 tok/s (≈ −20%).
+  - Run C control (5 concurrent UNCONSTRAINED prose — batch-size confound check):
+    ms/step 22.9/23.4/22.7 (mean **23.0**), accept 3.25 — batch size 5 does NOT slow
+    steps; the inflation is the constrained stream itself. One grammar-constrained
+    (json_schema, `minItems: 250` so it decodes a full 800-token window) request
+    inflates EVERY stream's step time ~+37% (vs c5: +58%).
+  - Mechanism note (differs from knapcio's "drafts truncated for every stream"): the
+    global accept/step does NOT collapse in B (3.57–3.75, propped up by the highly
+    predictable constrained stream) — on THIS stack the cost is a slower verify step
+    while a grammar-constrained stream is decoding (grammar-bitmask application per
+    step across the batch), not lost drafting. `tool_choice: "required"` does not
+    trigger it here: the request fast-paths (one chunk, 0.4 s wall, single
+    tool-call delta, never joins the decode batch) — knapcio's trigger does not
+    transfer as-is; `response_format: json_schema` is the live agent-serving trigger
+    (structured outputs), and constrained JSON with `minItems`/long arrays buffers
+    delivery (chunks at end) while decoding the full window.
+  - Bench-recipe-update PLAN (NOT adopted; owner decision): A/B the uniform-draft-length
+    workaround on this stack — same FIX-2 harness, all streams forced to one `spec_k`
+    via the lane's `vllm_xargs: {spec_k}` override (e.g. k=2, k=3) vs the default
+    adaptive policy, mixed constrained batch, acceptance + ms/step + tok/s receipt.
+    Touches nothing at rest; runs as a bench candidate only.
+  - Related serving guidance (no change): agents mixing thinking prose with forced
+    structured outputs share the batch, so one constrained request taxes every
+    concurrent stream ~20% while it decodes — bounded by the constrained stream's
+    length.
 
 - **2026-10-12 — FIX-1 (handoff 06): host CPU floor-clock check (knapcio issue #7) —
   ALL FOUR NODES HEALTHY. Question closed; no owner decision needed.**

@@ -159,6 +159,36 @@ changes). §5 never carried it separately, so no row here.
 
 ## Changelog
 
+- **2026-10-12 — NVFP4 lane brought UP (handoff 06 FIX-2/FIX-3 boot; owner-authorized
+  teardown/switch — "sparks are FREE", backend on remote provider). FP8 → NVFP4 switch
+  per LANE-SWITCHING.md, all gates green.**
+  - Switch: `tp4ctl down` on the head (FP8 `glm53_fp8_dflash_tp4` gone on all 4 ranks;
+    it had been serving 13 h — the owner confirmed free use) →
+    `verify-fabric-p2.sh` ALL CHECKS PASS → `git pull` on all 4 nodes (main @ `1544545`;
+    the head clone was still parked on the merged-out topic branch, switched to main) →
+    `./start.sh serve` worker-first from
+    `glm-v53-flash-nvfp4-tp4-switchless/upstream`.
+  - Derived-mirror gotcha hit (expected from the 2026-10-10 rename): `upstream/.env` is
+    gitignored and lives only in the old pre-rename dir — copied
+    `glm-v53-flash-nvfp4-4x-noswitch/upstream/.env` → the new upstream per the mirror
+    convention (its own header documents this flow). Profile check confirms the lane
+    invariants: `stock-nvfp4.env` MAX_MODEL_LEN 1048576, KV_BYTES 20 GiB/rank,
+    4-PF NCCL contract (`nccl-patched-4pf` `8de68def…`), FABRIC 4-view addressing.
+  - Boot: preflights PASS, containers `glm53-nvfp4-r0..3` launched ~07:55 EDT,
+    `/health` 200 at ~08:03 EDT (8 min, cold-cache). `/v1/models` → `glm-5.3-flash`
+    max_model_len 1,048,576 (NVFP4 signature). Boot logs: `Connected all rings` on all
+    4 ranks with RouteFinal showing ALL FOUR PFs (rocep1s0f0/f1 + roceP2p1s0f0/f1);
+    **0 NCCL WARN lines on any rank**; the known-boot DEVSELECT line was not observed
+    this boot.
+  - Gates (pre-warm-up, functional only): corruption probe 0 U+FFFD, emoji + CJK
+    intact; forced tool call (`get_weather`) OK; `bench/prefix_scan.py` (97 K prefix,
+    3×3 drift) **verdict PASS** (drift cold-cold 0.0622 / cold-warm 0.0456 vs limit
+    0.0933, zero warm-without-hit, solo lookups 4/4 correct both phases). Receipts:
+    `.research/scratch/fix2fix3-20261012/` (untracked).
+  - Warm-up rule: no performance numbers before ~08:33 EDT; FIX-2 (mixed-batch
+    draft-truncation cliff) and FIX-3 (1M-token gate + deep-context ladder) run on
+    THIS boot after warm-up.
+
 - **2026-10-12 — FIX-1 (handoff 06): host CPU floor-clock check (knapcio issue #7) —
   ALL FOUR NODES HEALTHY. Question closed; no owner decision needed.**
   - Method: knapcio's CPPC feedback-counter probe (`/sys/devices/system/cpu/cpuN/

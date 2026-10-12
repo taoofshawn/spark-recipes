@@ -159,6 +159,32 @@ changes). §5 never carried it separately, so no row here.
 
 ## Changelog
 
+- **2026-10-12 — FIX-1 (handoff 06): host CPU floor-clock check (knapcio issue #7) —
+  ALL FOUR NODES HEALTHY. Question closed; no owner decision needed.**
+  - Method: knapcio's CPPC feedback-counter probe (`/sys/devices/system/cpu/cpuN/
+    acpi_cppc/feedback_ctrs`, busy loop pinned to the core, counters diffed across 2 s;
+    reference counter assumed 1 GHz). Read-only SSH, zero lane interaction.
+  - Core layout on these nodes (cpuinfo_max_freq per cpu): cpu0–4 + cpu10–14 =
+    Cortex-A725 (max 2,808,000 kHz), cpu5–9 + cpu15–19 = Cortex-X925 (max 3,900,000
+    kHz) — 10+10, same X925 numbering window as knapcio's units (cpu5–9/15–19 big).
+  - Delivered frequencies under load (one X925 + one A725 core per node):
+
+    | node | kernel | X925 delivered | A725 delivered |
+    |---|---|---|---|
+    | spark-0f0b | `6.17.0-1032-nvidia` | 3893 MHz | 2805 MHz |
+    | spark-6d14 | `6.17.0-1032-nvidia` | 3896 MHz | 2805 MHz |
+    | spark-6d90 | `6.17.0-1032-nvidia` | 3896 MHz | 2803 MHz |
+    | spark-6d24 | `6.17.0-1032-nvidia` | 3894 MHz | 2804 MHz |
+
+  - Reading: healthy ≈ 3900 / 2800 — every node delivers ~99.8% of max on both
+    clusters. The floor-clock signature (~1378 / ~1013 MHz on affected 6.17 units) is
+    ABSENT on this ring, even though our kernel `6.17.0-1032-nvidia` is in knapcio's
+    affected 6.17 family (their units: DGX OS 7.5 / `6.17.0-1031-nvidia`). The kernel-7.x
+    fix remains banned (ring-NCCL invariant) and is now moot for clock reasons —
+    this cluster does not exhibit the symptom it fixes. No runtime change attempted
+    (none needed); future benches inherit this receipt and do not need to re-run the
+    check unless the kernel/driver pin changes.
+
 - **2026-10-12 — Upstream pass (update-recipe sweep, doc-only — no config/pin changed):
   checkpoint tip moved past our pin, a deep-context quality thread, and three knapcio
   issues; nothing adoptable as config.** Full facts verified live 2026-10-12; raw

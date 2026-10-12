@@ -184,6 +184,43 @@ All of `noswitch-prep/` is site-owned, not upstream-owned:
 
 ## 5. Changelog
 
+- **2026-10-12 — FIX-4 record re-pin VERIFIED against the live lane; check-f0 still FAILs
+  on two pre-existing validator-expectation classes (neither is lane drift) — owner
+  decisions parked (handoff 06 §FIX-4 finisher).**
+  - Record re-pin verified: all 9 `container_file_sha256` entries in
+    `docs/operational-identities/2026-09-30-e36-lm-head.json` — including the three
+    re-pinned sources (gpu_worker `ae2bdaf5…`, scheduler `c5d8b99f…`, model_runner
+    `598f9fd7…`) — MATCH the live containers on all four ranks, and the three
+    `runtime_sources` hashes match the repo working tree (0.85-KV recipe pin
+    `68d18652…` == fresh sha256 of `upstream/cluster.env.example`). The stale-hash
+    mismatch row FIX-4 targeted is GONE.
+  - The full check (`check-f0.py` operational-identity mode, 2026-10-12 11:24 UTC, lane
+    serving 13 h) still returns FAIL with 8 problems: per rank, "patched NCCL not
+    loaded by GPU worker" + "runtime file …/vllm/v1/engine/core.py". Diagnosed
+    read-only (report: `.research/scratch/f0-20261012/report-check-f0-fix4-finisher.json`):
+    1. **NCCL row = validator path-shape artifact.** The GPU worker (pid 3227213,
+       /proc/<pid>/maps) HAS the patched lib loaded — as the symlink's RESOLVED path
+       `/opt/patched-nccl/libnccl.so.2.30.7` (`ls -la /opt/patched-nccl/`:
+       `libnccl.so.2 -> libnccl.so.2.30.7`). The probe accepts only a maps line ending
+       with the literal symlink path `/opt/patched-nccl/libnccl.so.2`, which the kernel
+       never reports. The stock wheel NCCL also mapped is normal (patched preload takes
+       precedence). Lane healthy; validator too literal.
+    2. **core.py row = stale frozen expectation, NOT a stale lane.** Live core.py
+       `78063640…` == deployed `~/.local/tp4/experiments/e03/end-drain/core.py` == repo
+       working tree (changed 2026-10-11 by the GRAMMAR-DIAG/withdrawal commits
+       d8a5b2b/b8e19d2/dc0036e/2fc9478 — the same event family that stale-dated the three
+       FIX-4 sources). The check's frozen value `3a9a038f…` lives in the E31 baseline's
+       `system.operational_identity.container_file_sha256` (pre-dates those commits) and
+       is NOT overridable by the identity record (`core.py` is outside the script's
+       `allowed_override_targets`; FIX-4 scope explicitly excluded baseline items).
+  - Both fixes are owner decisions, deliberately NOT applied here: (a) a one-line
+    check-f0.py NCCL probe relaxation (accept the resolved versioned path), (b) an E31
+    baseline core.py re-pin which CASCADES — `expected_operational` verifies the
+    baseline file hash against the record's `performance_baseline.sha256`, so the
+    baseline edit forces a record re-pin of that hash too. Flagging both instead of
+    re-staling the frozen receipt or editing a validator to pass.
+  - Lane untouched throughout (read-only SSH + HTTP; `glm53_fp8_dflash_tp4` serving).
+
 - **2026-10-12 — Proxy `client_body_buffer_size 1m` deployed (handoff 02, cosmetic
   follow-up to the 10-11 TTFT attribution): the per-request "client request body
   buffered to temporary file" warn is silenced for bodies <=1 MB (nginx default buffer

@@ -2,7 +2,7 @@
   "schema_version": 1,
   "identity_id": "2026-09-30-e36-lm-head",
   "status": "operational default",
-  "description": "E36: the E35 default plus the INT8 shared lm_head. The vocab-parallel lm_head that the target shares with the DFlash2 drafter is packed INT8 W8A16 (symmetric, group 128, Marlin) at load, before CUDA graph capture, and its BF16 weight is freed. This operational identity is separate from the frozen E31 performance baseline, which remains its engine identity.",
+  "description": "E36: the E35 default plus the INT8 shared lm_head. The vocab-parallel lm_head that the target shares with the DFlash2 drafter is packed INT8 W8A16 (symmetric, group 128, Marlin) at load, before CUDA graph capture, and its BF16 weight is freed. This operational identity is separate from the frozen E31 performance baseline, which remains its engine identity. Record refresh 2026-10-12 (authorized by handoff .research/handoffs/06-problem-fixes-consolidated.md, FIX-4): the grammar-fix commits 08b048c/34aa09e (2026-10-10, required+thinking-on engine-crash fix) and dd1a039 modified the three runtime override sources below after this record froze their hashes; the deployed ~/.local/tp4/experiments/e03 copies match the working tree (verified live on spark-0f0b 2026-10-12), so the frozen hashes were re-pinned to the deployed/current hashes. The record's recipe pin (cluster.env.example) was found stale while diffing the record against the repo for this FIX-4 refresh — also from the same grammar-fix event (template text: site mods 8/10 notes, site mod 9 withdrawal); it was re-pinned to the current template hash with the same authorization. Beyond those four entries no other field changed and no serving configuration changed.",
   "performance_baseline": {
     "id": "2026-09-28-e31",
     "path": "docs/historical_benchmarks/baselines/2026-09-28-e31/baseline.json",
@@ -26,10 +26,10 @@
   "runtime_identity_overrides": {
     "container_file_sha256": {
       "/usr/local/lib/python3.12/dist-packages/sparkcache/spark_context_cache_connector.py": "aa046965637b685ec1f6a00e427eb46279e28bf0d49ee546236bc774be2de9bd",
-      "/usr/local/lib/python3.12/dist-packages/vllm/v1/worker/gpu_worker.py": "442f18ed75193ba85f7be763d4fff2987b7613b9fa0b9dafdb6cceb18baf70de",
-      "/usr/local/lib/python3.12/dist-packages/vllm/v1/core/sched/scheduler.py": "2284d481291295baa229b6084d6a6686b05510c8c5b5e12cb07ca569e9c877bd",
+      "/usr/local/lib/python3.12/dist-packages/vllm/v1/worker/gpu_worker.py": "ae2bdaf55ba3395096fa2c1cb45a177bb3cb57100f22f72a9ed737a4b4a1d991",
+      "/usr/local/lib/python3.12/dist-packages/vllm/v1/core/sched/scheduler.py": "c5d8b99f89e76f294fb749331365105bfe7655ded42c52c27fc31655d5e1a086",
       "/opt/tp4/tp4_admission.py": "3909b20d57752e4e68035bfe81f35490fe2dd763bf65f089b08d20374d97c6db",
-      "/usr/local/lib/python3.12/dist-packages/vllm/v1/worker/gpu/model_runner.py": "d8fbfa5112f700d2a7468e97c6bb0857a16adccd70c34a22d59ec7ef97a40216",
+      "/usr/local/lib/python3.12/dist-packages/vllm/v1/worker/gpu/model_runner.py": "598f9fd76db2091239ea1d79b68d0ee77b372adc37134c8c01ad38279f9b6115",
       "/usr/local/lib/python3.12/dist-packages/vllm/v1/worker/gpu/spec_decode/dflash2/speculator.py": "553d3e7b33482a93f72ed116e0e8d8b5bf2070313a7ad4aa5be9d83c4167bad5",
       "/opt/tp4/adaptive_k_scheduler.py": "89dbca0f780911aae3f5f5b3954237a9271a30cc9905d56f70705e77696b8ef8",
       "/tmp/glm53-e35-policy": "3f67929e07d991f1b2e904c720c776e76760db43680216df676fbce7ad63bd5a",
@@ -97,13 +97,13 @@
   "runtime_sources": [
     {
       "path": "scripts/node/experiments/e03/prefill-cache-trim/gpu_worker.py",
-      "sha256": "442f18ed75193ba85f7be763d4fff2987b7613b9fa0b9dafdb6cceb18baf70de",
+      "sha256": "ae2bdaf55ba3395096fa2c1cb45a177bb3cb57100f22f72a9ed737a4b4a1d991",
       "mount_source": "$HOME/.local/tp4/experiments/e03/prefill-cache-trim/gpu_worker.py",
       "container_path": "/usr/local/lib/python3.12/dist-packages/vllm/v1/worker/gpu_worker.py"
     },
     {
       "path": "scripts/node/experiments/e03/prefill-step-cap/scheduler.py",
-      "sha256": "2284d481291295baa229b6084d6a6686b05510c8c5b5e12cb07ca569e9c877bd",
+      "sha256": "c5d8b99f89e76f294fb749331365105bfe7655ded42c52c27fc31655d5e1a086",
       "mount_source": "$HOME/.local/tp4/experiments/e03/prefill-step-cap/scheduler.py",
       "container_path": "/usr/local/lib/python3.12/dist-packages/vllm/v1/core/sched/scheduler.py"
     },
@@ -115,7 +115,7 @@
     },
     {
       "path": "scripts/node/experiments/e03/e36-lm-head-w8a16/model_runner.py",
-      "sha256": "d8fbfa5112f700d2a7468e97c6bb0857a16adccd70c34a22d59ec7ef97a40216",
+      "sha256": "598f9fd76db2091239ea1d79b68d0ee77b372adc37134c8c01ad38279f9b6115",
       "mount_source": "$HOME/.local/tp4/experiments/e03/e36-lm-head-w8a16/model_runner.py",
       "container_path": "/usr/local/lib/python3.12/dist-packages/vllm/v1/worker/gpu/model_runner.py"
     },
@@ -158,7 +158,7 @@
   },
   "recipe": {
     "path": "cluster.env.example",
-    "sha256": "a33c623ea0f1b09bee3611d1815893c846d3587fddffa58bab2368559ec82b47"
+    "sha256": "68d18652c5df26c564ca0dd91ce8a315c5ac94dcc60c9e61c671d5bb7527d8a3"
   },
   "rollback": {
     "path": "scripts/node/reference/operational-20260930-e35.env",

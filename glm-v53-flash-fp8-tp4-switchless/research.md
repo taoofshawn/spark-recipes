@@ -184,6 +184,55 @@ All of `noswitch-prep/` is site-owned, not upstream-owned:
 
 ## 5. Changelog
 
+- **2026-10-11 (late) — TTFT queue-wait term measured DIRECTLY (handoff 01): 6-concurrent × 3 rounds of ~91K-token (tokenizer) prose probes, owner-agreed window. Verdict: the admission layer never queued (cap 6 == burst 6) — the wait term lives INSIDE the engine scheduler, which first-schedules big prefills one-at-a-time at ~40 s/position; measured worst server TTFT 240 s ≈ k×40 + 43, i.e. the k×(15–25 s) arithmetic UNDER-predicts ~1.7–2×. Stand pat: documented cost, no fix.**
+  - Method / constraints: HTTP request load ONLY (no GPU-allocating probe — the OOM
+    watch item stood), direct `:8000` (proxy latency excluded by design), lane UP
+    throughout, zero restarts / zero config changes / zero engine-knob tuning. Bodies
+    ~466 KB each, UNIQUE per request (round/request-indexed rotation + nonce lines) so
+    prefix caching could not collapse the prefill term; `max_tokens=256` + streaming,
+    client-side t0/first-byte/e2e stamped per request. Boot 21:55 UTC, probe 23:44–
+    23:57 UTC → warm (1 h 49 m). Raw artifacts: `.research/ttft-burst-20261011/`
+    (`probe.py`, `probe-results.json`, `vllm-window.log` full head log 23:44–23:57,
+    `join_burst.py`, `decomposition.json` — untracked scratch).
+  - Measured per-request decomposition (server-side, same definitions as the 10-11
+    serial baseline; all 18/18 requests paired to ids by last-exec ≈ client e2e,
+    admitted_total contiguous per round — 189–194 / 196–201 / 202–207 — so the pairing
+    is exact; 26 window admits total = 18 probe + 8 background agent turns BETWEEN
+    rounds):
+    | term | med | max | reading |
+    |---|---|---|---|
+    | arrival→admit | ~0 | ~0 | bounded admission NEVER queued — cap 6 == burst 6, `active: 6` reached every round, `rejected_full=0`, `cancelled=0` (negative ~1–2.5 s = workstation-vs-node clock skew) |
+    | admit→first-exec | 111 s | 194 s | **the wait term**: engine first-schedules the 6 big prefills ONE AT A TIME, ~0/31/71/111/152/190 s stagger per round (~40 s/position) |
+    | first-exec→decode-start | 44 s | 46 s | own prefill wall-clock: ~91 K tokens ≈ 11 s of compute (8192-token chunks, ~9 K tok/s instantaneous) spread over a constant ~43 s by decode interleaving + stalls |
+    | **server TTFT (admit→decode-start)** | **154 s** | **240 s** | position-k pattern ≈ k×40 + 43 s, all three rounds reproduced it (r0/r1/r2 worst: 233/234/240 s) |
+    | client e2e | 176 s | 244 s | ≈ server TTFT + ~20 s decode; client first-byte ≈ server decode-start within ~2 s (cross-validation) |
+  - Engine-tick economics during the burst: `run=1–2, wait=3–5` with all 6 admitted —
+    the scheduler carries one prefilling + one decoding request, not 6 running. Exactly
+    6 pp-burst ticks per round (~90 K prompt tokens each at ~9 K tok/s instantaneous);
+    aggregate prefill ≈ 545 K tokens / 240 s round ≈ **2.3 K tok/s** vs the 6.8 K tok/s
+    single-stream serial baseline. Barrier-form ticks (`pp=0 tg=0`, ~10 s each):
+    3/4/1 per round — present but secondary; the dominant cost is the one-at-a-time
+    big-prefill admission, not barriers alone. KV peaked at 26.1% of the 1.19 M pool —
+    never the constraint, as designed.
+  - **Verdict vs the 10-11 arithmetic:** direction confirmed (queue/scheduling wait
+    under burst is the whole tail; proxy untouched, direct-:8000 numbers match the
+    through-proxy 09-28 client band), magnitude UNDER-predicted ~1.7–2×: k×(15–25 s)
+    + own prefill predicted 90–140 s at k=5, measured 240 s. The per-position
+    coefficient under 6-active burst is ~40 s (serialized prefill admission + decode
+    interleaving + barrier ticks), not 15–25 s. The 09-28 80–160 s agent-tail band
+    corresponds to k≈1–3 — confirmed; deeper burst positions extend to ~240 s.
+  - **Recommendation: (a) STAND PAT — documented cost, no fix.** The tail is the price
+    of 6-active × 262K-context on this latency-bound ring, the engine behaves exactly
+    as its validated E35/E31 stack is designed to (one big prefill at a time, bounded
+    admission), and no error/rejection/OOM occurred. Any mitigation (e.g. admitting >1
+    concurrent big prefill) touches the lane-invariant scheduler stack, is unmeasured
+    risk, and would need its own bench-recipe-update session with a before/after A/B —
+    the measurable targets would be the ~40 s/position stagger and the 43 s prefill
+    wall (vs 15 s serial). NO branch, NO plan commit for (b): nothing applied.
+  - Lane health post-probe: `/health` 200, waiting=0, running=0, zero NCCL WARNs /
+    transport anomalies / OOM entries in the window; background agent traffic continued
+    throughout and after (admitted_total 180→212 across the window).
+
 - **2026-10-11 — TTFT-stall attribution (handoff 04): the 09-28 80–160 s agent-tail is ENGINE-side — bounded-admission queueing under burst concurrency + ~100K-token chunked prefill + E31 barrier ticks. The proxy's "buffered to temporary file" is a same-second passthrough marker, exonerated with hard numbers. No fix prepared (proxy is not the cause).**
   - Scope note: the 09-28 window's node logs and client logs are gone (both lane
     containers recreated at today's 21:55/22:14 UTC boot; omp client logs start 10-09),
@@ -230,8 +279,10 @@ All of `noswitch-prep/` is site-owned, not upstream-owned:
     not). Optional cosmetic-only tuning for a future owner window (NOT applied, NOT
     pushed, zero expected TTFT effect): `client_body_buffer_size 1m;` in the proxy
     server block to keep typical agent bodies (≤1 MB) in memory and silence the warn
-    spam. Open item for a future agreed window: a 6-concurrent ~100K-probe burst would
-    measure the queue-wait term directly; skipped per the passive-observation constraint.
+    spam. ~~Open item for a future agreed window: a 6-concurrent ~100K-probe burst would
+    measure the queue-wait term directly; skipped per the passive-observation
+    constraint.~~ **CLOSED 2026-10-11 (late): measured directly — see the burst-probe
+    entry at the top of this changelog.**
 
 - **2026-10-11 — SparkCache capacity gauge VERDICT: `healthy=no used=0.0/0.0GiB` was the gauge truthfully reporting "no capacity policy configured" on the pre-E31-MB boot — cache data path was fine throughout; gauge live and healthy since the 09-30 capacity rollout (watch item closed).**
   - Mechanism (source-verified in the running image, read-only): the worker emits

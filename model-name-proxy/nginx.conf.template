@@ -39,6 +39,15 @@ http {
         # proxy_request_buffering off it is a limit, not a buffer.
         client_max_body_size 64m;
 
+        # Absorb typical agent bodies (<=1 MB) in memory instead of spilling
+        # them to the temp dir, which logs a "client request body buffered to
+        # temporary file" warn per request (default client_body_buffer_size is
+        # 16 KB). Cosmetic only — the 2026-10-11 fp8 research.md TTFT
+        # attribution entry exonerated the spill as a delay cause (<10 ms
+        # worst case); this just silences the warn. Bodies >1 MB (up to the
+        # 64m max) still spill — expected and harmless.
+        client_body_buffer_size 1m;
+
         # ---- streaming passthrough (SSE-safe): the whole point vs the old
         # SparkRun proxy that hid spec-decode metrics. Nothing is buffered
         # except tiny request bodies during the model-name rewrite.

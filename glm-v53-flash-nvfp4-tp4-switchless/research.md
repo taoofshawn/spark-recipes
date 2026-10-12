@@ -110,18 +110,25 @@ changes). §5 never carried it separately, so no row here.
   RouteFinal shows all four PFs carrying QPs on every rank, reproduced at T2 the same
   day. The `afe5f486…` 2-PF rebuild question is moot — that lib stays staged only as
   the FP8 lane's rollback artifact.
-- **OPEN — true 1M-token context gate** — the boot serves `max_model_len 1,048,576`
+- **OPEN — true 1M-token context gate + deep-context quality check** — the boot serves
+  `max_model_len 1,048,576`
   (Phase E) and the KV pool is sized ~3.25M tokens, but no single ~1M-token REQUEST has
   run on this exact stack; the largest recorded context is prefix_scan's 96,768-token
   warm prefix. Next action: one real ~1M-token prefill+decode request at a future
-  bring-up (run warm, after JIT settles). Closes with a completed request + receipt
+  bring-up (run warm, after JIT settles), EXTENDED with the deep-context quality
+  ladder (FIX-3, per the 2026-10-12 changelog: forum t381350 non-thinking failures
+  ≥~300K across quants incl. stock NVFP4 — thinking ON and OFF at 64K/256K/512K/~1M +
+  corruption-at-depth probes). Closes with a completed ~1M request + quality receipts
   recorded here.
 - **CLOSED 2026-10-10 — Ring decode penalty** — measured and compared at first bring-up
   and Phase E: c1 is latency-bound at ~45–55% of knapcio's switched fleet (44.7/75.8/
   96.3 tok/s at Phase E); the four-PF transport pays off at concurrency (json c8 +26%,
   c16 +15%) and prefill TTFT (json c8/c16 ~6.5 s → 0.48/0.58 s); T2 reproduced within
   −2.3%…+3.8%. Lane stays zero-mod; lossless8 fallback NOT triggered — that remains an
-  explicit owner decision per §2 decision 5, not a watch item.
+  explicit owner decision per §2 decision 5, not a watch item. External corroboration
+  (knapcio issue #9, 2026-10-12 pass): a third party hardware-qualified
+  `TRANSPORT=switchless` on a physical 4-node ring with 4 RDMA functions/node all
+  addressed — same shape as this ring.
 - **OPEN — GLM_ROCE_ALLREDUCE / GATHER_ROUTE hardware qualification** — still never
   hardware-qualified (no changelog entry covers them). Under `TRANSPORT=switchless` the
   launcher forces `GLM_ROCE_ALLREDUCE=0` and `GATHER_ROUTE` is inert (upstream
@@ -131,13 +138,81 @@ changes). §5 never carried it separately, so no row here.
   clean at every boot on this lane (first bring-up, Phase E, T2: clean
   `get_weather({"city": "Tokyo"})`); NO structural-tag override (TC-45) is needed —
   the upstream glm47 parser handles it. Parity with the FP8 lane confirmed.
-- **OPEN — Upstream churn** — knapcio's `main` moves fast. Latest full pass 2026-10-10
-  (tonyd2wild review + forum sweep): knapcio tip still `770d115`, nothing adoptable
-  landed after 2026-09-29. Next action: re-run the VENDORED-AT update procedure
-  periodically and on any adopted change — especially any upstream
-  `profiles/current.env` change, which needs the §3 stock-compat review.
+- **OPEN — Upstream churn** — knapcio's `main` moves fast. Latest full pass 2026-10-12
+  (see the dated changelog entry): knapcio tip still `770d115`, nothing adoptable as
+  config; nvidia checkpoint tip moved to `da920bb` (PARKED re-pin candidate, owner
+  decision). Prior full pass 2026-10-10 (tonyd2wild review + forum sweep): knapcio tip
+  still `770d115`, nothing adoptable landed after 2026-09-29. Next action: re-run the
+  VENDORED-AT update procedure periodically and on any adopted change — especially any
+  upstream `profiles/current.env` change, which needs the §3 stock-compat review.
+- **PARKED (owner decisions, not adopted — 2026-10-12 pass):**
+  - **Checkpoint re-pin candidate** `nvidia/GLM-5.3-Flash-NVFP4` `09b04e5e` → tip
+    `da920bb`: layer 45 leaves the NVFP4 ignore list (served BF16); weights untouched,
+    zero-mod premise intact. Requires re-download + bench-recipe-update before any
+    re-pin; possibly relevant to the deep-context quality findings (FIX-3).
+  - **KV prefix-cache store-vs-retain bench methodology** (knapcio issue #8, via
+    MiaAI-Lab DeepSeek issue #43): adopt as the measurement pattern for the ~3.25M-token
+    concurrency claim at a future bench-recipe-update session.
+  - **tonyd2wild "power-cut relaunch: serve fresh, don't `docker start`"** ops rule as a
+    README Day-2 note (low priority; the lane's normal relaunch path already recreates
+    containers).
 
 ## Changelog
+
+- **2026-10-12 — Upstream pass (update-recipe sweep, doc-only — no config/pin changed):
+  checkpoint tip moved past our pin, a deep-context quality thread, and three knapcio
+  issues; nothing adoptable as config.** Full facts verified live 2026-10-12; raw
+  artifacts in `.research/scratch/` (`config-09b04e5e*.json` / `config-main.json`,
+  `hf_quant_config-*.json`, `pin_tree.json` / `tip_tree.json`, `knapcio-issue7.md`).
+  - **nvidia/GLM-5.3-Flash-NVFP4 main moved past our pin:** pinned `09b04e5e`
+    (2026-09-11) → tip `da920bb` (2026-09-29 21:30). Tree-level diff: ONLY `config.json`
+    + `hf_quant_config.json` changed — both add `"model.language_model.layers.45*",
+    "model.layers.45*"` to the ignore list (layer 45 no longer NVFP4-quantized, i.e.
+    served BF16). All 33 weight shards byte-identical (oid + size compared, `.research/
+    scratch/pin_tree.json` vs `tip_tree.json`); the zero-mod premise is intact at the
+    new rev. **PARKED as an improvement candidate, NOT adopted** — owner decision:
+    re-download + bench-recipe-update before any re-pin; possibly connects to the
+    deep-context quality findings below (a BF16 layer-45 may be a targeted quant fix).
+  - **Forum t381350 deep-context quality thread (posts 2026-10-11 → 10-12):**
+    ajvazan's `github.com/goshi/quant-depth-quality-bench` and technigma's screening
+    show quality collapse at deep context (≥~300K tokens) in NON-thinking mode across
+    quants INCLUDING stock vLLM NVFP4, with failures disappearing in reasoning mode.
+    Not adoptable as config — it motivates the deep-context quality extension of the
+    1M-token gate (FIX-3, this session).
+  - **knapcio issue #7 (2026-10-02, host CPU floor clocks):** on ASUS GX10 / DGX OS 7.5
+    / kernel `6.17.0-1031-nvidia`, Grace CPU cores can deliver their FLOOR frequency
+    (~1.38 GHz X925 / ~1.0 GHz A725 vs 3.9/2.8 max) while `scaling_cur_freq` reports
+    full speed; no runtime fix works on 6.17 — the fix is kernel 7.0 (+8–10%
+    single-stream decode, GPU busy 82–90% → 94–95%). **Our nodes run
+    `6.17.0-1032-nvidia` — the affected family** (verified live 2026-10-12, all four
+    `uname -r`). The kernel fix is BANNED on this cluster (7.x breaks ring NCCL — FP8
+    lane invariant), so the per-node delivered-MHz check (FIX-1, this session) is
+    diagnosis-only; a positive finding is an owner decision, not a runtime change.
+    Full issue text archived at `.research/scratch/knapcio-issue7.md`.
+  - **knapcio issue #7 tip 1 (mixed-batch draft-truncation cliff):** in the TP4
+    community recipe (vLLM + draft-model spec decoding with per-step draft truncation),
+    ONE request with `response_format: json_schema` or `tool_choice: "required"`
+    switched off draft-length truncation for EVERY stream in the running batch (4
+    streams 65 → 103 ms/step, 31.5 → 22 tok/s each); `tool_choice: "auto"` did not
+    trigger it. Our lanes serve agents that mix thinking prose with forced tool calls —
+    if the cliff exists here it is a live deficit. Note the lane's all-json c1 bench
+    (96.3 tok/s) does NOT test this; only a MIXED batch does → FIX-2 A/B check (this
+    session).
+  - **knapcio issue #8 (KV prefix-cache store-vs-retain bench methodology, via MiaAI-Lab
+    DeepSeek issue #43):** PARKED as a bench-method improvement candidate for the
+    ~3.25M-token concurrency claim — owner decision, not adopted this session.
+  - **knapcio issue #9 (supporting citation only):** a third party hardware-qualified
+    `TRANSPORT=switchless` on a physical 4-node ring, 4 RDMA functions/node, all
+    addressed — same shape as this lane's ring. Cited alongside the ring-decode row
+    below (§5); no action.
+  - **tonyd2wild tip moved `96658cf0` → `87aa9c0` (2026-10-10):** adds DERISKED
+    uncensored weights on knapcio's stack — **REJECT for this lane** (weight-mod
+    premise, §2 decision 5). His "power-cut relaunch: serve fresh, don't `docker
+    start`" ops rule parked as a README Day-2 note candidate (owner decision; low
+    priority — the lane's normal relaunch path already recreates containers).
+  - **Standing watch items unchanged:** GLM_ROCE_ALLREDUCE / GATHER_ROUTE hardware
+    qualification (§5); upstream-churn periodic re-run; owner merge-gate on the working
+    branch. knapcio tip STILL `770d115` — no re-vendor needed.
 
 - **2026-10-11 — T3a ROOT-CAUSED: `DEVSELECT_BUILD_FAILED` is an upstream platform
   limitation, not a lane/overlay bug. Watch item CLOSED (understood; no fix reachable on

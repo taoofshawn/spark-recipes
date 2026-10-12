@@ -110,16 +110,11 @@ changes). §5 never carried it separately, so no row here.
   RouteFinal shows all four PFs carrying QPs on every rank, reproduced at T2 the same
   day. The `afe5f486…` 2-PF rebuild question is moot — that lib stays staged only as
   the FP8 lane's rollback artifact.
-- **OPEN — true 1M-token context gate + deep-context quality check** — the boot serves
-  `max_model_len 1,048,576`
-  (Phase E) and the KV pool is sized ~3.25M tokens, but no single ~1M-token REQUEST has
-  run on this exact stack; the largest recorded context is prefix_scan's 96,768-token
-  warm prefix. Next action: one real ~1M-token prefill+decode request at a future
-  bring-up (run warm, after JIT settles), EXTENDED with the deep-context quality
-  ladder (FIX-3, per the 2026-10-12 changelog: forum t381350 non-thinking failures
-  ≥~300K across quants incl. stock NVFP4 — thinking ON and OFF at 64K/256K/512K/~1M +
-  corruption-at-depth probes). Closes with a completed ~1M request + quality receipts
-  recorded here.
+- **CLOSED 2026-10-12 — true 1M-token context gate + deep-context quality check
+  (FIX-3)** — the ~1M request ran end-to-end TWICE (thinking OFF + ON, independent
+  prefills — the 2nd missed cache, `prefix_cache_queries` delta 998,405 / hits 0) and
+  the deep-context quality ladder PASSED at every depth in both modes. Receipts in the
+  2026-10-12 FIX-3 changelog entry below.
 - **CLOSED 2026-10-10 — Ring decode penalty** — measured and compared at first bring-up
   and Phase E: c1 is latency-bound at ~45–55% of knapcio's switched fleet (44.7/75.8/
   96.3 tok/s at Phase E); the four-PF transport pays off at concurrency (json c8 +26%,
@@ -188,6 +183,42 @@ changes). §5 never carried it separately, so no row here.
   - Warm-up rule: no performance numbers before ~08:33 EDT; FIX-2 (mixed-batch
     draft-truncation cliff) and FIX-3 (1M-token gate + deep-context ladder) run on
     THIS boot after warm-up.
+- **2026-10-12 — FIX-3 (handoff 06): true ~1M-token context gate + deep-context
+  quality ladder — §5 row 1 CLOSED; ALL probes PASS at every depth, both thinking
+  modes; the forum deep-context failure thread did NOT reproduce on this stack.**
+  - Method: goshi/quant-depth-quality-bench generators @ commit `21647f5` (fetched
+    fresh; stdlib), custom ladder — per (depth ∈ {64K, 256K, 512K, ~1M} × thinking
+    {OFF, ON}): one exec-checked code probe (balanced-parens, RU, seed 1000, executed
+    with its assertions) + one corruption probe (needle Cyrillic code token + emoji/CJK
+    block embedded, reproduce + U+FFFD count). Sequential HTTP only, idle gate before
+    every request, direct `:8000`. Prompt sizing calibrated against the server
+    tokenizer (`/tokenize`): filler is 2.76 chars/token (the repo's 2.1 estimate is
+    off for this tokenizer) — depth_k 1000 = 998,405 tokens < 1,048,576 − budget.
+    Receipts: `.research/scratch/fix2fix3-20261012/` (`fix3-ladder.json`,
+    `fix3-stdout.txt`).
+  - **§5 row 1 gate: the ~1M-token request COMPLETED prefill+decode end-to-end twice**
+    (thinking OFF 437.0 s, thinking ON 437.5 s — independent prefills: the ON run
+    MISSED prefix cache, `prefix_cache_queries` +998,405 with 0 hits;
+    `request_prefill_kv_computed_tokens_sum` +998,405 — nothing truncated). Wall
+    prefill-dominated rate ≈ 2.3K tok/s at 998K (512K: 189 s ≈ 2.7K tok/s; 256K: 86 s
+    ≈ 3.0K tok/s; 64K: 21 s). Transient KV occupancy ≈ 31% of the 20 GiB/rank pool
+    (1M of ~3.25M tokens); before/after gauge samples show idle 0.0 (sampled between
+    requests).
+  - Quality ladder: code task CORRECT at 64/256/512/998K in BOTH modes (16/16 rows
+    pass); corruption probes: needle correct everywhere, emoji + CJK reproduced,
+    **0 U+FFFD at every depth/mode**, no loop signatures (max repeat ≤1, threshold
+    ≥8), no special-token contamination, `finish=stop` on every row.
+  - Caveat on the shallow thinking-ON rows: the ON runs immediately follow the OFF
+    runs on the SAME seeded prompt — 64K–512K prefill hit the prefix cache (wall 1.5–2.8 s
+    is cache-hit decode, NOT clean prefill); the two 998K rows are both clean (ON
+    missed cache at that depth). The PASS/PASS results are unaffected (quality is
+    content, not timing).
+  - Forum t381350 non-thinking deep-context failures (≥~300K across quants incl. stock
+    NVFP4) did NOT reproduce here: non-thinking was CORRECT at 256K/512K/998K on the
+    exec-checked task and needle. No new watch item opened; note the thread also used
+    different task sets — the parked checkpoint re-pin `da920bb` candidate (owner
+    decision) remains the next lever if a future probe disagrees.
+
 - **2026-10-12 — FIX-2 (handoff 06): mixed-batch draft-truncation cliff check
   (knapcio issue #7 tip 1) — CLIFF PRESENT via `response_format: json_schema` (NOT via
   `tool_choice: "required"`, which fast-paths on this stack). No config change; the

@@ -225,6 +225,40 @@ All of `noswitch-prep/` is site-owned, not upstream-owned:
     mode must return PASS (0 problems) — both former problem classes (NCCL probe
     path-shape artifact, stale baseline core.py expectation) are fixed at the source;
     output to be pasted in a follow-up entry.
+- **2026-10-13 (later) — LIVE check-f0 verification COMPLETE: `2026-09-30-e36-lm-head
+  CHECK PASS`, 0 problems, on the fresh FP8 boot — the f175234 validator fixes work;
+  one NEW defect found and fixed en route (the cascade re-pin itself had recorded a
+  wrong hash, `a1907f9`).**
+  - Bring-up (lane switch NVFP4 → FP8 per LANE-SWITCHING.md, owner-authorized): NVFP4
+    torn down all-ranks + stopped containers removed, `verify-fabric-p2.sh` ALL PASS,
+    `git pull` on all 4 nodes (docs-only diff; no config change → no deploy),
+    `tp4ctl up`. Cold boot ~13 min (checkpoint load dominated by cold-cache shard
+    reads, ~10 s/shard), `/health` 200; `/v1/models` → `glm-5.3-flash` max_model_len
+    262,144 (FP8 signature); **0 NCCL WARN on every rank**; live container env shows
+    the full four-PF contract (`NCCL_IB_HCA` 4 PFs, MERGE_NICS=0,
+    SWITCHLESS_RING_ONLY=1, EXTENDED_IPV4_GIDS=1, `VLLM_NCCL_SO_PATH=`/opt/patched-nccl
+    libnccl.so.2). Gates: corruption probe 0 U+FFFD (emoji + CJK intact) and forced
+    `tool_choice:"required"` → clean `get_weather({"city":"Tokyo"})`. No bench (no
+    FP8 performance work this session; warm-up rule respected).
+  - **First check-f0 run: FAIL with ONE problem — "operational identity performance
+    baseline hash mismatch" — a defect in f175234 itself, not in the lane and not in
+    the validator.** The commit re-pinned the e36 record's
+    `performance_baseline.sha256` to `f98a3488…`, but that value matches nothing: the
+    committed `2026-09-28-e31/baseline.json` (the file the record pins, raw bytes per
+    the check's `hashlib.sha256(read_bytes())` convention) hashes `102ccac1…`. The
+    `f98a3488…` value evidently came from hashing a non-committed intermediate state
+    during that commit. The baseline file itself is correct and unchanged (its core.py
+    re-pin was the authorized, verified change). Fix: one-hex re-pin
+    `f98a3488…` → `102ccac1…` in the e36 record (`a1907f9`), same record-refresh
+    convention as FIX-4; no validator edit, no lane change.
+  - **Second run (fixed record): `2026-09-30-e36-lm-head CHECK PASS`, 0 problems**
+    (2026-10-13 11:08 UTC, lane serving). Verified scope includes containers, GPU
+    work, flusher/key command identity, MTU-9000 fabric, health + idle metrics; the
+    usual unverified scope (full model hashes via verify-node --full-model, functional
+    gates, drafter content hashes) unchanged. Report archived at
+    `.research/scratch/f0-20261013-check-pass/report.json`. **The FIX-4 thread is now
+    fully closed: record re-pin (2026-10-12) + validator fixes (f175234) + live
+    verification (this entry) all green.** Lane left serving for the NVFP4 switch-back.
 - **2026-10-12 — FIX-4 record re-pin VERIFIED against the live lane; check-f0 still FAILs
   on two pre-existing validator-expectation classes (neither is lane drift) — owner
   decisions parked (handoff 06 §FIX-4 finisher). [Both fixes since APPLIED 2026-10-13,

@@ -194,9 +194,32 @@ All of `noswitch-prep/` is site-owned, not upstream-owned:
 
 ## 5. Changelog
 
+- **2026-10-13 — FIX-4 finisher validator fixes APPLIED (`f175234`, owner-approved
+  2026-10-12): both parked decisions from the 2026-10-12 entry below executed; live
+  check-f0 verification scheduled for the next FP8 bring-up.** No node/config change —
+  records + validator only.
+  1. **check-f0.py NCCL probe relaxation:** the probe now accepts the symlink's
+     RESOLVED path alongside the literal `VLLM_NCCL_SO_PATH` value — it docker-execs
+     `readlink -f` on the configured path and matches `/proc/<pid>/maps` lines against
+     BOTH candidates. Rationale (unchanged from the 10-12 diagnosis): the kernel reports
+     the real path a lib was mapped from (`libnccl.so.2 -> libnccl.so.2.30.7`), so the
+     old literal-endswith check false-failed "patched NCCL not loaded by GPU worker" on
+     every rank of a healthy lane.
+  2. **E31 active-baseline core.py re-pin `3a9a038f…` → `78063640…`** in
+     `docs/historical_benchmarks/baselines/2026-09-28-e31/baseline.json` (both the
+     `sources` and the `container_file_sha256` sections; deployed==repo==live since the
+     2026-10-11 grammar-diag commits) with the mandated cascade re-pin in the e36
+     record's `performance_baseline.sha256`: `33647fe7…` → `f98a3488…`. Other eras'
+     baselines stay frozen as historical receipts (explicit scope of the owner
+     decision).
+  - **Verification gate:** at the next FP8 bring-up, `check-f0.py` operational-identity
+    mode must return PASS (0 problems) — both former problem classes (NCCL probe
+    path-shape artifact, stale baseline core.py expectation) are fixed at the source;
+    output to be pasted in a follow-up entry.
 - **2026-10-12 — FIX-4 record re-pin VERIFIED against the live lane; check-f0 still FAILs
   on two pre-existing validator-expectation classes (neither is lane drift) — owner
-  decisions parked (handoff 06 §FIX-4 finisher).**
+  decisions parked (handoff 06 §FIX-4 finisher). [Both fixes since APPLIED 2026-10-13,
+  `f175234` — see the dated entry above.]**
   - Record re-pin verified: all 9 `container_file_sha256` entries in
     `docs/operational-identities/2026-09-30-e36-lm-head.json` — including the three
     re-pinned sources (gpu_worker `ae2bdaf5…`, scheduler `c5d8b99f…`, model_runner

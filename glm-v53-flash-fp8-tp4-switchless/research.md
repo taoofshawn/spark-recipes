@@ -139,6 +139,16 @@ in-container: non-stream with the actual generated id stream (the failing shape)
 with real prompt ids, thinking-off envelope-only, auto regression, and reasoning-end id
 detection all pass.
 
+**Identity note (2026-10-12, owner decision — closes the 09-30 open item):** the
+*deployed default* engine command since the 2026-09-29 TC-45 rollout is the *measured*
+2026-09-25-e29 candidate command **plus this §2.6 parser-override mount** (one extra
+`-v` pair in `EXTRA_DOCKER_ENV`). That delta is intentional, `check-f0.py`
+additive-tolerant (verified live 2026-09-30, three consecutive clean PASSes), and is
+NOT lane drift — do not treat an E29-identity diff of exactly this mount as a problem.
+The frozen E29 performance receipts remain the measured baseline for the deployed
+configuration; do NOT remeasure or fold the mount into the frozen record (any record
+edit cascades — see the 2026-10-12 FIX-4 entry).
+
 ## 3. Files outside `upstream/` an update must not touch
 
 All of `noswitch-prep/` is site-owned, not upstream-owned:

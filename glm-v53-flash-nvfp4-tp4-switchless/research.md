@@ -166,6 +166,53 @@ changes). §5 never carried it separately, so no row here.
 
 ## Changelog
 
+- **2026-10-13 — CHECKPOINT RE-PIN DEPLOYED: `da920bb` is live on all four ranks;
+  BEFORE/AFTER bench verdict — quality gates clean, c1 flat, a small consistent
+  concurrency-side cost (−4…−11% aggregate at c4–c16) — owner decides keep vs revert
+  (revert = re-materialize `09b04e5e` + one restart; zero repo changes needed).**
+  - **Deploy (no node repo change needed):** `site/materialize-weights.sh` takes the
+    snapshot as an explicit arg, so the pin flip is a runtime materialization — lane
+    torn down first (the weights dir is bind-mounted; the rm-rf-rehardlink must never
+    run under a live container), script run ×4 pointing at the
+    `da920bb0b9f4a06727223a349e55468e38352348` snapshot (present in all 4 nodes' HF
+    caches, owner-downloaded; 42 files, config `41db2811…`, hf_quant_config
+    `1bc0d896…`), preflight ALL PASS, `./start.sh serve` worker-first. Boot: /health
+    200 (~7 min), 0 NCCL WARN, RouteFinal four PFs all ranks, KV pool 3,207,651 /
+    3.06× (identical to BEFORE — expected, shards byte-identical); container
+    `/model/config.json` verified `41db2811…` = da920bb (rule-5 proof the new pin is
+    mounted). Zero-mod premise re-verified live pre-deploy: 33 shards byte-identical
+    to `09b04e5e` (blob-level), only the layer-45 ignore additions 132→134 in both
+    JSONs.
+  - **Gates:** corruption 0 U+FFFD + emoji/CJK intact; forced tool call clean.
+    `prefix_scan` ran TWICE: run 1 **FAIL** (cold-warm drift 0.2341 vs limit 0.06,
+    cold-cold 0.0318 fine; no errors/degenerates/warm-misses), run 2 **PASS**
+    (0.0593/0.0249 vs limit 0.089 — cold-warm identical to BEFORE's settled 0.0246).
+    Verdict: the run-1 spike did not reproduce and is recorded as a boot-lifecycle
+    transient (its warm phase ran closest to the gate traffic); the settled value
+    matches BEFORE exactly.
+  - **accept_probe c1 (n=6×512 tok each, deterministic):** prose 2.237→2.243 accept /
+    51.3→51.3 ms / 43.9→43.8 tok/s (flat); code 4.481→4.311 accept (−3.8%) / 59.1→59.1
+    ms / 75.8→73.2 tok/s (−3.4%); json 5.741→5.775 / 60.3→60.8 / 95.1→94.7 (flat).
+    The code-acceptance drop is checkpoint-level (drafter unchanged, target layer-45
+    numerics changed) — mechanistically consistent with the re-pin.
+  - **conc_bench wall-aggregate tok/s (the discriminator), BEFORE → AFTER:**
+    | cell | prose | code | json |
+    |---|---|---|---|
+    | c1 | 44.1→42.2 (−4.3%) | 87.2→88.0 (+0.9%) | 91.5→90.5 (−1.1%) |
+    | c2 | 63.9→64.1 | 113.4→105.1 (−7.3%) | 130.9→126.6 (−3.3%) |
+    | c4 | 98.6→94.9 (−3.8%) | 163.0→150.0 (−8.0%) | 200.1→187.5 (−6.3%) |
+    | c8 | 141.5→133.6 (−5.6%) | 227.6→202.9 (−10.9%) | 266.5→247.5 (−7.1%) |
+    | c16 | 199.4→185.4 (−7.0%) | 289.8→278.6 (−3.9%) | 332.2→314.9 (−5.2%) |
+    U+FFFD 0 everywhere; json TTFT still 0.42/0.58 s at c8/c16.
+  - **Verdict reading:** same-config boot-to-boot variance on this lane is
+    −2.3%…+3.8% (T2 record); 12/15 cells negative and 5–6 cells outside that band —
+    a REAL but modest concurrency-side cost, consistent with one more BF16
+    (un-quantized) layer in the per-step path. c1 (latency-bound) is flat. Quality
+    motivation for the re-pin (deep-context/layer-45) is untested by these benches —
+    the FIX-3 ladder would need a re-run to probe it. **KEEP vs REVERT is the
+    owner's call; the lane is left UP and healthy on `da920bb`.** Raw:
+    `.research/scratch/owner-20261012/` (`repin-before*`, `repin-after*`,
+    `uniformk-*`, `retain-*`).
 - **2026-10-12 (late) — owner-decisions session: uniform-spec_k A/B (FIX-2 follow-up),
   KV store-vs-retain bench (knapcio #8 methodology), and the checkpoint re-pin
   PREP. Fresh BEFORE boot for matched boot states (bench-recipe-update rule 6); the

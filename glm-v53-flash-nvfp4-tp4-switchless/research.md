@@ -169,6 +169,28 @@ changes). §5 never carried it separately, so no row here.
 
 ## Changelog
 
+- **2026-10-13 (later) — FP8 → NVFP4 switch-back per LANE-SWITCHING.md (final state:
+  NVFP4 UP and healthy on `da920bb`); prefix_scan run-1 FAIL → run-2 PASS — the
+  fresh-boot transient pattern REPRODUCED on a second boot.**
+  - Switch: `tp4ctl down` (FP8, after its check-f0 verification — see the FP8
+    research.md 2026-10-13 entries), `verify-fabric-p2.sh` ALL PASS, `git pull` all
+    4 nodes (docs-only), `./start.sh serve` worker-first. Boot fast (~3 min to
+    `/health` 200 — warm page-cache reload after the 5-h prior boot; cold-cache
+    boot was ~8 min). `/v1/models` → `glm-5.3-flash` max_model_len 1,048,576;
+    **0 NCCL WARN on every rank**; model-name-proxy healthy throughout.
+  - Gates: corruption 0 U+FFFD (emoji + CJK intact); forced tool call clean
+    (`get_weather({"city": "Tokyo"})`).
+  - `prefix_scan`: run 1 **FAIL** ("warm-only scan anomalies", drift itself sub-limit
+    0.0238/0.0377 vs 0.06, 0 warm-without-hit, solo 4/4) at ~15 min boot age; run 2
+    **PASS** (0.0443/0.0638 vs limit 0.0664, 0 warm-without-hit) at ~31 min boot age.
+    Same run-1-FAIL-then-settle shape as the 2026-10-13 re-pin boot — now seen on TWO
+    consecutive fresh boots, always in the warm phase nearest boot traffic. Updated
+    reading of the re-pin entry's "transient": this looks like a RECURRING fresh-boot
+    lifecycle behavior of the warm-phase anomaly check (JIT/warm-up-adjacent), not a
+    checkpoint- or config-level regression. Watch: if it ever FAILS a warmed re-run,
+    that is a real signal — treat the settled PASS as the verdict and record the
+    failed run. Receipts: `.research/scratch/prefix_scan-switchback-20261013*.json`.
+
 - **2026-10-13 — FIX-3 ladder RE-RUN on `da920bb` (the re-pin's quality motivation,
   untested by the throughput benches): 16/16 probes PASS — NO quality regression;
   D1 FINALIZED: owner decision KEEP `da920bb`; D2 DECIDED: client-side per-request

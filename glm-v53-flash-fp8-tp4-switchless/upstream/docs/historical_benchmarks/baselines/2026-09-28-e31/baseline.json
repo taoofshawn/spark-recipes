@@ -183,7 +183,7 @@
       "scripts/node/experiments/e03/drafter-w8a16/qwen3_dflash2.py": "57f00c64d18a41b5898df0e1acba2fde6929a70ba31c0107c2a4d7c066f3b1f2",
       "scripts/node/experiments/e03/drafter-w8a16/e22_drafter_w8a16.py": "8334d0c3a1c024196fdc016131b2449c1432d387d4120e804da20e8b77dc2c67",
       "scripts/node/experiments/e03/end-drain/scheduler.py": "f41d6e9e4363b271ad8543a5ef7063b546952d4c0bd35565cee034884a61baec",
-      "scripts/node/experiments/e03/end-drain/core.py": "3a9a038f9a24cdeeb984846f0c170652f389d3f9442a652e73985836409c06be",
+      "scripts/node/experiments/e03/end-drain/core.py": "78063640dd0ea1cf5222a970ac8a1cdc06c2f51aa2192622d3c9611102080222",
       "scripts/node/experiments/e03/e31-indexer/pooled_indexer.py": "fe3ee1ce067c8824daf128d30e5accac0b9950600bc7dfc5808def9a2bfca1d2",
       "scripts/node/experiments/e03/e31-indexer/glm_kpool.py": "41fd6992cb1441d7964324a428e03dba48a52e8727c7032abaa1f9af5184bacc"
     },
@@ -234,7 +234,7 @@
         "/usr/local/lib/python3.12/dist-packages/vllm/model_executor/models/qwen3_dflash2.py": "57f00c64d18a41b5898df0e1acba2fde6929a70ba31c0107c2a4d7c066f3b1f2",
         "/usr/local/lib/python3.12/dist-packages/vllm/models/glm5next/nvidia/e22_drafter_w8a16.py": "8334d0c3a1c024196fdc016131b2449c1432d387d4120e804da20e8b77dc2c67",
         "/usr/local/lib/python3.12/dist-packages/vllm/v1/core/sched/scheduler.py": "f41d6e9e4363b271ad8543a5ef7063b546952d4c0bd35565cee034884a61baec",
-        "/usr/local/lib/python3.12/dist-packages/vllm/v1/engine/core.py": "3a9a038f9a24cdeeb984846f0c170652f389d3f9442a652e73985836409c06be"
+        "/usr/local/lib/python3.12/dist-packages/vllm/v1/engine/core.py": "78063640dd0ea1cf5222a970ac8a1cdc06c2f51aa2192622d3c9611102080222"
       },
       "environment": {
         "LD_PRELOAD": "/opt/patched-nccl/libnccl.so.2",

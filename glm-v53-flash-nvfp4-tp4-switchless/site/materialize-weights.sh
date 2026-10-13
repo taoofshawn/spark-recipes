@@ -10,7 +10,7 @@
 set -euo pipefail
 
 HF="${HF_HOME:-$HOME/.cache/huggingface}"
-MODEL_SNAP="${1:-$HF/hub/models--nvidia--GLM-5.3-Flash-NVFP4/snapshots/09b04e5e74bca08ca8549fc736d4cdd8624bfde3}"
+MODEL_SNAP="${1:-$HF/hub/models--nvidia--GLM-5.3-Flash-NVFP4/snapshots/da920bb0b9f4a06727223a349e55468e38352348}"
 MODEL_DST="${2:-$HOME/.local/nvfp4-tp4/weights/nvidia-glm53-nvfp4}"
 DRAFT_SNAP="${3:-$HF/hub/models--incoai--GLM-5.3-Flash-DFlash2/snapshots/bf582e4eacc1810f76656d1811693ff6c6737d2a}"
 DRAFT_DST="${4:-$HOME/.local/nvfp4-tp4/weights/glm53-dflash2}"

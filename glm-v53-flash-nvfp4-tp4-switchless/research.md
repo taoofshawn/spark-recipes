@@ -10,7 +10,7 @@ NVFP4 lane on the 4-node switchless ring. `README.md` stays the running ops doc 
 | upstream source | `github.com/knapcio/GLM-5.3-Flash-4x-DGX-Spark-TP4` |
 | vendored pin | `770d115` (2026-09-29 tip; `3edfbc9..770d115` diffed pre-vendor: docs + the switchless transport only — no serving-kernel changes) |
 | vendored on | 2026-09-29, `.git` stripped, detached |
-| checkpoint | [nvidia/GLM-5.3-Flash-NVFP4](https://huggingface.co/nvidia/GLM-5.3-Flash-NVFP4) @ `09b04e5e74bca08ca8549fc736d4cdd8624bfde3` — **stock, zero modification** (already in all four nodes' default HF caches) |
+| checkpoint | [nvidia/GLM-5.3-Flash-NVFP4](https://huggingface.co/nvidia/GLM-5.3-Flash-NVFP4) @ `da920bb0b9f4a06727223a349e55468e38352348` — **stock, zero modification** (re-pinned from `09b04e5e` 2026-10-12, owner-approved; layer 45 leaves the NVFP4 ignore list → served BF16; all 33 weight shards byte-identical to `09b04e5e`. See the 2026-10-12 re-pin changelog entry) |
 | drafter | [incoai/GLM-5.3-Flash-DFlash2](https://huggingface.co/incoai/GLM-5.3-Flash-DFlash2) @ `bf582e4e` — stock bf16 (no `drafter_fp8.py` re-encode; CC BY-NC-ND 4.0) |
 | image | `glm53-roce:v11-b58f34ea`, built per-node from upstream `Dockerfile.roce` (RoCEnante present but inert under `TRANSPORT=switchless`) |
 | site files | `site/env.switchless` (the `.env`), `site/materialize-weights.sh`, `upstream/profiles/stock-nvfp4.env`, `upstream/VENDORED-AT.md` |
@@ -141,10 +141,10 @@ changes). §5 never carried it separately, so no row here.
   VENDORED-AT update procedure periodically and on any adopted change — especially any
   upstream `profiles/current.env` change, which needs the §3 stock-compat review.
 - **PARKED (owner decisions, not adopted — 2026-10-12 pass):**
-  - **Checkpoint re-pin candidate** `nvidia/GLM-5.3-Flash-NVFP4` `09b04e5e` → tip
-    `da920bb`: layer 45 leaves the NVFP4 ignore list (served BF16); weights untouched,
-    zero-mod premise intact. Requires re-download + bench-recipe-update before any
-    re-pin; possibly relevant to the deep-context quality findings (FIX-3).
+  - **~~Checkpoint re-pin candidate~~ ADOPTED 2026-10-12 (owner instruction; bench
+    receipts in the changelog entry below):** `nvidia/GLM-5.3-Flash-NVFP4` `09b04e5e`
+    → tip `da920bb`: layer 45 leaves the NVFP4 ignore list (served BF16); weights
+    byte-identical, zero-mod premise intact.
   - **KV prefix-cache store-vs-retain bench methodology** (knapcio issue #8, via
     MiaAI-Lab DeepSeek issue #43): adopt as the measurement pattern for the ~3.25M-token
     concurrency claim at a future bench-recipe-update session.

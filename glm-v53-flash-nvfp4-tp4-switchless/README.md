@@ -1,7 +1,7 @@
 # glm-v53-flash-nvfp4-tp4-switchless — operations README
 
 GLM-5.3-Flash **NVFP4** (the pristine [nvidia/GLM-5.3-Flash-NVFP4](https://huggingface.co/nvidia/GLM-5.3-Flash-NVFP4)
-checkpoint @ `09b04e5e` — **zero weight modification**) served on the **4-node switchless
+checkpoint @ `da920bb` — **zero weight modification**) served on the **4-node switchless
 ConnectX-7 ring** with vLLM TP4, DFlash2 speculative decoding, 1M-token context, and the
 site's four-PF switchless NCCL build (`~/.local/lib/nccl-patched-4pf`, SHA `8de68def…`,
 research.md "PHASE E COMPLETE"; the FP8 lane keeps its own `nccl-patched` lib — do not
@@ -49,7 +49,8 @@ On the nodes: `~/code/spark-recipes` on branch `glm-v53-flash-nvfp4-4x-noswitch`
 four, same as the FP8 recipe); `~/.local/nvfp4-tp4/` = deployed overlay (`OVERLAY_REMOTE`)
 + materialized weights; `~/.local/lib/nccl-patched-4pf/` = this lane's four-PF NCCL build
 (SHA `8de68def…`; the FP8 lane's `~/.local/lib/nccl-patched/` is a DIFFERENT artifact —
-keep both); HF cache holds both checkpoints (nvidia `09b04e5e`, drafter `bf582e4e`).
+keep both); HF cache holds both checkpoints (nvidia `da920bb` (+ prior `09b04e5e`),
+drafter `bf582e4e`).
 
 ## Bring-up (first time)
 

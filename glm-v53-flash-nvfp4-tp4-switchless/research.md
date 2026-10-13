@@ -115,6 +115,19 @@ changes). §5 never carried it separately, so no row here.
   prefills — the 2nd missed cache, `prefix_cache_queries` delta 998,405 / hits 0) and
   the deep-context quality ladder PASSED at every depth in both modes. Receipts in the
   2026-10-12 FIX-3 changelog entry below.
+- **OPEN — ~1M prefix-cache retention across concurrent sessions (DeepSeek issue #43
+  failure shape REPRODUCED on this lane 2026-10-12).** Store at depth works (an
+  immediate byte-identical repeat of a ~997K prompt hits 99.8–99.9%), but a SECOND
+  ~1M session's prefill silently evicts the first session's resident prefix at ≤78%
+  pool occupancy (headroom ≥22%) — the first session's next turn pays a full ~437 s
+  re-prefill. The ~3.25M-token pool claim holds for CAPACITY, not for multi-session
+  retention at ~1M depth (effective retained sessions ≈ 1). See the 2026-10-12-late
+  changelog entry for the S1–S7 receipt. First suspects (mirroring the upstream
+  report): a structural reservation in the hybrid-model KV/prefix-tail sizing rather
+  than LRU-under-pressure — root cause NOT yet identified on this stack. Agent-facing
+  mitigation until root-caused: deep (~1M) sessions should not assume cache survival
+  across concurrent deep sessions; ~5–7 min cold re-prefill per revisit is the cost.
+  Candidate upstream report to knapcio/vLLM with the S1–S7 methodology.
 - **CLOSED 2026-10-10 — Ring decode penalty** — measured and compared at first bring-up
   and Phase E: c1 is latency-bound at ~45–55% of knapcio's switched fleet (44.7/75.8/
   96.3 tok/s at Phase E); the four-PF transport pays off at concurrency (json c8 +26%,
@@ -146,13 +159,85 @@ changes). §5 never carried it separately, so no row here.
     → tip `da920bb`: layer 45 leaves the NVFP4 ignore list (served BF16); weights
     byte-identical, zero-mod premise intact.
   - **KV prefix-cache store-vs-retain bench methodology** (knapcio issue #8, via
-    MiaAI-Lab DeepSeek issue #43): adopt as the measurement pattern for the ~3.25M-token
-    concurrency claim at a future bench-recipe-update session.
-  - **tonyd2wild "power-cut relaunch: serve fresh, don't `docker start`"** ops rule as a
-    README Day-2 note (low priority; the lane's normal relaunch path already recreates
-    containers).
+    MiaAI-Lab DeepSeek issue #43): ADOPTED 2026-10-12-late — run the same session; it
+    reproduced the upstream retention failure on this lane (new §5 OPEN row).
+  - **tonyd2wild "power-cut relaunch: serve fresh, don't `docker start`"** ops rule —
+    ADOPTED 2026-10-12 as a README Day-2 note (owner instruction).
 
 ## Changelog
+
+- **2026-10-12 (late) — owner-decisions session: uniform-spec_k A/B (FIX-2 follow-up),
+  KV store-vs-retain bench (knapcio #8 methodology), and the checkpoint re-pin
+  PREP. Fresh BEFORE boot for matched boot states (bench-recipe-update rule 6); the
+  14 h-warm prior boot was torn down. Owner pre-authorized all steps + restarts
+  ("sparks are FREE", backend on remote provider). Receipts:
+  `.research/scratch/owner-20261012/` (untracked).**
+  - **Boot**: all-ranks teardown + `docker rm` + `./start.sh serve` worker-first;
+    preflight ALL CHECKS PASS; `/health` 200 (cold ~8 min); `GPU KV cache size:
+    3,207,651 tokens, Maximum concurrency for 1,048,576: 3.06x`; 0 NCCL WARN;
+    RouteFinal all four PFs all ranks; `spec-probe: active; per-request
+    vllm_xargs.spec_k honoured` + LeversScheduler batch-uniform confirmed in the
+    boot log (rule-5 config verification). Gates: corruption 0 U+FFFD + emoji/CJK
+    intact; forced tool call clean.
+  - **FIX-2 uniform-spec_k A/B (owner decision #2)** — arms adaptive (control) vs
+    every-request `vllm_xargs {spec_k: 3}` vs `{spec_k: 2}`, each in c4 prose-only AND
+    c5 mixed (4 prose + 1 `json_schema` minItems 250) shape, 4 rounds per arm,
+    rounds 2–4 analyzed (round 0 excluded), boot age 32–55 min:
+    | arm | prose ms/step | mixed ms/step | mixed accept | c1 json tok/s | c1 code | c1 prose |
+    |---|---|---|---|---|---|---|
+    | adaptive | 26.1 (25.4–27.4) | 36.4 (35.8–37.2) — **reproduces the +37% cliff** | 3.49–3.87 | 95.1 | 75.8 | 43.9 |
+    | uniform k=3 | 23.9 (23.3–24.5) | **27.0 (26.4–27.3) — cliff GONE** | 2.79–2.91 | 69.3 (−27%) | 62.9 (−17%) | 43.5 (−1%) |
+    | uniform k=2 | 22.1 (21.8–22.5) | 24.0 (23.8–24.2) | 2.45–2.52 | 56.8 (−40%) | 53.3 (−30%) | 41.7 (−5%) |
+    - **Bonus finding:** at batch ≥3 the adaptive policy's high state (k→7) runs the
+      PIECEWISE graph (full-graph families exist only per the launch table: k7@bs1,
+      k5@bs2, k3@bs3–27) — so uniform k=3 is FASTER than adaptive even pure-prose at
+      c4 (23.9 vs 26.1 ms/step). The cliff is adaptive-k7 + grammar-bitmask stacking.
+    - **The trade:** uniform k=3 kills the mixed-batch cliff (36.4 → 27.0 ms/step,
+      −26%) and improves c4 decode, but caps single-stream acceptance — c1 json
+      95 → 69 tok/s (−27%), code −17% (measured via `accept_probe --k 3` on the same
+      boot). A global `default_k: 3` is therefore NOT recommended as the lane
+      default (c1 json is a headline number); the data supports (a) per-request
+      `spec_k: 3` for structured-output-heavy multi-stream sessions (client-side,
+      zero lane change), or (b) a batch-size-conditional policy (k_hi only at bs=1)
+      as a FUTURE overlay change needing its own bench session. **No config
+      changed — owner decision on the trade.**
+  - **KV prefix-cache store-vs-retain bench (owner decision #4)** — knapcio #8 /
+    MiaAI-Lab #43 methodology, unique-content sessions, thinking off, temp 0, direct
+    :8000, gauges between steps; prompts /tokenize-calibrated (A512 511,758 tok,
+    A998 996,916, B998 997,949):
+    | step | wall | prefix_cache hits delta | verdict |
+    |---|---|---|---|
+    | S1 A512 cold | 189.5 s | 0 | cold (expected) |
+    | S2 A512 repeat | 1.2 s | 511,488 (99.9%) | **HIT** — store fine at 512K |
+    | S3 A998 cold | 437.6 s | 0 | cold (expected) |
+    | S4 A998 repeat (STORE) | 2.95 s | 995,328 (99.8%) | **HIT — ~1M prefixes store fine** |
+    | S5 B998 cold | 438.6 s | 0 | cold (expected) |
+    | S6 B998 repeat (STORE) | 2.25 s | 997,632 (99.9%) | **HIT** |
+    | S7 A998 repeat (RETAIN) | **436.2 s** | **0** | **FULL MISS — A's prefix evicted by B's prefill** |
+    - **The DeepSeek issue #43 failure shape REPRODUCES on this lane:** eviction at
+      ≤78% pool occupancy (2.5M of 3.2M tokens resident after S5; headroom ≥22%),
+      NOT an LRU-under-capacity event and NOT a store failure. The FIX-3 ladder's
+      998K full-misses are explained by the same mechanism (interleaved ~1M
+      corruption probes evicting the code prefix at that depth; 64–512K repeats hit
+      because 2–3 resident mid-depth prefixes fit). New §5 OPEN row opened;
+      multi-session ~1M retention ≈ 1 session until root-caused. This also RE-SCOPES
+      §2 decision 4's "3.1× concurrency": true for capacity, not for concurrent
+      deep-session retention.
+    - Harness note: `usage.prompt_tokens_details.cached_tokens` is null on this
+      build — hit/miss read from `prefix_cache_hits_total` deltas + wall time.
+  - **Standard benches on the BEFORE side (re-pin A/B baseline, checkpoint
+    `09b04e5e`):** `prefix_scan.py` **PASS** (drift 0.0451/0.0246 vs limit 0.0677,
+    0 warm-without-hit, solo lookups 4/4); `accept_probe` c1 prose/code/json =
+    2.24/4.48/5.74 accept, 51.3/59.1/60.3 ms-step, 43.9/75.8/95.1 tok/s;
+    `conc_bench` wall-aggregate c1 44.1/87.2/91.5 · c2 63.9/113.4/130.9 · c4
+    98.6/163.0/200.1 · c8 141.5/227.6/266.5 · c16 199.4/289.8/332.2, U+FFFD 0
+    everywhere, json TTFT 0.43/0.56 s at c8/c16. Consistent with the T2/Phase-E
+    band. The AFTER side (checkpoint `da920bb`) benches the same set on a fresh
+    boot after the re-pin deploy.
+  - The re-pin itself (materialize-weights.sh default → `da920bb`, verified
+    snapshot-complete on all 4 nodes + zero-mod premise re-verified live: 33 shards
+    byte-identical, only config.json/hf_quant_config.json layer-45 ignore additions
+    132→134) deploys after owner merge — separate dated entry follows.
 
 - **2026-10-12 — NVFP4 lane brought UP (handoff 06 FIX-2/FIX-3 boot; owner-authorized
   teardown/switch — "sparks are FREE", backend on remote provider). FP8 → NVFP4 switch

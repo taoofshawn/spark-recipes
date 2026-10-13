@@ -260,13 +260,25 @@ if container and paths:
 runtime_workers = []
 if identity:
     nccl_path = identity.get("environment", {}).get("VLLM_NCCL_SO_PATH")
+    # SITE FIX (2026-10-12, owner-approved): accept the symlink's RESOLVED path too.
+    # The kernel reports the real path a library was mapped from; for the patched NCCL
+    # that is the resolved versioned file (libnccl.so.2 -> libnccl.so.2.30.7), so a
+    # literal endswith(nccl_path) check never matched a correctly loaded lib and
+    # reported a false "patched NCCL not loaded by GPU worker" on every rank.
+    nccl_paths = {nccl_path} if nccl_path else set()
+    if container and nccl_path:
+        out, _ = run(["sudo", "-n", "docker", "exec", p["container"],
+                      "readlink", "-f", "--", nccl_path], timeout=10)
+        if out.strip():
+            nccl_paths.add(out.strip())
     for pid in configured_pids:
         try: comm = Path(f"/proc/{pid}/comm").read_text().strip()
         except OSError: continue
         if not comm.startswith("VLLM::Worker"): continue
         maps, _ = run(["sudo", "-n", "cat", f"/proc/{pid}/maps"])
         runtime_workers.append({"pid": pid, "patched_nccl_loaded":
-                                bool(nccl_path and any(line.endswith(nccl_path)
+                                bool(nccl_path and any(line.endswith(cand)
+                                                       for cand in nccl_paths
                                                        for line in maps.splitlines()))})
 
 runtime_receipts = {}

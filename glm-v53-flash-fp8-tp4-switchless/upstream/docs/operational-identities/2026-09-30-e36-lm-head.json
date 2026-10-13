@@ -6,7 +6,7 @@
   "performance_baseline": {
     "id": "2026-09-28-e31",
     "path": "docs/historical_benchmarks/baselines/2026-09-28-e31/baseline.json",
-    "sha256": "33647fe7c40840f1bdeaefea31e97493f4a98187492acf158c7e006c80a150b1"
+    "sha256": "f98a3488b2ac67829903f5d9b5e5ff89c9baccd2edd754305221b13d3516be65"
   },
   "sparkcache": {
     "connector_sha256": "aa046965637b685ec1f6a00e427eb46279e28bf0d49ee546236bc774be2de9bd",

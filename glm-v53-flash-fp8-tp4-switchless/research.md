@@ -194,6 +194,15 @@ All of `noswitch-prep/` is site-owned, not upstream-owned:
 
 ## 5. Changelog
 
+- **2026-10-13 — Upstream-churn pass (doc-only): no adoptable changes.** jnardiello
+  tip moved past our pin `ed365a6` → `53359a2` (2026-10-01, docs-only: E37/E38
+  diagnostic results archived — no code/config, no re-vendor needed). knapcio tip
+  still `770d115`; HF checkpoint/drafter pins unchanged (`da920bb` == tip,
+  `bf582e4e`). Forum: tracked threads quiet since the 2026-10-12 pass; one new watch
+  item (thermal shutdown under sustained long prefill, topic 385388 — our ring
+  measured 44–49 °C during the ~1M-prefill ladder the same day; full note in the
+  NVFP4 research.md 2026-10-13 entry). knapcio issue #10 filed by us (prefix
+  retention, NVFP4 lane).
 - **2026-10-13 — FIX-4 finisher validator fixes APPLIED (`f175234`, owner-approved
   2026-10-12): both parked decisions from the 2026-10-12 entry below executed; live
   check-f0 verification scheduled for the next FP8 bring-up.** No node/config change —

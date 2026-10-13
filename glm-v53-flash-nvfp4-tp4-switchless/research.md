@@ -127,7 +127,9 @@ changes). §5 never carried it separately, so no row here.
   than LRU-under-pressure — root cause NOT yet identified on this stack. Agent-facing
   mitigation until root-caused: deep (~1M) sessions should not assume cache survival
   across concurrent deep sessions; ~5–7 min cold re-prefill per revisit is the cost.
-  Candidate upstream report to knapcio/vLLM with the S1–S7 methodology.
+  UPSTREAM REPORT FILED 2026-10-13: knapcio issue #10 (S1–S7 methodology + receipts;
+  asks for independent repro and whether it is expected vLLM block-reservation
+  semantics or a vLLM-level bug).
 - **CLOSED 2026-10-10 — Ring decode penalty** — measured and compared at first bring-up
   and Phase E: c1 is latency-bound at ~45–55% of knapcio's switched fleet (44.7/75.8/
   96.3 tok/s at Phase E); the four-PF transport pays off at concurrency (json c8 +26%,
@@ -155,9 +157,10 @@ changes). §5 never carried it separately, so no row here.
   upstream `profiles/current.env` change, which needs the §3 stock-compat review.
 - **PARKED (owner decisions, not adopted — 2026-10-12 pass):**
   - **~~Checkpoint re-pin candidate~~ ADOPTED 2026-10-12 (owner instruction; bench
-    receipts in the changelog entry below):** `nvidia/GLM-5.3-Flash-NVFP4` `09b04e5e`
-    → tip `da920bb`: layer 45 leaves the NVFP4 ignore list (served BF16); weights
-    byte-identical, zero-mod premise intact.
+    receipts in the changelog entry below) and KEEP finalized 2026-10-13:** the FIX-3
+    quality ladder re-run on `da920bb` (the re-pin's quality motivation) shows NO
+    quality regression — 16/16 probes PASS, identical to the `09b04e5e` baseline run
+    (2026-10-13 changelog entry); owner decision: the lane stays on `da920bb`.
   - **KV prefix-cache store-vs-retain bench methodology** (knapcio issue #8, via
     MiaAI-Lab DeepSeek issue #43): ADOPTED 2026-10-12-late — run the same session; it
     reproduced the upstream retention failure on this lane (new §5 OPEN row).
@@ -165,6 +168,65 @@ changes). §5 never carried it separately, so no row here.
     ADOPTED 2026-10-12 as a README Day-2 note (owner instruction).
 
 ## Changelog
+
+- **2026-10-13 — FIX-3 ladder RE-RUN on `da920bb` (the re-pin's quality motivation,
+  untested by the throughput benches): 16/16 probes PASS — NO quality regression;
+  D1 FINALIZED: owner decision KEEP `da920bb`; D2 DECIDED: client-side per-request
+  `spec_k` (no lane change). Lane untouched otherwise (HTTP-only, idle-gated; lane
+  up ~5 h). Raw: `.research/scratch/fix3-repin-20261013/` (untracked).**
+  - Method: identical harness to the 2026-10-12 FIX-3 run (goshi/quant-depth-quality-
+    bench @ `21647f5`, same SEED 1000, same probes/order; 64K/256K/512K/998K ×
+    thinking OFF/ON × quality/corruption). Same-prompt design keeps content parity
+    with the `09b04e5e` baseline run for a direct A/B; the shallow thinking-ON rows
+    hit prefix cache again (same caveat as before — quality is content, unaffected).
+  - Results: 16/16 PASS (code task exec-checked correct + needle reproduced at every
+    depth, 0 U+FFFD everywhere, `finish=stop`, no loop signatures) in BOTH thinking
+    modes — byte-for-byte the same verdict as the `09b04e5e` run. The forum
+    deep-context failure thread still does not reproduce, now also on `da920bb`.
+  - Timing (thinking-OFF clean prefills, `09b04e5e` → `da920bb`): 998K quality
+    437.0→456.8 s (+4.5%), 998K corruption 437.5→452.0 s; 512K 189→194.8 s (+3.1%);
+    256K 86.1→92.6 s (+7.6%); 64K 20.8→20.7 s (flat). All four ~998K rows were full
+    cache misses (consistent with the retention OPEN row — interleaved ~1M prefills
+    evict each other), so these are clean prefill comparisons: a small consistent
+    prefill cost on `da920bb`, directionally in line with the conc_bench finding and
+    near the −2.3%…+3.8% boot-to-boot band. Not a quality or stability regression.
+  - **D1 (owner, finalized 2026-10-13): KEEP `da920bb`.** Rationale: the re-pin's
+    entire motivation was deep-context quality via the BF16 layer-45 — the ladder
+    re-run confirms no quality regression and the throughput cost is small, c1 is
+    flat, and gates are clean. Revert path (re-materialize `09b04e5e` + one restart,
+    zero repo changes) stays documented in the 2026-10-13 re-pin entry if ever
+    needed. §5 parked-improvements row updated.
+  - **D2 (owner, decided 2026-10-13): mixed-batch json_schema cliff mitigation =
+    client-side per-request `vllm_xargs {spec_k: 3}` for structured-output-heavy
+    multi-stream sessions** — zero lane change, no invariant touched, reversible
+    per-request (the boot log confirms per-request spec_k is honoured). A global
+    `default_k: 3` is rejected (c1 json −27%); the batch-conditional k overlay stays
+    PARKED unless real agent traffic shows persistent mixed-batch pain after the
+    client-side mitigation (would need its own bench-recipe-update session).
+- **2026-10-13 — Upstream-churn pass (both lanes; doc-only): no adoptable changes
+  anywhere; one new watch item (thermal).**
+  - knapcio tip still `770d115` (no new commits since 09-29). jnardiello tip moved
+    `ed365a6` → `53359a2` (2026-10-01, docs-only: E37/E38 diagnostic results archived
+    — no code/config; no re-vendor needed). tonyd2wild still `87aa9c0`.
+    HF checkpoints: `nvidia/GLM-5.3-Flash-NVFP4` tip == our pin `da920bb`; drafter
+    `bf582e4e` unchanged.
+  - Forum sweep (categories 721/723 + dflash/nvfp4/switchless searches; tracked
+    threads 381350/382459/382939/385075 — no new posts on the latter three since the
+    2026-10-12 pass; 381350's new posts are stack-comparison chatter): one NEW
+    relevant topic — **385388 "Hard thermal shutdown during prefill on long context"
+    (2026-10-13)**: 2-node GB10 units hard-shutdown under sustained long-prefill GPU
+    load; fan curves never hit 100%; one unit RMA'd (hardware). **Watch item opened
+    (thermal, sustained long prefill):** our FIX-3 ladders are exactly this load
+    class. Read-only check DURING the 2026-10-13 ladder re-run: all four nodes
+    thermal zones 44.6–48.8 °C, GPUs 43–46 °C at ~2.07–2.09 GHz — cool, no
+    mitigation needed. Community mitigation if ever needed: `dgx-spark-fan-control`
+    systemd service / custom fan curve. Re-check only if a prefill-heavy session
+    ever shows a thermal anomaly or a hard shutdown.
+  - Also from 381350 chatter: rodman80's `glm-5.3-flash-w4a16-2x-DGX-Sparks` (W4A16
+    INT4 + DFlash2, 2× Spark, claims zero deep-context quality loss at ~2× speed
+    cost) — NOT adoptable (weight-mod premise + 2-node family); recorded as an
+    alternative-quant watch row only.
+  - knapcio issue #10 filed by us today (prefix retention, see the §5 row).
 
 - **2026-10-13 — CHECKPOINT RE-PIN DEPLOYED: `da920bb` is live on all four ranks;
   BEFORE/AFTER bench verdict — quality gates clean, c1 flat, a small consistent

@@ -133,6 +133,12 @@ without renames — switching is teardown + branch checkout:
   stack). If a change ever forces a FRESH overlay root (new `CTN`/`OVERLAY_REMOTE`),
   copy the old overlay's `cache/` into the new root first — that alone reproduces the
   warm-boot time.
+- **After a node power-cut / unclean host reboot, serve fresh — never `docker start`**
+  (tonyd2wild's ops rule): the stopped containers from a power-cut predate the boot and
+  may reference stale overlay/mount state; recreate them with `./start.sh serve`
+  (`docker rm` the stopped `glm53-nvfp4-r*` first — preflight refuses existing names).
+  The normal relaunch path already recreates containers, so this only matters when
+  reaching for `docker start` by hand.
 - KV ladder: 20 GiB/rank is the v1 pin (~3.25M tokens). 24 → ~3.9M and 28 → ~4.5M are
   proven ceilings on identical hardware but MUST be gated per rung (head rank binds;
   "boots, then dies on first concurrent prefill" is the documented failure shape).

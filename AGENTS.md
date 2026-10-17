@@ -138,8 +138,9 @@ change at switch time. **Switch procedure: [`LANE-SWITCHING.md`](LANE-SWITCHING.
 
 - **Do** read `LANE-SWITCHING.md` before any bring-up/switch, and the lane's README +
   latest research.md entries before touching it.
-- **Do** run `verify-fabric-p2.sh` before every switch; record every bring-up and
-  every anomaly in research.md.
+- **Do** run `verify-fabric-p2.sh` before every switch; record anomalies (failed/retried
+  boots, NCCL WARNs, gate failures, config changes, doc fixes) in research.md — a clean
+  switch with no surprises updates nothing.
 - **Do** keep site mods documented in VENDORED-AT.md with re-apply recipes; keep
   generated files generated (never hand-edit).
 - **Don't** resurrect archived 2-node flows (compose pairs, `.env.nodeN`, crossover

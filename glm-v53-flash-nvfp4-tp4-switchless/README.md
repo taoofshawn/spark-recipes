@@ -86,9 +86,13 @@ drafter `bf582e4e`).
    `prefix_scan.py` (mamba-align fix gate — must pass: `GLM_MAMBA_ALIGN_FIX=1` is in
    the inherited profile), the coherent-response + tool-call round-trip checks, and a
    corruption probe (emoji/CJK generation, count U+FFFD — must be 0; the nvidia pack
-   scores 0/0/0 upstream). Then `accept_probe` / `conc_bench` for the baseline numbers.
-7. **Record** the ring-vs-switched decode delta in `research.md` — that number decides
-   whether this lane stays or we revisit lossless8.
+   scores 0/0/0 upstream). One-time baseline benches (`accept_probe`/`conc_bench`,
+   the ring-vs-switched decode delta) ran at the 2026-10-10 first bring-up — routine
+   bring-ups/switches do NOT repeat them; benches happen only when a config/weight
+   change needs before/after numbers (`bench-recipe-update`).
+7. **Recorded** the ring-vs-switched decode delta in `research.md` (2026-10-10, one-time
+   decision input: lane stays vs lossless8 revisit). Routine bring-ups update nothing —
+   only anomalies (failed boots, NCCL WARNs, gate failures) get a changelog entry.
 
 ## Switching between the FP8 and NVFP4 lanes
 
@@ -147,7 +151,8 @@ without renames — switching is teardown + branch checkout:
   `profiles/current.env` change needs a stock-compat review of new switches
   (research.md §3).
 - Do not edit files on the nodes directly — recipe changes flow through the repo
-  (topic branch → PR → main → pull on nodes), same as the FP8 recipe.
+  (topic branch → push → the user opens/merges PRs → pull on nodes; agents never open
+  PRs), same as the FP8 recipe.
 
 References: upstream [README](https://github.com/knapcio/GLM-5.3-Flash-4x-DGX-Spark-TP4)
 · [docs/switchless.md](https://github.com/knapcio/GLM-5.3-Flash-4x-DGX-Spark-TP4/blob/main/docs/switchless.md)

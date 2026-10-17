@@ -84,7 +84,11 @@ cd ~/code/spark-recipes/glm-v53-flash-nvfp4-tp4-switchless/upstream && ./start.s
    `docker logs` BEFORE any `docker rm -f`.
 3. Gates (both lanes): corruption probe (count U+FFFD — must be 0, emoji + CJK intact)
    and a forced tool call. NVFP4 additionally: `bench/prefix_scan.py`
-   (`--base` WITHOUT `/v1`, `--model glm-5.3-flash`).
+   (`--base` WITHOUT `/v1`, `--model glm-5.3-flash`; run 1 may FAIL near boot — a
+   fresh-boot warm-phase transient; the settled warmed re-run is the verdict).
+   No performance benches (`accept_probe`/`conc_bench` or any throughput/latency run)
+   in a switch — benches belong to a config/weight-change session
+   (`bench-recipe-update`), never to the switch itself.
 
 ## Known gotchas (each one cost a boot)
 

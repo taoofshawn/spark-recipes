@@ -70,16 +70,27 @@ recipes (`adopt-recipe`). It never merges PRs.
    262,144), boot log per rank shows `Connected all rings` + RouteFinal with ALL FOUR
    PFs (`rocep1s0f0/f1` + `roceP2p1s0f0/f1`). Any NCCL WARN = stop, capture
    `docker logs` BEFORE any `docker rm -f`.
-6. **Gates** (per lane, see the recipe README): corruption probe (0 U+FFFD, emoji +
-   CJK intact), forced tool call; NVFP4 additionally `bench/prefix_scan.py`
-   (`--base` WITHOUT `/v1`, `--model glm-5.3-flash`), `accept_probe`, `conc_bench`.
-7. **Record** the bring-up in the lane's `research.md` changelog (dated entry: boot
-   markers, gate results, gotchas hit).
+6. **Gates** (functional only — a lane switch runs NO performance benches):
+   corruption probe (0 U+FFFD, emoji + CJK intact) and forced tool call. NVFP4
+   additionally `bench/prefix_scan.py` (`--base` WITHOUT `/v1`,
+   `--model glm-5.3-flash`; run 1 may FAIL near boot — a fresh-boot warm-phase
+   transient seen on 2 consecutive boots — the settled warmed re-run is the verdict,
+   record the failed run). `accept_probe`/`conc_bench`/any throughput bench belong to
+   `bench-recipe-update` when a config/weight change needs numbers — never as part of
+   a routine bring-up or switch.
+
+   A clean switch is DONE here: functional gates green = lane serving healthily.
+   Do NOT wait out the ~30 min warm-up on a plain switch, do NOT run benches "for the
+   baseline", and do NOT update the repo (research.md/changelog/README) for a
+   routine bring-up — a switch is a routine operation. Record only in `research.md`
+   when the bring-up surfaced something new: a failed/retried boot, a NCCL WARN, a
+   gate failure, a config change, or a fix to the docs themselves.
 
 ## Hard rules
 
-- **PR convention:** recipe changes flow topic-branch → PR → main. Open the PR but do
-  NOT merge it unless the user explicitly asked in that session.
+- **PR convention:** do NOT open PRs. Recipe changes flow topic-branch → push to
+  origin → report the branch + commit range; that is the stopping point. The user
+  opens/merges PRs themselves.
 - **Never edit files on the nodes over SSH** (no sed/scp/heredocs on repo files). The
   sanctioned node-side steps are exactly the derived-file mirrors named above.
 - **Never bench right after boot** — ~30 min warm-up first (cold JIT ~30% slow).
@@ -98,5 +109,5 @@ recipes (`adopt-recipe`). It never merges PRs.
 | FP8 launcher: "no usable automatic IPv4-mapped RoCE v2 fabric GID" on a P2 HCA | stale deployed cluster.env/gid-checker — see step 3; the allowlist must be `len(hcas)` entries |
 | FP8 boots old config after a repo change | tp4ctl reads the DEPLOYED `~/.local/tp4/cluster.env` — run `deploy.sh` from the head |
 | container name/overlay-path refused at launch | stopped containers from a previous `stop` not removed |
-| `DEVSELECT_BUILD_FAILED` ×1–2 at NVFP4 boot (rank 0) | known watch item — overlay catches it, decode continues on fallback; record it, don't block the bring-up |
+| `DEVSELECT_BUILD_FAILED` ×1 per rank at NVFP4 boot (~boot-moment, EVERY rank) | RESOLVED 2026-10-11: upstream platform limitation — device-side select NEVER arms on this driver stack; host fallback is the validated baseline. Zero action — expected boot line; re-verify only if the kernel/driver pin changes (nvfp4 research.md 2026-10-11 entry) |
 | ring decode far below the switched fleet | expected on this ring; c1 is latency-bound — compare against the lane's own bench history, not other operators' numbers |

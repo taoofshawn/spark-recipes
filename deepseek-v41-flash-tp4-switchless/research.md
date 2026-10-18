@@ -123,7 +123,33 @@ packed shards, profiler-estimate off.
 
 ## Changelog
 
-### 2026-10-18 — bring-up day 1: base-image substitution + thinking default
+### 2026-10-18 — tonyd2wild lever adoption A/B (channels + Engram threads)
+- Bench context: the user's interrupted tool-eval runs (spec-bench ~12 min after boot,
+  cold JIT) read 36-59.5 eff t/s; a warm re-run (`dsv41flash-warm1`) read essentially
+  the same (filler 38.9 / code 55.4 / structured 50.5 avg eff; perf c1 32.2, c2 44.0,
+  c4 45.4; prefill ~2.0K tok/s warm) — cold-start was NOT the main story.
+- Honest cross-lane comparison on the SAME harness: GLM lanes do perf c1 51.6 (FP8) /
+  55.3 (NVFP4) and spec structured ~110 t/s (DFlash2 accepts 93%, τ 7.5); this lane's
+  DSpark k=5 accepts 40-62%, τ 3.2-4.0. tonyd2wild's own NATIVE-weights vLLM 1017 lane
+  (C1 agg 48.5, C6 165.7, run 2026-10-17-1017) is the correct peer, NOT his 89.8 t/s
+  TensorFold headline (different Zig engine + EXL3 3.5 bpw, ~17% fewer bytes/token).
+  His native lane is not faster than the site's GLM lanes either — the DeepSeek lane's
+  value is 1M ctx + vision + Engram, not c1 decode on this ring.
+- **Adopted + A/B-measured (`dade187`)**: `NCCL_MAX_NCHANNELS=8` + `ENGRAM_DISK_THREADS=128`
+  (his 1017b/1017d levers, no code changes needed). Warm A/B (`dsv41flash-ch8-eg128`):
+  perf c1 flat (32.2→32.1), c2 +8.9% (44.0→47.9), c4 +24% (45.4→56.4); spec code
+  +6.7% (55.4→59.1 avg), filler/structured flat. Concurrency gains, c1 latency-bound
+  unchanged — matches his ladder's shape. KEPT.
+- **Evaluated, not adoptable now**: `DSV41_ENGRAM_FAST=1` and `DSV41_INDEXER_TP_SPLIT=1`
+  require his unpublished patch sets (`dsv41-1017-fast`, `dsv41-1017-roce-idx`; only his
+  boot-10 set `patch/full` is public, and sparkring already vendored it — our boot log
+  already shows pre-forward staging); `VLLM_ENABLE_ROCE_ALLREDUCE` b12x one-shot
+  transport violates the site's four-PF NCCL switching contract (lane invariant).
+  `expandable_segments:False` is hardcoded in the launcher (would be site mod #4) and
+  its attribution inside his 1017g bundle is unclear — parked pending a need.
+- GB10 clock-latch pre-bench check (his docs/gpu-clock-latch.md): worth adding to any
+  future bench session — nodes verified fast on the Oct 17 GLM benches, no action now.
+
 - **Base image unrecoverable as pinned** (details in VENDORED-AT.md site mod #3):
   `vllm/vllm-openai:nightly-8a728663c1c3…` returns `manifest unknown` AND its receipt
   digest `sha256:1891ada1…` returns "manifest schema unsupported" — Docker Hub purged

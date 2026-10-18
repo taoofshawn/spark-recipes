@@ -123,6 +123,20 @@ packed shards, profiler-estimate off.
 
 ## Changelog
 
+### 2026-10-18 — bring-up day 1: base-image substitution + thinking default
+- **Base image unrecoverable as pinned**: `vllm/vllm-openai:nightly-8a728663c1c3…`
+  returns `manifest unknown` AND its receipt digest `sha256:1891ada1…` returns
+  "manifest schema unsupported" — Docker Hub purged the Sep-2026 nightly era; sparkring
+  `main` @ `ad1853fc` still carries the dead pin (checked 2026-10-18). Substituted
+  `nightly-dev-arm64-cu13.0.1-728d3ad` (2026-09-04, nearest surviving arm64 nightly;
+  other side of the hole is `591bb95` @ 2026-09-15), locally re-tagged under the pinned
+  name. Verified in-image `torch 2.13.0+cu130` = receipt's exact torch line. Layer IDs
+  will diverge from `image-receipt.json`; the receipt remains the upstream comparison
+  target. Detail: VENDORED-AT.md site mod #3.
+- Build gotcha (cost one build attempt): docker `--memory` is unit-sensitive —
+  `MEM=24` = 24 bytes = rc 125; use `MEM=24g`.
+- Owner request: align default thinking with the GLM lanes — see pre-bring-up entry.
+
 ### 2026-10-18 — pre-bring-up: thinking default aligned with GLM lanes
 - Owner request: confirm default thinking/effort/temperature match the GLM switchless
   lanes before first boot. Temperature: no server-side default in any lane (match).

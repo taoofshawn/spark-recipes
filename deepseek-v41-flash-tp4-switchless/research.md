@@ -128,13 +128,25 @@ packed shards, profiler-estimate off.
   returns `manifest unknown` AND its receipt digest `sha256:1891ada1…` returns
   "manifest schema unsupported" — Docker Hub purged the Sep-2026 nightly era; sparkring
   `main` @ `ad1853fc` still carries the dead pin (checked 2026-10-18). Substituted
-  `nightly-dev-arm64-cu13.0.1-728d3ad` (2026-09-04, nearest surviving arm64 nightly;
-  other side of the hole is `591bb95` @ 2026-09-15), locally re-tagged under the pinned
-  name. Verified in-image `torch 2.13.0+cu130` = receipt's exact torch line. Layer IDs
-  will diverge from `image-receipt.json`; the receipt remains the upstream comparison
-  target. Detail: VENDORED-AT.md site mod #3.
+  `nightly-dev-arm64-cu13.0.1-591bb95` (2026-09-15, arm64), locally re-tagged under the
+  pinned name. Verified in-image `torch 2.13.0+cu130` = receipt's exact torch line AND
+  the `topk_softplus_sqrt` 12-arg schema the branch requires. Layer IDs diverge from
+  `image-receipt.json`; the receipt remains the upstream comparison target. Detail:
+  VENDORED-AT.md site mod #3.
+- **First boot failure (728d3ad base, rejected)**: every rank died in
+  `profile_run → speculator.propose` with `_moe_C::topk_softplus_sqrt() expected at
+  most 10 argument(s)`. Root cause: build-image.sh rebuilds only `_C_stable_libtorch`;
+  `_moe_C_stable_libtorch.abi3.so` (which registers the `torch.ops._moe_C` namespace)
+  comes FROM THE BASE — the Sep-4 base bundles an Aug-19 build with the pre-Engram
+  10-arg schema. Base must postdate the branch's fork-era main; the Sep-15 base's
+  schema matches exactly (probed before rebuild). Lesson recorded in VENDORED-AT #3.
 - Build gotcha (cost one build attempt): docker `--memory` is unit-sensitive —
   `MEM=24` = 24 bytes = rc 125; use `MEM=24g`.
+- **bring-up ops gotcha**: `start-cluster.sh check` does NOT stage the recipe tree
+  (`sync_recipe` only runs in `serve`) — first `check` failed on a missing staged
+  launcher; stage manually or run serve once. Watcher note: per-rank `docker logs`
+  must run on the RANK's host (the site `logs` helper does this; don't grep all ranks
+  from the head).
 - Owner request: align default thinking with the GLM lanes — see pre-bring-up entry.
 
 ### 2026-10-18 — pre-bring-up: thinking default aligned with GLM lanes

@@ -19,7 +19,8 @@ OUT="${1:-engram-packed}"
 RANK=${RANK:?set RANK=<0..3> for this node}
 : "${MODEL_DIR:?}" "${CACHE_DIR:?}" "${IMAGE:?}"
 
-mkdir -p "$CACHE_DIR/$OUT"
+# NOTE: no mkdir here — the packer REFUSES an existing out-dir and creates it itself
+# (os.makedirs exist_ok=False).
 docker run --rm --entrypoint python3 --memory 6g \
   -v "$MODEL_DIR:/models/DeepSeek-V4.1-Flash:ro" \
   -v "$CACHE_DIR:/cache" \

@@ -123,6 +123,16 @@ packed shards, profiler-estimate off.
 
 ## Changelog
 
+### 2026-10-18 — pre-bring-up: thinking default aligned with GLM lanes
+- Owner request: confirm default thinking/effort/temperature match the GLM switchless
+  lanes before first boot. Temperature: no server-side default in any lane (match).
+  Effort: not applicable — the dsv41-feat template exposes only boolean `thinking`, no
+  `reasoning_effort`. Thinking: GLM lanes default ON (`enable_thinking: True`,
+  `reasoning_effort: high`; the `DEFAULT_EFFORT=low` experiment was adopted-then-reverted),
+  this lane was OFF (upstream recipe value) → changed `site/env.switchless`
+  `THINKING_DEFAULT=false → true`. This is a deliberate site delta vs upstream
+  `recipes/deepseek-v41-flash-cycle.json` (`"thinking": false`).
+
 ### 2026-10-17 — adoption (initial)
 - Branch `adopt-deepseek-v41-flash-tp4-switchless`; directory created; NOTHING
   committed/pushed (adoption deliverable is uncommitted by convention).

@@ -19,9 +19,9 @@ patched NCCL 2.30.7, 2 PFs, donor-image extraction) is the documented rollback
 (VENDORED-AT.md "Transport decision").
 
 **Endpoint (after bring-up):** `http://10.69.42.170:8000/v1` — model name
-`deepseek-v41-flash`, 1,048,576-token context. No auth/TLS — trusted LAN only. Thinking
-OFF by default (`THINKING_DEFAULT=false`, upstream recipe value; enable per request with
-`"chat_template_kwargs": {"thinking": true}`). Behind the model-name proxy clients keep
+`deepseek-v41-flash`, 1,048,576-token context. No auth/TLS — trusted LAN only. Thinking ON by default (`THINKING_DEFAULT=true`, aligned with both GLM lanes; the dsv41-feat
+stack has no `reasoning_effort` knob — only a boolean `thinking`. Disable per request with
+`"chat_template_kwargs": {"thinking": false}`). Behind the model-name proxy clients keep
 sending `spark-llm`; at switch time set `BACKEND_MODEL=deepseek-v41-flash` and add it to
 `SPOOF_FROM` (model-name-proxy/.env).
 

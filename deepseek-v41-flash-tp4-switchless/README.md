@@ -58,9 +58,15 @@ bound throughput).
 
 ## Image (the highest-risk item)
 
+The pinned upstream base image no longer exists on Docker Hub; this site serves
+`local/sparkring-deepseek-v41:overlay6` — rebuilt on substituted base
+`vllm/vllm-openai:nightly-dev-arm64-cu13.0.1-591bb95` plus a pip-installed branch-era
+DeepGEMM (`8b1392b`). Full lineage and rationale: [upstream/VENDORED-AT.md](upstream/VENDORED-AT.md)
+site mod #3 and research.md 2026-10-18.
+
 No public image exists — build locally on an idle Spark per
 [upstream/README.md](upstream/README.md) (`build-image.sh`), then
-`docker save local/sparkring-deepseek-v41:overlay5 | ssh <rank> docker load` to the
+`docker save local/sparkring-deepseek-v41:overlay6 | ssh <rank> docker load` to the
 other three. Pins: vLLM `dsv41-feat @ e47aa780…`, FlashInfer `0.7.0rc1 @ 07869c61…`,
 receipt in [upstream/image-receipt.json](upstream/image-receipt.json). Pin the built
 image's ID as `IMAGE_ID` in `site/env.switchless` — the launcher refuses a mismatch.

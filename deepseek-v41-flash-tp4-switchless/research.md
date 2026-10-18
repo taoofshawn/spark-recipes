@@ -124,29 +124,45 @@ packed shards, profiler-estimate off.
 ## Changelog
 
 ### 2026-10-18 — bring-up day 1: base-image substitution + thinking default
-- **Base image unrecoverable as pinned**: `vllm/vllm-openai:nightly-8a728663c1c3…`
-  returns `manifest unknown` AND its receipt digest `sha256:1891ada1…` returns
-  "manifest schema unsupported" — Docker Hub purged the Sep-2026 nightly era; sparkring
-  `main` @ `ad1853fc` still carries the dead pin (checked 2026-10-18). Substituted
-  `nightly-dev-arm64-cu13.0.1-591bb95` (2026-09-15, arm64), locally re-tagged under the
-  pinned name. Verified in-image `torch 2.13.0+cu130` = receipt's exact torch line AND
-  the `topk_softplus_sqrt` 12-arg schema the branch requires. Layer IDs diverge from
-  `image-receipt.json`; the receipt remains the upstream comparison target. Detail:
-  VENDORED-AT.md site mod #3.
-- **First boot failure (728d3ad base, rejected)**: every rank died in
-  `profile_run → speculator.propose` with `_moe_C::topk_softplus_sqrt() expected at
-  most 10 argument(s)`. Root cause: build-image.sh rebuilds only `_C_stable_libtorch`;
-  `_moe_C_stable_libtorch.abi3.so` (which registers the `torch.ops._moe_C` namespace)
-  comes FROM THE BASE — the Sep-4 base bundles an Aug-19 build with the pre-Engram
-  10-arg schema. Base must postdate the branch's fork-era main; the Sep-15 base's
-  schema matches exactly (probed before rebuild). Lesson recorded in VENDORED-AT #3.
-- Build gotcha (cost one build attempt): docker `--memory` is unit-sensitive —
-  `MEM=24` = 24 bytes = rc 125; use `MEM=24g`.
-- **bring-up ops gotcha**: `start-cluster.sh check` does NOT stage the recipe tree
-  (`sync_recipe` only runs in `serve`) — first `check` failed on a missing staged
-  launcher; stage manually or run serve once. Watcher note: per-rank `docker logs`
-  must run on the RANK's host (the site `logs` helper does this; don't grep all ranks
-  from the head).
+- **Base image unrecoverable as pinned** (details in VENDORED-AT.md site mod #3):
+  `vllm/vllm-openai:nightly-8a728663c1c3…` returns `manifest unknown` AND its receipt
+  digest `sha256:1891ada1…` returns "manifest schema unsupported" — Docker Hub purged
+  the Sep-2026 nightly era; sparkring `main` @ `ad1853fc` still carries the dead pin.
+  Substituted `nightly-dev-arm64-cu13.0.1-591bb95` (2026-09-15) re-tagged under the
+  pinned name; in-image `torch 2.13.0+cu130` = the receipt's torch line; the branch's
+  12-arg `topk_softplus_sqrt` schema verified present. First candidate `728d3ad`
+  (Sep 4) REJECTED (10-arg schema). Layer IDs diverge from `image-receipt.json`.
+- **LANE UP 2026-10-18 ~19:45 UTC.** All gates green: `/v1/models` advertises
+  `deepseek-v41-flash` @ 1,048,576; corruption probe 0 U+FFFD (emoji+CJK intact);
+  forced tool call round-trips (`deepseek_v41` parser, thinking-on + tools, engine
+  alive); SpecDecoding mean acceptance 67/23 ≈ 2.91 (DSpark k=5 active). Boot ~9.5 min.
+- **Site KV-pool observation (first boot):** `GPU KV cache size: 2,242,638 tokens,
+  Maximum concurrency for 1,048,576 tokens per request: 2.14x` at gmu 0.83 with the
+  1M limit — close to upstream's 430K-boot measurement (2,182,642 @ 430K limit). This
+  is a bring-up observation, not yet a receipt.
+- **Image lineage (final serving image):** `local/sparkring-deepseek-v41:overlay6`
+  `sha256:e87985e1426d3fde2b5253ef4e4b34da3763c8740f2ee8ef6b7cff6e4ca0bee6` =
+  overlay5 (rebuilt on substituted base `nightly-dev-arm64-cu13.0.1-591bb95`) +
+  pip `deep_gemm` 2.6.1+local built from DeepGEMM @ `8b1392b978f5a03c828dd1711090d7fb50958b8a`
+  (the nv_dev pin from vllm @ `8a728663` — the branch-era DeepGEMM). Committed via
+  `docker commit` on spark-0f0b (in-image build needed: git, python3-dev,
+  `CPPFLAGS/CFLAGS=-I.../nvidia/cu13/include` for cusparse.h, and
+  `VLLM_DOCKER_BUILD_CONTEXT=1` for the install script's uv path).
+- **Failure chain solved on bring-up (all documented above):** dead base tag →
+  728d3ad ABI-incompatible (10-arg topk_softplus_sqrt) → 591bb95 base ✓ but its
+  vendored `vllm.third_party.deep_gemm` 2.6.1 (newer DeepGEMM) rejects the branch's
+  SF transform → pip deep_gemm @ 8b1392b ✓.
+- **Boot log notes:** "Duplicate NCCL runtime" WARNINGs present as predicted
+  (watchitem #1) — four-PF lib loads via `VLLM_NCCL_SO_PATH=/opt/sparkring/nccl/…`;
+  boot completed past graph capture on all ranks (ring healthy). "Connected all
+  rings" string does not exist in this engine's logs — ring health is evidenced by
+  completing init + graph capture (any ring failure hangs at NCCL init).
+- **Ops gotchas (cost time):** (1) `check` doesn't stage the recipe tree; (2) the site
+  `stop` skips EXITED containers — failed boots need `docker rm -f` per rank before
+  relaunch (the upstream launcher refuses existing names); (3) failed boots leave
+  ROOT-owned cache files — clear via a throwaway container, not host rm; (4) stale
+  `/cache` JIT caches survive image swaps — clear `cache/vllm` after any image change;
+  (5) per-rank `docker logs` must run on the rank's own host.
 - Owner request: align default thinking with the GLM lanes — see pre-bring-up entry.
 
 ### 2026-10-18 — pre-bring-up: thinking default aligned with GLM lanes

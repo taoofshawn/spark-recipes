@@ -23,12 +23,18 @@ change at switch time. **Switch procedure: [`LANE-SWITCHING.md`](LANE-SWITCHING.
 
 ## Cluster topology (four fixed nodes, switchless ring)
 
-| rank | host | mgmt IP (`enP7s7`) | notes |
+| rank | host | mgmt IP | notes |
 |---|---|---|---|
-| 0 (head, API server) | `spark-0f0b.shawndo.intra` | 10.69.42.170 | hosts the API process; `tp4ctl`/`start.sh` run here |
-| 1 | `spark-6d14.shawndo.intra` | 10.69.42.171 | worker |
-| 2 | `spark-6d90.shawndo.intra` | 10.69.42.172 | worker |
-| 3 | `spark-6d24.shawndo.intra` | 10.69.42.173 | worker |
+| 0 (head, API server) | `spark-0f0b.shawndo.intra` | 10.69.43.170 | hosts the API process; `tp4ctl`/`start.sh` run here |
+| 1 | `spark-6d14.shawndo.intra` | 10.69.43.171 | worker |
+| 2 | `spark-6d90.shawndo.intra` | 10.69.43.172 | worker |
+| 3 | `spark-6d24.shawndo.intra` | 10.69.43.173 | worker |
+
+**2026-10-19 move:** the cluster is now on the wireless mgmt NIC `wlP9s9`
+(10.69.43.0/16) — the wired `enP7s7` is DOWN at the new location. The QSFP56 fabric
+(10.10.x) is unaffected. Site configs pin `IPS=10.69.43.x` / `FABRIC_IFACE=wlP9s9`
+(NVFP4 `site/env.switchless`; FP8 mirrors still pinned to 10.69.42.x — update before
+its next use).
 
 - **Fabric:** 4 QSFP56 cables in a switchless ring rank0→1→2→3→0; each cable presents
   **2 PFs per PCIe root** (`enp1s0f0np0`/`enp1s0f1np1` = the f ports,

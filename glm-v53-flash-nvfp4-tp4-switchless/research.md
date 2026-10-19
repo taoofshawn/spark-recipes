@@ -169,6 +169,24 @@ changes). §5 never carried it separately, so no row here.
 
 ## Changelog
 
+- **2026-10-19 — Site move: mgmt network changed to wireless (wlP9s9, 10.69.43.0/16;
+  wired enP7s7 DOWN). First post-move boot FAILED on the old subnet; site config
+  updated; boot retried.**
+  - Move validation: DNS re-pointed to the wireless IPs, SSH from workstation OK to
+    all 4; `verify-fabric-p2.sh` ALL CHECKS PASS (QSFP56 fabric 10.10.x unaffected —
+    16 interface addresses, two-view ping mesh, both NCCL SHAs). Node-to-node
+    wireless mesh pinged OK in both directions; node-side DNS resolves the new IPs.
+  - First `./start.sh serve` boot: every rank's EngineCore died at vLLM
+    `shm_broadcast` zmq bind — `ZMQError: Cannot assign requested address
+    (addr='tcp://10.69.42.170:0')` — the launcher passes `VLLM_HOST_IP` from the
+    pinned `IPS` map, which still held the old wired subnet. `FABRIC_IFACE=enP7s7`
+    was also stale (interface DOWN).
+  - Fix: `site/env.switchless` `IPS` → `10.69.43.170–173`, `FABRIC_IFACE` →
+    `wlP9s9`; README endpoint + cluster map updated. Node `.env` mirror re-cut from
+    the branch before the retry boot. No fabric/NCCL change: `IB_HCA`, netplan,
+    four-PF lib all untouched (ring transport never used the mgmt NIC).
+  - Result of the retry boot: recorded in the entry below if it succeeded.
+
 - **2026-10-13 (later) — FP8 → NVFP4 switch-back per LANE-SWITCHING.md (final state:
   NVFP4 UP and healthy on `da920bb`); prefix_scan run-1 FAIL → run-2 PASS — the
   fresh-boot transient pattern REPRODUCED on a second boot.**

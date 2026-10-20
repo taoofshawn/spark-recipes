@@ -185,7 +185,16 @@ changes). §5 never carried it separately, so no row here.
     `wlP9s9`; README endpoint + cluster map updated. Node `.env` mirror re-cut from
     the branch before the retry boot. No fabric/NCCL change: `IB_HCA`, netplan,
     four-PF lib all untouched (ring transport never used the mgmt NIC).
-  - Result of the retry boot: recorded in the entry below if it succeeded.
+  - Retry boot: clean — `/health` 200 via the `:8000` proxy ~6 min in (cold-cache;
+    the engine's own `:8093` listener is container-netns, so the proxy endpoint is
+    the one to poll). `/v1/models` → `glm-5.3-flash`, `max_model_len` 1,048,576.
+    **0 NCCL WARN on every rank**; `Connected all rings` + RouteFinal QPs across all
+    four PFs (`rocep1s0f0/f1` + `roceP2p1s0f0/f1`). Model-name-proxy healthy.
+  - Gates: corruption probe 0 U+FFFD (emoji 🚀 + CJK 你好 intact); forced tool call
+    clean (`get_weather({"city":"Tokyo"})`); `prefix_scan` run 1 PASS at ~27 min
+    boot age (drift 0.0271 cold / 0.0291 warm vs limit 0.06, 0 warm-without-hit,
+    0 warm-only anomalies) — the fresh-boot run-1-FAIL transient did NOT recur on
+    this boot. Receipt: `/tmp/prefix-bringup-20261019-run1.json` on spark-0f0b.
 
 - **2026-10-13 (later) — FP8 → NVFP4 switch-back per LANE-SWITCHING.md (final state:
   NVFP4 UP and healthy on `da920bb`); prefix_scan run-1 FAIL → run-2 PASS — the

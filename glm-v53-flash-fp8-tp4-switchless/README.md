@@ -6,7 +6,7 @@ DFlash2 speculative decoding, SparkCache + SIRCL, and patched NCCL — using the
 (E29 @ `080fe09`) **as-is**, site-configured for this cluster. Full build history and
 deviations: [build-record.md](noswitch-prep/build-record.md).
 
-**Endpoint:** `http://10.69.42.170:8000/v1` — model name `glm-5.3-flash`,
+**Endpoint:** `http://10.69.43.170:8000/v1` — model name `glm-5.3-flash`,
 262,144-token context, **no auth/TLS — trusted LAN only**. Concurrency ≈ 5 sessions
 at full context (6 dies — memory is tight by design).
 
@@ -14,10 +14,13 @@ at full context (6 dies — memory is tight by design).
 
 | rank | node | mgmt IP | role |
 |---|---|---|---|
-| 0 | `spark-0f0b` | 10.69.42.170 | leader — API server (`:8000`), rendezvous |
-| 1 | `spark-6d14` | 10.69.42.171 | worker (rank-2 relay hop for weight fan-out) |
-| 2 | `spark-6d90` | 10.69.42.172 | worker |
-| 3 | `spark-6d24` | 10.69.42.173 | worker |
+| 0 | `spark-0f0b` | 10.69.43.170 | leader — API server (`:8000`), rendezvous |
+| 1 | `spark-6d14` | 10.69.43.171 | worker (rank-2 relay hop for weight fan-out) |
+| 2 | `spark-6d90` | 10.69.43.172 | worker |
+| 3 | `spark-6d24` | 10.69.43.173 | worker |
+
+2026-10-19 move: mgmt is the wireless NIC `wlP9s9` (10.69.43.0/16); wired `enP7s7`
+is DOWN at the new location.
 
 - SSH from the workstation via `*.shawndo.intra` (never the fabric IPs). Ring fabric:
   10.10.1.x/2.x/3.x/4.x links, MTU 9000, **odd links on each node's LEFT QSFP port
@@ -175,17 +178,17 @@ restart mid-load; watch `docker logs` instead.
 ## Quick health checks
 
 ```sh
-curl -s http://10.69.42.170:8000/health                          # 200 = serving
-curl -s http://10.69.42.170:8000/v1/models | python3 -m json.tool
+curl -s http://10.69.43.170:8000/health                          # 200 = serving
+curl -s http://10.69.43.170:8000/v1/models | python3 -m json.tool
 
 # the two post-boot functional gates (run within 2 min of first /health 200):
-curl -s http://10.69.42.170:8000/v1/chat/completions -H 'Content-Type: application/json' \
+curl -s http://10.69.43.170:8000/v1/chat/completions -H 'Content-Type: application/json' \
   -d '{"model":"glm-5.3-flash","temperature":0,"max_tokens":64,
        "chat_template_kwargs":{"enable_thinking":false},
        "messages":[{"role":"user","content":"What is the capital of Italy? Reply with one sentence."}]}'
 # pass: coherent "Rome" in content (thinking-off template adapter)
 
-curl -s http://10.69.42.170:8000/v1/chat/completions -H 'Content-Type: application/json' \
+curl -s http://10.69.43.170:8000/v1/chat/completions -H 'Content-Type: application/json' \
   -d '{"model":"glm-5.3-flash","max_tokens":512,
        "messages":[{"role":"user","content":"What is the weather in Tokyo? Use the get_weather tool. Think step by step."}],
        "tools":[{"type":"function","function":{"name":"get_weather",
@@ -201,7 +204,7 @@ Simple chat (thinking on by default; use the gate's `enable_thinking:false` for 
 answers):
 
 ```sh
-curl -s http://10.69.42.170:8000/v1/chat/completions -H 'Content-Type: application/json' \
+curl -s http://10.69.43.170:8000/v1/chat/completions -H 'Content-Type: application/json' \
   -d '{"model":"glm-5.3-flash","max_tokens":512,
        "messages":[{"role":"user","content":"Hello, who are you?"}]}'
 ```

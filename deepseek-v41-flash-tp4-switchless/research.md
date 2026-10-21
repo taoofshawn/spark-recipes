@@ -120,6 +120,22 @@ packed shards, profiler-estimate off.
    (different stack); look for TileLang cache skew instead.
 6. **max_num_seqs 16** is a proven admission option upstream (C16 probed 285 tok/s
    aggregate at 0.80); the recorded 8 stays default until a gated boot says otherwise.
+7. **Engine-vehicle swap candidate (owner-endorsed direction, 2026-10-20): MiaAI-Lab
+   SGLang stack** (`Dockerfile.canary-roce`, dsv4.1 branch, b12x + adapters). Same-model
+   same-ring receipts run ~2.3× this lane's decode (default profile C1 74 agg vs our
+   32.2; C8 224.8 vs 56) with official weights — the survey's 2026-10-20 entry. The
+   sparkring lane is 3 days old with minimal site tuning (`dade187` only), so vehicle
+   cost is low now. Gated bring-up plan when lane downtime is authorized: verify the
+   `lmsysorg/sglang:dev-dsv41` base digest is still pullable (this cluster's last image
+   build hit a purged base tag); build per node; mount the site four-PF lib via their
+   `NCCL_OVERLAY_PIP=1` mechanism (or validate their sparkring dual-pci-domain lib
+   against our 10.10.0.0/21 addressing — pick ONE transport, preflight with
+   `verify-fabric-p2.sh` + an in-image allreduce test); boot worker-first; run their
+   qeval + needle + decode_window harnesses; keep only if the sweep beats the
+   sparkring receipts on the same harness. Open questions at plan time: DSpark k=5
+   profile parity on their stack (their default is k=3; k=5 was the benched ring
+   profile), thinking-default parity with the GLM lanes, model-name proxy already
+   serves `deepseek-v41-flash` so clients never change.
 
 ## Changelog
 

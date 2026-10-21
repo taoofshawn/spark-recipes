@@ -194,6 +194,24 @@ All of `noswitch-prep/` is site-owned, not upstream-owned:
 
 ## 5. Changelog
 
+- **2026-10-20 — External-survey pass: DeepSeek-V4.1 TP4 switchless recipes (owner
+  request). Doc-only for this lane; no config change. The full survey record lives in
+  `../../deepseek-v41-flash-tp4-switchless/research.md`, 2026-10-20 entry.**
+  - Applies-to-this-lane deltas vs the NVFP4 lane's 2026-10-20 entry:
+    (a) the NCCL pinned-buffer shrink (`NCCL_BUFFSIZE=1MiB` etc., frees ~4.6 GiB/rank)
+    is a better fit here than on the NVFP4 lane because `GPU_MEM_UTIL=0.85` is the
+    NV_ERR_NO_MEMORY ceiling — freed pinned buffers go back to the head's budget — but
+    the FP8 KV pool is sized 0.85-measured, so it stays a memory-pressure fallback,
+    not an adopted knob; (b) `expandable_segments:False` (MiaAI observed NaN logits on
+    GB10 with True for prefill >64 rows — SGLang-side observation) is a watch flag:
+    this launcher hardcodes `expandable_segments:True` (launch-glm53-tp4.sh); any
+    unexplained NaN/garble on a future boot should toggle it FIRST (one-line site mod,
+    then bench-recipe-update rules); (c) sparknet's ring NCCL profile and the
+    driver-patch memory work (display carve-out, Memory-Saver UVM) are pinned to
+    kernel 7.0.0-1019 / driver 580.178.04 — rejected under this lane's kernel pin
+    invariant; (d) engine-switch answered NO for GLM: knapcio measured SGLang-vs-vLLM
+    GLM TP4 head-to-head (equal speed, quality 68/75 vs 75/75); the DeepSeek SGLang
+    wins are DeepSeek-image kernel advantages.
 - **2026-10-13 — Upstream-churn pass (doc-only): no adoptable changes.** jnardiello
   tip moved past our pin `ed365a6` → `53359a2` (2026-10-01, docs-only: E37/E38
   diagnostic results archived — no code/config, no re-vendor needed). knapcio tip

@@ -169,6 +169,39 @@ changes). §5 never carried it separately, so no row here.
 
 ## Changelog
 
+- **2026-10-20 — External-survey pass: DeepSeek-V4.1 TP4 switchless recipes (owner
+  request). Doc-only for this lane; no config change. The full survey record —
+  per-repo verdicts, all forum threads, engine-comparison numbers — lives in
+  `../../deepseek-v41-flash-tp4-switchless/research.md`, 2026-10-20 entry.**
+  - GLM-relevant deltas from that survey:
+    - Engine-switch question answered NO: knapcio already measured SGLang-vs-vLLM GLM
+      TP4 head-to-head (vendored launcher in THIS repo at `upstream/docs/sglang/`,
+      `bench/kld_long_texts.json`): equal speed at the same k, quality 68/75 vs 75/75.
+      The DeepSeek SGLang wins (forum 382725 post 196 A/B: prose c1 41→72, prefill
+      1.8K→4.5K) are DeepSeek-image kernel advantages, not SGLang-generic.
+    - NCCL pinned-buffer shrink (`NCCL_BUFFSIZE=1MiB`, `NCCL_LL128_BUFFSIZE=256KiB`,
+      `NCCL_PROTO=^LL128`, `NCCL_MAX_NCHANNELS=8`; frees 4.7 GiB → 0.14 GB pinned
+      conn buffers on GB10 UMA, MiaAI ring profile): **not adopted** — this lane's
+      decode all-reduces run LL at 61 KB and the KV pin is already measured at
+      gmu 0.85; recorded as the FIRST knob set to try if the lane ever hits memory
+      pressure. Engine-independent.
+    - sparknet ring NCCL profile + driver-patch memory work (display carve-out,
+      Memory-Saver UVM, +1.8–3.9 GiB): **rejected** — pinned to kernel 7.0.0-1019 /
+      driver 580.178.04; violates this lane's kernel/driver pin invariant.
+    - `torch._library.utils.fill_defaults` O(args²) fix (873→48 µs per MoE call
+      outside CUDA graphs, forum 384438): **candidate overlay experiment**, not
+      config; GLM runs most MoE inside graphs so the expected gain is smaller.
+    - Ops rules adopted for every future bench/bring-up window: GB10 clock-latch check
+      (GPUs latch <1 GHz after crashes; only a power unplug clears it), fabric
+      cold-power-off after any re-cabling (×2.35 cold throughput, forum 381005),
+      bench methodology (idle-cluster gating, TTFT at first nonempty content event,
+      step-time for kernel A/Bs, discard first two runs, poll nvidia-smi ≤10 s,
+      spec acceptance measured on agent traffic ~55% not bench code).
+  - Cross-lane context: this lane's ring decode (c1 code 88) sits mid-pack against the
+    published same-class switchless numbers (MiaAI DeepSeek default C1 74 agg / step-D
+    C8 296; christopherowen r6n vLLM ring 226.5 @ 16 streams); the DeepSeek lane on
+    this branch does honest cross-lane A/B in its own research.md.
+
 - **2026-10-13 (later) — FP8 → NVFP4 switch-back per LANE-SWITCHING.md (final state:
   NVFP4 UP and healthy on `da920bb`); prefix_scan run-1 FAIL → run-2 PASS — the
   fresh-boot transient pattern REPRODUCED on a second boot.**

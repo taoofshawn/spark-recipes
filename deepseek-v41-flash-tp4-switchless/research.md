@@ -123,6 +123,128 @@ packed shards, profiler-estimate off.
 
 ## Changelog
 
+- **2026-10-20 — External-survey pass: DeepSeek-V4.1 TP4 switchless recipes (owner
+  request: "references to switchless DeepSeek 4.1 TP4 recipes with better performance
+  than what we are getting… willing to try a different inference server"). Requirements:
+  official quantizations, TP4, switchless. Sources: MiaAI-Lab repo + docs, knapcio
+  DeepSeek repo, NVIDIA forum threads 386285/384438/381005/382897/382725 (267 posts,
+  tail read via /raw/), plus GLM-on-SGLang/TensorFold scoping. Four read-only scouts;
+  combined findings here (the survey's canonical record). Doc-only — no config change,
+  no node action (lanes are serving; no restarts allowed this session).**
+
+  ### The landscape (official weights, TP4, switchless ring where stated)
+
+  | stack | engine | measured (decode code/prose c1, aggregate peak) | notes |
+  |---|---|---|---|
+  | MiaAI-Lab default ring profile | SGLang dsv4.1 @ f80c91a4b | 74 agg C1 / 224.8 C8; prefill 3.0–3.5K | the base recipe; 1M ctx, MXFP4/8 (checkpoint-native), MAX_TOTAL_TOKENS 8M pinned |
+  | MiaAI step-D (forum 386285 / issue 59, China OEM GB10) | same | C1 78–90 window / **296 C8**; prose C1 40 / C8 141; 1M prefill **2,880 tok/s (347 s)** | full production line minus RoCE: EP1 + b12x_next, WO_A_W8, draft-head FP8, block verify, prefill SP + FP8 gathers, fast load; qeval 72/75 (+2 over step A), 0 broke |
+  | knapcio DeepSeek v2.4 (switched 100G) | SGLang | prose C1 67–69 / code 110; c4 131 → c16 232; cold prefill 4,730 @32K → 2,830 @967K | per-flag measured ladder v1→v2.4 in repo docs |
+  | christopherowen r6n (ring TP4) | vLLM fork + TileLang | 226.5 agg @ 16 streams closed-loop; step grid geomean −2.2% | sparknet collectives; r6 TileLang prefill 32K 5,836 tok/s |
+  | tonyd2wild native vLLM 1017 | vLLM | C1 48.5 agg / C6 165.7 | his own "correct peer" for this lane (not the 89.8 TensorFold headline — different engine + EXL3) |
+  | **this lane (2026-10-18 bring-up)** | sparkring vLLM cycle | c1 32.2 / c2 44.0 / c4 45.4 (warm, interrupted-JIT context) | honest cross-lane A/B: GLM lanes c1 51.6 (FP8) / 55.3 (NVFP4); spec acceptance DSpark k5 40–62% vs GLM DFlash2 93% |
+
+  Same-prompt A/B is scarce: the only controlled one found (forum 382725 post 196,
+  4×Spark on 100G switch, same prompts, original weights, DSpark k=5): vLLM (aidendle)
+  vs knapcio v2.3 SGLang — prose c1 41.0 vs **72.3**, code c1 86 vs **127**, prefill
+  17K/69K/138K 1,950/1,823/1,766 vs **4,617/4,769/4,656**, KV pool 2.98M vs 6M pinned,
+  boot ~10 min vs ~5, quality identical (tool-eval 93 both). **SGLang won decisively —
+  for DeepSeek.** Attribution: the wins live in MiaAI's DeepSeek-specific kernel/
+  indexer work (DSA tilelang kernels, chunked indexer, Engram, prefill SP), not in
+  SGLang-generic flags. GLM-side counter-evidence: knapcio's own SGLang-vs-vLLM GLM
+  TP4 head-to-head (vendored in the NVFP4 lane at
+  `../glm-v53-flash-nvfp4-tp4-switchless/upstream/docs/sglang/`, measured in
+  `bench/kld_long_texts.json`): equal speed at the same k, quality 68/75 vs 75/75 —
+  the engine switch does NOT transfer to GLM.
+
+  ### What we already match (this lane vs the surveyed stacks)
+
+  The MiaAI/knapcio "tuning ladder" items map 1:1 onto flags this lane already runs:
+  CUDA graphs (ENFORCE_EAGER=0), spec decoding k=5 DSpark (NUM_SPECULATIVE_TOKENS=5),
+  pinned KV via KV sizing, fast/serial load decisions, NCCL ring contract (four-PF
+  lib + SWITCHLESS_RING_ONLY + MERGE_NICS=0 — the SAME contract the MiaAI patched
+  NCCL implements), channels=8 (adopted `dade187`), Engram NVMe packed shards
+  (ENGRAM_PACKED + BALANCED, +15% prefill upstream). Max-num-seqs 16 remains the one
+  proven-upstream admission rung not yet gated here (watch item 6).
+
+  ### Transferable findings (verdicts against the adoption gate)
+
+  1. **NCCL pinned-buffer shrink** (MiaAI: `NCCL_BUFFSIZE=1048576`,
+     `NCCL_LL128_BUFFSIZE=262144`, `NCCL_PROTO=^LL128`, `NCCL_MAX_NCHANNELS=8`):
+     default NCCL conn buffers cost 4.7 GiB/node on GB10 UMA (pinned host RAM = GPU
+     memory); shrunk set = 0.14 GB. **Not adopted now** — this lane already sets
+     MAX_NCHANNELS=8, decode ARs are 61 KB LL, and the KV pool is free-memory-sized
+     (2.24M tokens @ gmu 0.83); freeing conn buffers only matters if the pool ever
+     needs the headroom (watch item 2's gmu 0.85 rung would be the moment). Engine-
+     independent knob set, recorded here as the first lever for that rung.
+  2. **sparknet ring NCCL profile** (christopherowen, `dgx-spark-networking`):
+     channels balanced across ring directions AND PCIe roots, 4ch/4MiB buffer, small-
+     call thread-block reduction, size-based one-shot vs NCCL selection — 2 MiB
+     allreduce 320→232 µs (−27.5%). Explicitly non-model-specific. **Rejected as
+     transport swap** (different NCCL; violates the shared four-PF contract this
+     cluster's switching depends on) — recorded as the comparison target if the
+     four-PF lib is ever re-derived; its AArch64 send-path fence fix and
+     `SPARKNET_ROCE_TIMEOUT_MS` clock-aware wait are design references for any
+     future NCCL site patch.
+  3. **`torch._library.utils.fill_defaults` O(args²) patch** (873→48 µs per custom-op
+     call outside CUDA graphs; "applies to every MoE launch outside a CUDA graph"):
+     generic PyTorch overhead fix, engine-agnostic. **Candidate overlay experiment**
+     for this lane (its DSpark verify path launches eager ops); needs its own
+     bench-recipe-update window with step-time A/B.
+  4. **Display carve-out** (~2.1 GiB GB10 firmware scanout reservation reclaimed via
+     DRM dumb buffer + dma-buf for embedding/output-head weights → KV +0.8 GiB/rank)
+     and **Memory-Saver 64 KiB-page UVM patch** (+1.78–1.86 GiB/node): **rejected** —
+     driver surgery pinned to kernel 7.0.0-1019 / driver 580.178.04; site pins are
+     580.173.02 + 6.17.0-1032 (watch item 4). Revisit only if the kernel/driver pin
+     ever changes.
+  5. **GB10 clock-latch ops rule** (tonyd2wild forum 382897: GPUs can latch <1 GHz —
+     his 41→5 tok/s collapse was two latched GPUs; only a power unplug clears it,
+     reboot does not) and the **thermal stacking note** (382725 post 187): adopted
+     as pre-bench checks.
+  6. **Fabric cold-power-off rule** (HuShengKai 381005: after cabling changes a FULL
+     power-off + wait is required — links otherwise negotiate at 40 Gbps; ×2.35 cold
+     throughput after the fix): adopted for any future re-cabling; also validates our
+     `verify-fabric-p2.sh` + `ib_write_bw` discipline.
+  7. **Bench methodology** (MiaAI tp4.md + knapcio sparkDash discipline): idle-cluster
+     gating between waves; TTFT at first nonempty content event (SSE chunks ≠ tokens);
+     step-time comparison for kernel A/Bs (single-prompt greedy c1 moves ±10% on
+     reduction-order changes alone); discard first two runs post-boot; `#running-req`
+     above benched concurrency invalidates the window; nvidia-smi polling at 2 s costs
+     0.6 ms/decode step (poll ≥10 s); spec acceptance on agent traffic ~55% vs 75%+ on
+     bench code — tune drafts on real traffic, never one prompt; character-scaled
+     decode-window tok/s is an ESTIMATE and must be labeled as such.
+  8. **Not transferable (model/stack-specific), recorded to prevent re-litigating:**
+     Engram n-gram tables + NVMe row store (DeepSeek DSA indexer), DSpark adaptive
+     verify + cost curves, WO_A_W8 / cert-head / b12x TileLang kernel family, EP1 MoE
+     layout (vLLM expert parallelism differs), chunked-indexer backport, `--swa-
+     prefix-tails`, `DSV41_PREFILL_BYPASS` (short-request admission during long
+     prefill — the CONCEPT is generic but no GLM/vLLM knob exists; if deep prefill
+     head-of-line blocking ever hurts this lane's traffic, this is the feature to
+     request upstream), DeepSeek reasoning-effort budget knob.
+  9. **Ring-vs-switch**: only one direct comparison found (382725 post 158): decode
+     within ~10% switchless-vs-switched, usually equal; prefill ~5% lower (one-link
+     bisection). Corroborates this lane's transport choice; no action.
+  10. **Other engines scoped**: SGLang GLM-5.3-Flash support exists upstream (v0.5.20+,
+      PR #36507; DFlash via EAGLE; fp8-KV on GB10 via #36904) but GB10 is NOT in the
+      cookbook's verified hardware list and every Spark deployment found needed
+      community patches (beastllama 2×Spark repo: 4 GB10 patches, DFlash2 NOT
+      bit-identical at temp 0 — 1/20 exact). Best published GLM-on-SGLang 4×Spark
+      number: Openzeka aggregator C1 46.8 (provenance undisclosed). TensorFold (Zig
+      engine, Apache-2.0) has a GLM-5.3-Flash TP4 switchless stack (Keenni repo, ~80
+      tok/s single-stream decode) but on abliterated EXL3 4bpw weights + NC-licensed
+      drafter — fails the official-quant requirement, and its cold prefill is 0.87–0.89×
+      vLLM. Neither justifies a lane switch for this site.
+
+  ### Bottom line
+
+  The "better performance" perception decomposes into (a) SGLang-vs-vLLM on DeepSeek —
+  real but DeepSeek-kernel-attributed, already counter-evidenced for GLM; (b) MiaAI
+  step-D tuning depth — mostly flags this lane already carries or levers upstream
+  hasn't published (watch item 5 covers the two that matter); (c) methodology
+  differences in published numbers (temp-0/greedy vs real traffic, character-scaled
+  estimates). Concrete follow-ups carried from this survey: max_num_seqs 16 gated rung
+  (watch item 6), NCCL buffer shrink at the gmu-0.85 rung (item 1), fill_defaults
+  overlay experiment (item 3). No restarts were performed; lanes untouched.
+
 ### 2026-10-18 — tonyd2wild lever adoption A/B (channels + Engram threads)
 - Bench context: the user's interrupted tool-eval runs (spec-bench ~12 min after boot,
   cold JIT) read 36-59.5 eff t/s; a warm re-run (`dsv41flash-warm1`) read essentially

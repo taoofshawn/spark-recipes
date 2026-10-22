@@ -10,25 +10,27 @@ sys.path.insert(0, str(ROOT / 'adapter'))
 
 from encoding_compat import (  # noqa: E402
     DEFAULT_MAX_NEW_TOKENS,
+    DEFAULT_MAX_NEW_TOKENS_FLOOR,
     apply_request_max_tokens,
     configured_max_new_tokens,
+    configured_max_new_tokens_floor,
     install_serving_chat,
 )
 
 
-def _with_env(value, fn):
-    old = os.environ.get('DSV41_MAX_NEW_TOKENS')
+def _with_env(value, fn, key='DSV41_MAX_NEW_TOKENS'):
+    old = os.environ.get(key)
     if value is None:
-        os.environ.pop('DSV41_MAX_NEW_TOKENS', None)
+        os.environ.pop(key, None)
     else:
-        os.environ['DSV41_MAX_NEW_TOKENS'] = value
+        os.environ[key] = value
     try:
         return fn()
     finally:
         if old is None:
-            os.environ.pop('DSV41_MAX_NEW_TOKENS', None)
+            os.environ.pop(key, None)
         else:
-            os.environ['DSV41_MAX_NEW_TOKENS'] = old
+            os.environ[key] = old
 
 
 def test_default_limit():
@@ -87,6 +89,86 @@ def test_install_convert_applies_cap():
     tokens, out = _with_env('4096', run)
     assert tokens == 4096
     assert out.max_tokens == 4096
+
+
+def _req(max_tokens=None, kwargs=None, completion=None):
+    return SimpleNamespace(max_tokens=max_tokens, max_completion_tokens=completion,
+                           chat_template_kwargs=kwargs)
+
+
+def test_floor_raises_starved_thinking_request():
+    req = _req(256, {'thinking': True})
+    _with_env(str(DEFAULT_MAX_NEW_TOKENS_FLOOR),
+              lambda: apply_request_max_tokens(req),
+              key='DSV41_MAX_NEW_TOKENS_FLOOR')
+    assert req.max_tokens == DEFAULT_MAX_NEW_TOKENS_FLOOR
+
+
+def test_floor_reads_unaliased_enable_thinking():
+    req = _req(256, {'enable_thinking': True})
+    _with_env('8192', lambda: apply_request_max_tokens(req),
+              key='DSV41_MAX_NEW_TOKENS_FLOOR')
+    assert req.max_tokens == 8192
+
+
+def test_floor_leaves_ample_budget_alone():
+    req = _req(20000, {'thinking': True})
+    _with_env('16384', lambda: apply_request_max_tokens(req),
+              key='DSV41_MAX_NEW_TOKENS_FLOOR')
+    assert req.max_tokens == 20000
+
+
+def test_floor_ignores_non_thinking_requests():
+    req = _req(256, {'thinking': False})
+    _with_env('16384', lambda: apply_request_max_tokens(req),
+              key='DSV41_MAX_NEW_TOKENS_FLOOR')
+    assert req.max_tokens == 256
+
+
+def test_floor_uses_engine_default_thinking():
+    req = _req(256, None)
+
+    def run():
+        return _with_env('true', lambda: apply_request_max_tokens(req),
+                         key='SGLANG_DEFAULT_THINKING')
+
+    _with_env('16384', run, key='DSV41_MAX_NEW_TOKENS_FLOOR')
+    assert req.max_tokens == 16384
+
+
+def test_floor_is_bounded_by_cap():
+    req = _req(256, {'thinking': True})
+
+    def run():
+        return _with_env('32768', lambda: apply_request_max_tokens(req),
+                         key='DSV41_MAX_NEW_TOKENS_FLOOR')
+
+    _with_env('8192', run)
+    assert req.max_tokens == 8192
+
+
+def test_floor_applies_to_max_completion_tokens():
+    req = _req(16, {'thinking': True}, completion=256)
+    _with_env('4096', lambda: apply_request_max_tokens(req),
+              key='DSV41_MAX_NEW_TOKENS_FLOOR')
+    assert req.max_completion_tokens == 4096
+    assert req.max_tokens == 16
+
+
+def test_floor_zero_keeps_request_budget():
+    req = _req(256, {'thinking': True})
+    _with_env('0', lambda: apply_request_max_tokens(req),
+              key='DSV41_MAX_NEW_TOKENS_FLOOR')
+    assert req.max_tokens == 256
+
+
+def test_floor_off_by_default_env_reading():
+    assert _with_env(None, configured_max_new_tokens_floor,
+                     key='DSV41_MAX_NEW_TOKENS_FLOOR') == DEFAULT_MAX_NEW_TOKENS_FLOOR
+    assert _with_env('garbage', configured_max_new_tokens_floor,
+                     key='DSV41_MAX_NEW_TOKENS_FLOOR') == DEFAULT_MAX_NEW_TOKENS_FLOOR
+    assert _with_env('0', configured_max_new_tokens_floor,
+                     key='DSV41_MAX_NEW_TOKENS_FLOOR') == 0
 
 
 if __name__ == '__main__':

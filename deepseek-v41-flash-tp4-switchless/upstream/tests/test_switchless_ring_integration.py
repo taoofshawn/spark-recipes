@@ -115,7 +115,7 @@ end-of-command"
                 split = out.index("SPLIT")
                 head, worker = out[:split], out[split + 1:]
                 he, we = pairs(head, "-e"), pairs(worker, "-e")
-                for value in ("DSPARK_BLOCK_SIZE=3", "SGLANG_DSV41_REASONING_EFFORT=75", "DSV41_MAX_NEW_TOKENS=32768", "DSV41_LOOP_ABORT=1", "SERVED_MODEL_NAME=" + settings["SERVED_MODEL_NAME"]):
+                for value in ("DSPARK_BLOCK_SIZE=3", "SGLANG_DSV41_REASONING_EFFORT=75", "DSV41_MAX_NEW_TOKENS=32768", "DSV41_MAX_NEW_TOKENS_FLOOR=16384", "DSV41_LOOP_ABORT=1", "SERVED_MODEL_NAME=" + settings["SERVED_MODEL_NAME"]):
                     assert value in he and value in we, value
                 assert f"NODE_RANK={rank}" in we
                 assert "end-of-command" in worker
@@ -351,7 +351,7 @@ def test_tp4_profile_ring_flags_are_commented_and_base_defaults_preserved():
         assert key not in values
         assert key in commented
     assert values["NCCL_MAX_NCHANNELS"] == "8"
-    for key, value in {"DSPARK_BLOCK_SIZE": "5", "SGLANG_DSV41_REASONING_EFFORT": "75", "DSV41_MAX_NEW_TOKENS": "32768", "DSV41_LOOP_ABORT": "1"}.items():
+    for key, value in {"DSPARK_BLOCK_SIZE": "5", "SGLANG_DSV41_REASONING_EFFORT": "75", "DSV41_MAX_NEW_TOKENS": "32768", "DSV41_MAX_NEW_TOKENS_FLOOR": "16384", "DSV41_LOOP_ABORT": "1"}.items():
         assert values[key] == value
 
 

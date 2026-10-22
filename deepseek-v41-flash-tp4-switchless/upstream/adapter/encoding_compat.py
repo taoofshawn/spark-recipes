@@ -24,6 +24,13 @@ logger = logging.getLogger(__name__)
 # Publisher encoding/encoding.py REASONING_EFFORT_MAPPINGS, plus SGLang's xhigh alias.
 PUBLISHER_REASONING_EFFORT = {'low': 50, 'high': 75, 'xhigh': 75, 'max': 100}
 DEFAULT_MAX_NEW_TOKENS = 32768
+# Thinking-mode completion floor. A thinking request that asks for a small
+# max_tokens spends the whole budget inside the reasoning segment and returns
+# no answer at all (observed tool-eval-bench MMLU: 50/500 questions truncated at
+# max_tokens=256, re-run with headroom 42/50 answered correctly; IFEval 26/541).
+# Raising the *floor* keeps the request's own value when it is already large
+# enough and never shortens output the way a thinking cap does. 0 disables.
+DEFAULT_MAX_NEW_TOKENS_FLOOR = 16384
 
 
 def normalize_chat_template_kwargs(kwargs):
@@ -66,14 +73,63 @@ def configured_max_new_tokens():
         return DEFAULT_MAX_NEW_TOKENS
 
 
+def configured_max_new_tokens_floor():
+    """Return the thinking-mode completion floor, or 0 when the floor is off."""
+    raw = os.environ.get('DSV41_MAX_NEW_TOKENS_FLOOR',
+                         str(DEFAULT_MAX_NEW_TOKENS_FLOOR)).strip()
+    try:
+        return int(raw)
+    except ValueError:
+        logger.warning('DSV41_MAX_NEW_TOKENS_FLOOR=%r is not an int; using %s',
+                       raw, DEFAULT_MAX_NEW_TOKENS_FLOOR)
+        return DEFAULT_MAX_NEW_TOKENS_FLOOR
+
+
+def request_wants_thinking(request):
+    """True when this request renders the reasoning segment.
+
+    Installed ahead of ``_process_messages``, so ``enable_thinking`` may still
+    be unaliased here; ``thinking`` wins when both keys are present, matching
+    ``normalize_chat_template_kwargs``. No key at all falls back to the
+    engine's ``SGLANG_DEFAULT_THINKING``.
+    """
+    kwargs = getattr(request, 'chat_template_kwargs', None)
+    if isinstance(kwargs, dict):
+        if 'thinking' in kwargs:
+            return bool(kwargs['thinking'])
+        if 'enable_thinking' in kwargs:
+            return bool(kwargs['enable_thinking'])
+    return os.environ.get('SGLANG_DEFAULT_THINKING', '0').strip().lower() in (
+        '1', 'true', 'yes', 'on')
+
+
 def apply_request_max_tokens(request):
     """Fill omitted max_tokens / max_completion_tokens and clamp to the cap.
 
     Mutates ``request`` in place and returns it. ``limit <= 0`` is a no-op.
     ``max_completion_tokens`` wins when both fields are set, matching SGLang.
+    A thinking request whose budget is below the floor is raised to it: the
+    reasoning segment otherwise consumes the entire budget and the response
+    ends with no answer (``finish_reason=length``, empty content).
     """
+    if request is None:
+        return request
     limit = configured_max_new_tokens()
-    if limit <= 0 or request is None:
+    floor = configured_max_new_tokens_floor()
+    if floor > 0 and request_wants_thinking(request):
+        completion = getattr(request, 'max_completion_tokens', None)
+        tokens = getattr(request, 'max_tokens', None)
+        current = completion if completion is not None else tokens
+        if current is None:
+            if limit > 0:
+                request.max_tokens = limit
+        elif current < floor:
+            target = min(floor, limit) if limit > 0 else floor
+            if completion is not None:
+                request.max_completion_tokens = target
+            else:
+                request.max_tokens = target
+    if limit <= 0:
         return request
     completion = getattr(request, 'max_completion_tokens', None)
     tokens = getattr(request, 'max_tokens', None)

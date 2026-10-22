@@ -191,6 +191,66 @@ packed shards, profiler-estimate off.
   `estimated_read/write_bytes_per_gpu_total`); MFU estimators also appear in the
   batch log lines (`est. prefill/decode TFLOPS/s`, `est. read/write BW`).
 
+### 2026-10-22 — benchmark analysis: thinking-mode budget starvation (site fix)
+- Owner request: review `~/code/scratch/tool-eval-bench-reports` (label
+  `dsv41flash-miaai-gpu2100`) and find settings/tuning that improves the numbers
+  **other than the effort setting**. Bench run 2026-10-22 13:15–17:45 UTC (4h30m,
+  v2.8.0): Tool-Eval 89% (172/194), GSM8K 98.0%, MMLU 86.8% (90.8% on the retired
+  sparkring lane), IFEval 89.5/90.5 (83.9/88.8 there), spec best 111.7 t/s, tg
+  48.2/81.4/93.0.
+- **Root cause — client/server budget mismatch, not model loss.** The harness sends
+  `chat_template_kwargs {enable_thinking: true, reasoning_effort: high}` with
+  `max_tokens=256` for MMLU and `4096` for IFEval (both hard-coded in the harness
+  plugins). With thinking on, the reasoning segment consumes the entire budget: the
+  response ends `finish_reason=length` with empty content and scores zero however good
+  the reasoning was. Reproduced on the live engine (MMLU item #1 at `max_tokens=256`:
+  256 completion tokens / 259 reasoning tokens, empty content; the same prompt at
+  16384: 3,005 reasoning tokens, then the correct answer, 47 s).
+- **Measured cost of the starvation** (live engine, seed 42, temp 1.0/top_p 0.95,
+  effort 75 — only the budget varied):
+  - MMLU: the report's 50 truncated items re-run at `max_tokens=16384` →
+    **42/50 correct (84%)**, 50/50 `finish_reason=stop`, median 485 completion
+    tokens, p90 1,173, max 4,454. Projected MMLU **86.8% → 95.2%**.
+  - IFEval: 39-prompt controlled A/B, 4096 vs 16384, scored by IFEval's own checker →
+    prompt accuracy 87.2% → **92.3%**, instruction 88.2% → **95.6%**, truncated 3 → 0
+    (both flips are truncation recoveries, keys 1154/3429).
+- **Fix @ this commit — `DSV41_MAX_NEW_TOKENS_FLOOR` (default 16384).** The adapter
+  (`adapter/encoding_compat.py`) raises a *thinking* request whose `max_tokens` /
+  `max_completion_tokens` is below the floor, capped by `DSV41_MAX_NEW_TOKENS`; it
+  never shortens a request and never touches thinking-off traffic (that path still
+  follows `SGLANG_DEFAULT_THINKING`). Wired through `start.sh`'s `-e` whitelist on both
+  head and worker paths, documented in `.env.example` / `.env.tp4.example` / README,
+  pinned in `tests/test_switchless_ring_integration.py`; 9 new boundary tests in
+  `tests/test_max_new_tokens.py` (16/16 pass) and the integration suite 15/15 (run in
+  WSL — the Windows shell cannot exec the 32k-character launch line).
+- **Rejected, with measurements** (150-item stratified MMLU slice, paired to baseline):
+  `top_k=20` +2/−1 (net +1), `repetition_penalty=1.05` +1/−0 (net +1) — both inside
+  noise, so the sampling-tail hypothesis does not hold and neither ships. The residual
+  MMLU loss is 16 genuinely-wrong answers; IFEval's residual gap is constraint
+  following (`keywords:letter_frequency` 69.7%, `detectable_format:json_format` 70.6%),
+  which no server-side knob reaches.
+- **Rejected — thinking cap (`--enable-strict-thinking` + `SGLANG_MAX_THINK_TOKENS`).**
+  It is the other way to end the starvation (force the think-close token at a count)
+  and works in principle, but (a) the cap is global while starving (256) and healthy
+  (16384) budgets coexist — a cap low enough for MMLU would cut reasoning that IFEval
+  and tool-eval currently use in full; (b) the strict path also bans
+  `think_excluded_tokens` (DSV4 EOS + DSML) inside thinking, which is the tool-call
+  markup path — an unvalidated risk for the tool lane. Per-request
+  `max_thinking_tokens` requires `--enable-strict-thinking` (verified: the tokenizer
+  manager raises without it), so it cannot be a low-risk default. The floor gets the
+  same recovery without cutting reasoning.
+- **Not a lever, verified:** thinking-off costs a lot and is already overridden by the
+  harness — 150-item paired run: thinking-on 94.0% vs thinking-off 85.3% (net −13,
+  −8.7 pp). `--fp4-indexer` is a no-op on V4.1 (no ratio-4 layers; upstream
+  `docs/tp4.md`). KV dtype is already `fp8_e4m3`. `sampling_defaults=model` does
+  nothing here: the checkpoint ships no `generation_config.json` (checked on the head's
+  weights dir and in-container).
+- **Cost of the floor:** thinking requests that used to die silently now run to
+  completion; bench wall time on MMLU/IFEval grows, throughput (`tg`) is unchanged.
+- **Not yet live:** takes effect on the next image rebuild + lane restart (`adapter/`
+  is COPY'd at build; `start.sh` re-reads env at launch). No full-suite bench was run —
+  the numbers above are the targeted re-runs, not a 4h30m receipt.
+
 - **2026-10-20 — External-survey pass: DeepSeek-V4.1 TP4 switchless recipes (owner
   request: "references to switchless DeepSeek 4.1 TP4 recipes with better performance
   than what we are getting… willing to try a different inference server"). Requirements:

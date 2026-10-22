@@ -184,6 +184,12 @@ packed shards, profiler-estimate off.
   `~/.local/ds41f-tp4` sparkring weights, 476 G/node) skipped — owner did not
   confirm it. README still describes the retired sparkring lane (owner-prioritized,
   post-window item).
+- Follow-up (owner request, same day): enabled Prometheus + MFU metrics —
+  `--enable-metrics --enable-mfu-metrics` appended to `EXTRA_SGLANG_ARGS` @ 4048e62;
+  lane restarted (warm boot, full smoke green). Verified: `/metrics` 200 with 78
+  `sglang:` families incl. the MFU trio (`estimated_flops_per_gpu_total`,
+  `estimated_read/write_bytes_per_gpu_total`); MFU estimators also appear in the
+  batch log lines (`est. prefill/decode TFLOPS/s`, `est. read/write BW`).
 
 - **2026-10-20 — External-survey pass: DeepSeek-V4.1 TP4 switchless recipes (owner
   request: "references to switchless DeepSeek 4.1 TP4 recipes with better performance

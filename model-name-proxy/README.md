@@ -39,6 +39,15 @@ Request normalization is always on; response spoofing depends on
 | response | `/v1/chat/completions` (incl. SSE deltas) | real served name → `SPOOF_MODEL` — mode B only; mode A leaves them untouched |
 | both | everything else | **no transformation** — byte-for-byte proxy |
 
+The request rewrite re-encodes the whole JSON body, so it must be **lossless**.
+`cjson` collapses `[]` and `{}` into the same empty Lua table by default, which
+turned a tool schema's `"required": []` into `"required": {}`; vLLM ignored the
+corrupted schema but sglang validates it and answers
+`400 Tool N function has invalid 'parameters' schema: {} is not of type 'array'`,
+failing every tool-calling client. `access.lua` enables
+`cjson.decode_array_with_array_mt` to keep arrays as arrays — do not remove it,
+and re-check a tool-calling request after touching that file.
+
 ## Two modes: can I tell which model is active?
 
 `SPOOF_RESPONSES` in `.env` (default `0` = mode A) controls completion-response

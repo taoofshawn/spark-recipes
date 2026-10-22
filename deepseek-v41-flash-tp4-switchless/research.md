@@ -139,6 +139,52 @@ packed shards, profiler-estimate off.
 
 ## Changelog
 
+### 2026-10-22 — bring-up: GLM NVFP4 → MiaAI-Lab SGLang vehicle swap (owner window)
+- Window opened by owner; GLM NVFP4 stopped all-ranks (`start.sh stop`, exit 0 ×4,
+  worker-first) and the stopped containers were `docker rm`'d on all four (NVFP4
+  relaunch refuses existing names). Handoff said `./start.sh down` — no such
+  subcommand exists (`serve|stop|status|logs`); handoff corrected in place.
+- `verify-fabric-p2.sh` ALL CHECKS PASS (run pre-window and in-window); doctor
+  ready (48/48 shards 476 G, all four HCAs active, RoCEv2 GID 3 on every rank).
+- **Boot 1 failed** (TP0 model init): `Mxfp4FlashinferCutlassMoEMethod requires
+  hidden_size and intermediate_size_per_partition to be multiples of 128 (got
+  hidden=5120, intermediate=576)`. Root cause: the site env wrote the production
+  adapter switches as plain assignments, but `start.sh` forwards container env via
+  an explicit `-e` whitelist — those names only reach the container through
+  `EXTRA_CONTAINER_ENV` (the form upstream's own `.env.tp4.example` line 453
+  uses). `moe_b12x_next` never armed and the stock CUTLASS gate rejected
+  N=576 (= 2304/4). Fix @ 57107b9: `DSV41_FAST_LOAD*`, `DSV41_DRAFT_HEAD_FP8_IMPL`,
+  `DSV41_REPLICATED_SPLIT`, `DSV41_DRAFT_MAIN_PROJ_SPLIT`, `DSV41_ROUTER_LIVE`,
+  `DSV41_MOE_B12X_NEXT(+_DETERMINISTIC)`, `DSV41_HC_FUSED`, `DSV41_PREFILL_SP(+_FP8)`,
+  `DSV41_L2_PREFETCH`, `SGLANG_RUST_BUILD_MODE` now ride in the single
+  `EXTRA_CONTAINER_ENV` line. `docker rm -f` per rank + relaunch → every adapter
+  armed (`[moe_b12x_next]`, `[replicated_split]`, `hc_fused`, `PREFILL_SP`,
+  `L2_PREFETCH`, fast load, `[draft_head_fp8]`, `[draft_main_proj]`).
+- SERVED_MODEL_NAME pin @ 8418472: without it the engine serves upstream's default
+  `deepseek-v4.1-flash`, while the proxy contract is `deepseek-v41-flash`. The
+  proxy container on the head was itself stale (live env still
+  `BACKEND_MODEL=glm-5.3-flash` despite the committed `.env`) — recreated via
+  `docker compose --env-file .env up -d` on the head.
+- Full smoke @ d005896 (`SMOKE_QUICK=0`): "Structured output, tool round trip and
+  full-budget native vision passed", batch-16 sanity passed, warm-up 6 s.
+- Four-PF gate capture @ df3737b: one boot with `NCCL_DEBUG=INFO` +
+  `SUBSYS=INIT,ENV,NET` (docs/switchless-ring.md "Diagnosing it" — INIT,ENV alone
+  never prints the routing records). Captured: `NET/IB ListenerRouting
+  format=ipv4-v1 advertised=4 observed=4`, `Connected all rings, use ring PXN 0
+  GDR 0`, zero listener-count errors. Repo reverted to `WARN`/`INIT,ENV` after the
+  capture; the running engine keeps the INFO boot (logging only).
+- Gates on the final instance (02:50 boot, warm JIT ≈2.5 min to Ready):
+  `/health` 200; `/v1/models` id `deepseek-v41-flash`, max_model_len 1,048,576;
+  corruption 0 U+FFFD (emoji + CJK intact); depth needle at 666,695 tokens hit
+  (`ORION-88`; pool full=6,654,976/rank, swa=51,712); forced tool call ok;
+  proxy :4000 answers `spark-llm` → serves `deepseek-v41-flash`. SpecDecoding
+  accept len 3.55 first decode (2.35–3.75 across smoke) — > 1. Engram DISK
+  `packed=True`, hit 87.3–87.4%, cache 2.0 GiB (16-way)/layer, threads 96.
+- No benches (functional gates only, per runbook). Step 0 (delete
+  `~/.local/ds41f-tp4` sparkring weights, 476 G/node) skipped — owner did not
+  confirm it. README still describes the retired sparkring lane (owner-prioritized,
+  post-window item).
+
 - **2026-10-20 — External-survey pass: DeepSeek-V4.1 TP4 switchless recipes (owner
   request: "references to switchless DeepSeek 4.1 TP4 recipes with better performance
   than what we are getting… willing to try a different inference server"). Requirements:

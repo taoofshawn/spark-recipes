@@ -31,4 +31,7 @@ export ENV_FILE="$ENV_OUT"
 
 # 3. Exec the launcher's switchless profile.
 cd "$STACK"
-exec ./start-tp4-switchless.sh "$@"
+# exec via bash, not ./ — the vendored tree ships 0644 scripts, so a stack re-sync
+# from the repo (which also ships 0644) would otherwise lose the exec bit and die
+# here with "Permission denied" (hit 2026-10-22 after a tar re-sync of the stack).
+exec bash ./start-tp4-switchless.sh "$@"

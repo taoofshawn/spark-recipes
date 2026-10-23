@@ -247,9 +247,38 @@ packed shards, profiler-estimate off.
   weights dir and in-container).
 - **Cost of the floor:** thinking requests that used to die silently now run to
   completion; bench wall time on MMLU/IFEval grows, throughput (`tg`) is unchanged.
-- **Not yet live:** takes effect on the next image rebuild + lane restart (`adapter/`
-  is COPY'd at build; `start.sh` re-reads env at launch). No full-suite bench was run —
-  the numbers above are the targeted re-runs, not a 4h30m receipt.
+- **Deployed 2026-10-23 (owner-authorized window, no bench):** preflight
+  `verify-fabric-p2.sh` ALL PASS → repo pulled on the head (bff8ce7) → lane stopped
+  all-ranks (`start-cluster.sh stop`, rank 0 first, clean) → image
+  `dsv41-4x-spark:canary-roce-miaai` rebuilt on ALL FOUR nodes (~110 s each, cache hit
+  on the unchanged kernel layers; the Dockerfile's in-build adapter test suite — incl.
+  the 16 max-new-tokens tests — passed inside every build) → `start-cluster.sh serve`
+  → ready in ~3 min. Gates on the new instance: full smoke
+  ("Structured output, tool round trip and full-budget native vision passed"),
+  batch-16 sanity, warm-up 6 s, Engram `packed=True` hits 87.3–87.5%, SpecDecoding
+  accept len 3.55 (first) / 2.61 (batch-16) > 1, **0 NCCL WARNs on all four ranks**,
+  corruption probe 0 U+FFFD (emoji + CJK intact), `/v1/models` `deepseek-v41-flash` @
+  1,048,576. Floor verified live: container env carries
+  `DSV41_MAX_NEW_TOKENS_FLOOR=16384`, the boot warning announces it, and the exact
+  starvation case (MMLU-style prompt, `max_tokens=256`, thinking on) now returns
+  `finish_reason=stop` with the worked answer (678 completion tokens) instead of
+  `finish_reason=length` with empty content. No bench was run (owner will).
+- **Two boot-attempt gotchas hit during the redeploy, recorded for the next one:**
+  1. **Stack re-sync resets exec bits + reintroduces CRLF.** The stack
+     (`~/.local/ds41f-miaai/stack`) is an rsync/tar copy of `upstream/`, and the
+     vendored tree ships 0644 scripts — a re-sync from the workstation's Windows
+     checkout also carries CRLF (`/usr/bin/env: 'bash\r'`). Fixes now in the repo:
+     `site/start-cluster.sh` execs the launcher via `bash` (mode-proof, commit
+     "exec the launcher via bash"), and the correct re-sync is
+     `git archive HEAD deepseek-v41-flash-tp4-switchless/upstream | tar -C
+     ~/.local/ds41f-miaai --strip-components=2 -xf -` from any clone (LF, no CRLF,
+     keeps the gitignored `benchmarks/` and generated state). Never tar the tree
+     from a Windows checkout.
+  2. **Worker build trees are `~/dsv41-miaai` on each worker** (not the launcher's
+     `WORKER_DIR=~/.local/ds41f-miaai`, which on workers holds only
+     engram/weights/state) — `cmd_build`'s worker rsync would target the wrong dir;
+     worker images were rebuilt from `~/dsv41-miaai` with the changed files streamed
+     in. Worth unifying with a real site build wrapper before the next full rebuild.
 
 - **2026-10-20 — External-survey pass: DeepSeek-V4.1 TP4 switchless recipes (owner
   request: "references to switchless DeepSeek 4.1 TP4 recipes with better performance

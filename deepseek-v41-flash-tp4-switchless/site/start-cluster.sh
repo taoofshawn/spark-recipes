@@ -27,6 +27,10 @@ SRC_ENV=$REPO_SITE_DIR/env.switchless
 mkdir -p "$ROOT"
 envsubst '$HOME' < "$SRC_ENV" > "$ENV_OUT.tmp" 2>/dev/null || sed "s|\$HOME|$HOME|g" "$SRC_ENV" > "$ENV_OUT.tmp"
 mv "$ENV_OUT.tmp" "$ENV_OUT"
+# The vendored tree ships 0644 scripts and every stack re-sync (rsync/tar/git-archive)
+# restores those modes; make the launcher chain executable on every run.
+chmod +x "$STACK/start.sh" "$STACK/start-tp4.sh" "$STACK/start-tp4-switchless.sh" \
+  "$STACK/stop.sh" 2>/dev/null || true
 export ENV_FILE="$ENV_OUT"
 
 # 3. Exec the launcher's switchless profile.

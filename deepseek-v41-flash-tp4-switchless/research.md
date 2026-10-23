@@ -279,6 +279,34 @@ packed shards, profiler-estimate off.
      engram/weights/state) — `cmd_build`'s worker rsync would target the wrong dir;
      worker images were rebuilt from `~/dsv41-miaai` with the changed files streamed
      in. Worth unifying with a real site build wrapper before the next full rebuild.
+  3. **`git archive` path stripping bit once:** the head's stack lives one level
+     deeper than the workers' build trees — `-C ~/.local/ds41f-miaai
+     --strip-components=2` scattered the tree next to `stack/` and the head build
+     silently reused the cached adapter layer (same image ID). The archive must be
+     extracted with `-C ~/.local/ds41f-miaai/stack --strip-components=2` (workers:
+     `-C ~/dsv41-miaai --strip-components=2`). Always verify the change is inside
+     the built image (`docker run --rm --entrypoint grep …`) before booting.
+  4. **Stack re-syncs also drop exec bits again** — `site/start-cluster.sh` now
+     `chmod +x`es the launcher chain on every run (commit "restore launcher exec
+     bits").
+
+### 2026-10-23 — thinking ON by default (GLM parity, owner decision)
+- `SGLANG_DEFAULT_THINKING=true` added to the site env's `EXTRA_CONTAINER_ENV`
+  (the older env comment claiming the flag does not exist was wrong — the dsv4.1
+  image ships it); README's stale "THINKING_DEFAULT / no reasoning_effort knob"
+  paragraph rewritten (thinking default + effort budget semantics + sampling
+  defaults). Commit 3c53eed.
+- **Live-verified engine gotcha:** setting the env alone arms prompt encoding but
+  NOT the response parser — a default request rendered its ` think` block inside
+  `content` with `reasoning_content` empty (the parser keys off
+  `chat_template_kwargs`, not the env). Fix @ 4dd72ce: the adapter now injects
+  `SGLANG_DEFAULT_THINKING` as an explicit `thinking`/`enable_thinking` kwarg when
+  the request omits both (explicit client values still win); 7/7
+  `test_thinking_alias.py`. Images rebuilt on all four nodes + restart.
+- Verified live on the new instance: default request (no kwargs) →
+  `reasoning_content` populated (163-char think block) with clean content `'3'`;
+  explicit `{"thinking": false}` still wins; full smoke + warm-up passed; 0 NCCL
+  WARNs ×4; corruption probe 0 U+FFFD. No bench (owner will run one).
 
 - **2026-10-20 — External-survey pass: DeepSeek-V4.1 TP4 switchless recipes (owner
   request: "references to switchless DeepSeek 4.1 TP4 recipes with better performance

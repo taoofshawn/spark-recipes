@@ -69,6 +69,65 @@ def test_install_encoder_publisher_table():
     assert mappings is module.REASONING_EFFORT_MAPPINGS  # in-place; readers keep the dict
 
 
+def test_default_thinking_injected_from_env(monkeypatch=None):
+    """A request without any thinking kwarg gets SGLANG_DEFAULT_THINKING as an
+    explicit kwarg (prompt encoding AND response parsing must see it)."""
+    import os
+    import sys
+    sys.path.insert(0, str(ROOT / 'adapter'))
+    from encoding_compat import install_serving_chat
+
+    captured = {}
+
+    class FakeServing:
+        class OpenAIServingChat:
+            def _process_messages(self, request, is_multimodal):
+                captured.update(request.chat_template_kwargs or {})
+                return 'ok'
+
+    install_serving_chat(FakeServing)
+    serving = FakeServing.OpenAIServingChat()
+    old = os.environ.get('SGLANG_DEFAULT_THINKING')
+    try:
+        os.environ['SGLANG_DEFAULT_THINKING'] = 'true'
+        req = SimpleNamespace(chat_template_kwargs=None)
+        serving._process_messages(req, False)
+        assert captured == {'thinking': True, 'enable_thinking': True}
+        captured.clear()
+        req = SimpleNamespace(chat_template_kwargs={})
+        serving._process_messages(req, False)
+        assert captured == {'thinking': True, 'enable_thinking': True}
+        captured.clear()
+        os.environ['SGLANG_DEFAULT_THINKING'] = '0'
+        req = SimpleNamespace(chat_template_kwargs=None)
+        serving._process_messages(req, False)
+        assert captured == {'thinking': False, 'enable_thinking': False}
+        captured.clear()
+        # explicit client value always wins
+        req = SimpleNamespace(chat_template_kwargs={'thinking': False})
+        serving._process_messages(req, False)
+        assert captured == {'thinking': False, 'enable_thinking': False}
+    finally:
+        if old is None:
+            os.environ.pop('SGLANG_DEFAULT_THINKING', None)
+        else:
+            os.environ['SGLANG_DEFAULT_THINKING'] = old
+
+
+if __name__ == '__main__':
+    tests = [v for k, v in list(globals().items()) if k.startswith('test_')]
+    failed = 0
+    for fn in tests:
+        try:
+            fn()
+            print(f'[OK]   {fn.__name__}')
+        except Exception as exc:
+            failed += 1
+            print(f'[FAIL] {fn.__name__}: {exc}')
+    print(f'{len(tests) - failed}/{len(tests)} passed')
+    sys.exit(1 if failed else 0)
+
+
 if __name__ == '__main__':
     tests = [v for k, v in list(globals().items()) if k.startswith('test_')]
     failed = 0

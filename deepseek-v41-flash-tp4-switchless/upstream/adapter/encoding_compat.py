@@ -159,6 +159,19 @@ def install_serving_chat(module):
     def _process_messages(self, request, is_multimodal):
         request.chat_template_kwargs = normalize_chat_template_kwargs(
             request.chat_template_kwargs)
+        kwargs = request.chat_template_kwargs
+        if not isinstance(kwargs, dict) or 'thinking' not in kwargs:
+            # Surface SGLANG_DEFAULT_THINKING as an explicit kwarg: read directly
+            # from the env it only arms prompt encoding — the reasoning parser
+            # keys off chat_template_kwargs, so without this a default-on request
+            # thinks but the  think block leaks into ``content`` unsplit
+            # (verified live 2026-10-23). Explicit client values still win.
+            default = os.environ.get('SGLANG_DEFAULT_THINKING', '0').strip().lower() in (
+                '1', 'true', 'yes', 'on')
+            merged = dict(kwargs) if isinstance(kwargs, dict) else {}
+            merged['thinking'] = default
+            merged['enable_thinking'] = default
+            request.chat_template_kwargs = merged
         return original(self, request, is_multimodal)
 
     cls._process_messages = _process_messages

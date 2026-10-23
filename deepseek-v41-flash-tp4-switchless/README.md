@@ -19,9 +19,20 @@ patched NCCL 2.30.7, 2 PFs, donor-image extraction) is the documented rollback
 (VENDORED-AT.md "Transport decision").
 
 **Endpoint (after bring-up):** `http://10.69.42.170:8000/v1` — model name
-`deepseek-v41-flash`, 1,048,576-token context. No auth/TLS — trusted LAN only. Thinking ON by default (`THINKING_DEFAULT=true`, aligned with both GLM lanes; the dsv41-feat
-stack has no `reasoning_effort` knob — only a boolean `thinking`. Disable per request with
-`"chat_template_kwargs": {"thinking": false}`). Behind the model-name proxy clients keep
+`deepseek-v41-flash`, 1,048,576-token context. No auth/TLS — trusted LAN only.
+Thinking **ON by default** (`SGLANG_DEFAULT_THINKING=true` in the site env's
+`EXTRA_CONTAINER_ENV`; upstream's default is off — this is the GLM-lanes parity
+delta, owner-set 2026-10-23). Clients override per request:
+`"chat_template_kwargs": {"thinking": false}` disables it; `enable_thinking` is an
+accepted alias. Reasoning effort is the V4.1 numeric budget: tiers
+`low=50 / high=75 (xhigh alias) / max=100`, server default **75**
+(`SGLANG_DSV41_REASONING_EFFORT=75`); per request via the OpenAI `reasoning_effort`
+field (tier, or a 0–0.99 float = budget/100) or
+`"chat_template_kwargs": {"reasoning_effort": N}`. Sampling defaults when a request
+omits them: temperature 1.0 / top_p 1.0 / top_k whole-vocab (the checkpoint ships no
+`generation_config.json`); thinking requests whose `max_tokens` is below
+`DSV41_MAX_NEW_TOKENS_FLOOR=16384` are raised to it so the reasoning segment cannot
+starve the answer. Behind the model-name proxy clients keep
 sending `spark-llm`; at switch time set `BACKEND_MODEL=deepseek-v41-flash` and add it to
 `SPOOF_FROM` (model-name-proxy/.env).
 

@@ -175,7 +175,10 @@ def install_serving_chat(module):
     logger.warning(
         'DSV41 chat_template_kwargs: enable_thinking is accepted as an alias for thinking'
         + (f'; omitted max_tokens defaults and caps at {limit}' if limit > 0
-           else '; DSV41_MAX_NEW_TOKENS=0 leaves completions uncapped'))
+           else '; DSV41_MAX_NEW_TOKENS=0 leaves completions uncapped')
+        + (f'; thinking requests below {configured_max_new_tokens_floor()} tokens are '
+           'raised to it (DSV41_MAX_NEW_TOKENS_FLOOR; 0 = off)'
+           if configured_max_new_tokens_floor() > 0 else ''))
 
 
 def install_anthropic_protocol(module):

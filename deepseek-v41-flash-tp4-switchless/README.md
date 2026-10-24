@@ -18,7 +18,8 @@ preflight serves all three lanes. The sparkring upstream's own transport (SparkR
 patched NCCL 2.30.7, 2 PFs, donor-image extraction) is the documented rollback
 (VENDORED-AT.md "Transport decision").
 
-**Endpoint (after bring-up):** `http://10.69.42.170:8000/v1` — model name
+**Endpoint (after bring-up):** `http://10.69.43.170:8000/v1` (the head's client
+network, `wlP9s9`; the 10.69.42.x mgmt fabric serves SSH only and refuses :8000) — model name
 `deepseek-v41-flash`, 1,048,576-token context. No auth/TLS — trusted LAN only.
 Thinking **ON by default** (`SGLANG_DEFAULT_THINKING=true` in the site env's
 `EXTRA_CONTAINER_ENV`; upstream's default is off — this is the GLM-lanes parity

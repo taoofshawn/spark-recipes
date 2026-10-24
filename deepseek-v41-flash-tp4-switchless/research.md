@@ -202,11 +202,26 @@ packed shards, profiler-estimate off.
   Fix verified on the served path: `max_tokens=128` + no kwargs → **128 tokens,
   `finish_reason=length`** (was 1,968/`stop` pre-fix); `thinking:false` → 128
   unchanged; `thinking:true` → 1,222 tokens/`stop` (floor still raises).
-- **Not yet re-benchmarked.** The `fix1` row's `Throughput @d0 tg t/s` and
-  `Spec best eff t/s` stay treated as unmeasured until a sweep re-run shows every
-  cell at `2048+110…128` / ≈128 with `Total (ms)` back in the 2–13 s range. Judge
-  it by the `Tokens` column: the tool derives `Total` and `tg t/s` *from* the
-  observed token count, so that arithmetic agrees by construction.
+- **Re-benchmarked same boot (warm: ~18 min of trickle traffic after the 30-min
+  cold window; tool-eval-bench v2.8.0, label `dsv41flash-miaai-gpu2100-fix2`).**
+  The measurement contract is restored exactly:
+  - Sweep (`--perf-only`, defaults pp2048/tg128, depths 0/4096/8192, c1/c2/c4):
+    **all 9 cells `2048+128`** — `Total (ms)` 2,835–12,087, i.e. back inside the
+    2026-10-22 envelope (3.26–12.85 s) instead of fix1's 7.5–93.6 s. `tg t/s`
+    d0 c1/c2/c4 = 58.6 / 83.9 / 111.6. Report
+    `runs/2026/10/2026-10-24T02-41-25.613061Z_de1465c6--…-fix2.md`.
+  - `--spec-bench` (defaults, 3 runs/cell): **all 9 cells exactly 128 tokens**,
+    `Total (ms)` 1,936–2,874 — fix1's cells ran 596–8,578 tokens / 102 s.
+    Best `Eff t/s` 76.8 (structured d0) is now an ordinary cell, not the
+    7,744-token outlier fix1's 76.1 came from. Report
+    `…2026-10-24T02-42-47.057186Z_04b968a3--…-fix2.md`.
+  - The `fix1` row's `Throughput @d0 tg t/s` and `Spec best eff t/s` remain
+    invalid (contaminated cells); `SUMMARY.md` in the reports dir carries a
+    note. Everything else in fix1 (scores, accuracy) stands.
+  - Known cosmetic: `bench --perf-only` with an explicit `--output-dir` writes
+    `<dir>/YYYY/MM/` (no `runs/` segment) — the sweep report was moved into
+    `runs/2026/10/` by hand to keep the layout canonical; pass
+    `--output-dir <reports>/runs` (as the spec run did) to land correctly.
 
 ### 2026-10-22 — bring-up: GLM NVFP4 → MiaAI-Lab SGLang vehicle swap (owner window)
 - Window opened by owner; GLM NVFP4 stopped all-ranks (`start.sh stop`, exit 0 ×4,

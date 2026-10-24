@@ -45,16 +45,21 @@ One site modification is carried (2026-10-22): the **thinking-mode completion fl
 
 | file | change | re-apply |
 |---|---|---|
-| `adapter/encoding_compat.py` | `DEFAULT_MAX_NEW_TOKENS_FLOOR = 16384`, `configured_max_new_tokens_floor()`, `request_wants_thinking()`, and the floor branch at the top of `apply_request_max_tokens()` | re-add the four blocks after upstream's `DEFAULT_MAX_NEW_TOKENS` / `configured_max_new_tokens()` |
+| `adapter/encoding_compat.py` | `DEFAULT_MAX_NEW_TOKENS_FLOOR = 16384`, `configured_max_new_tokens_floor()`, `request_enables_thinking_explicitly()`, and the floor branch at the top of `apply_request_max_tokens()` | re-add the four blocks after upstream's `DEFAULT_MAX_NEW_TOKENS` / `configured_max_new_tokens()`. The gate MUST stay explicit-only: an engine-default fallback there rewrites fixed budgets sent by measurement clients (2026-10-23 contamination) |
 | `start.sh` | `-e "DSV41_MAX_NEW_TOKENS_FLOOR=${DSV41_MAX_NEW_TOKENS_FLOOR:-16384}"` under each of the two `DSV41_MAX_NEW_TOKENS` `-e` lines (head + worker) | re-add both lines; `start.sh`'s `-e` whitelist is why this cannot ride in the site env alone |
 | `.env.example`, `.env.tp4.example`, `README.md` | `DSV41_MAX_NEW_TOKENS_FLOOR` knob + rationale | re-add the rows |
-| `tests/test_max_new_tokens.py`, `tests/test_switchless_ring_integration.py` | 9 floor boundary tests; floor env pinned in the launcher-invocation assertions | re-add; both suites must pass (`test_max_new_tokens` also runs at image build) |
+| `tests/test_max_new_tokens.py`, `tests/test_switchless_ring_integration.py` | floor boundary tests incl. the engine-default-is-ignored and install-ordering guards; floor env pinned in the launcher-invocation assertions | re-add; both suites must pass (`test_max_new_tokens` also runs at image build) |
 
 Why: with thinking on, a request sized for a non-reasoning client (MMLU's
 `max_tokens=256`) spends the whole budget in the reasoning segment and returns
-`finish_reason=length` with empty content — a silent zero. Receipts and rejected
-alternatives: `../research.md`, 2026-10-22 "benchmark analysis: thinking-mode budget
-starvation".
+`finish_reason=length` with empty content — a silent zero. The floor therefore
+covers explicit thinking requests only: the engine-wide `SGLANG_DEFAULT_THINKING`
+decides rendering, and letting it authorize a budget raise rewrote the fixed
+`max_tokens` of kwarg-less measurement clients (llama-benchy's throughput
+probes, tool-eval-bench `--spec-bench`), which stopped at EOS instead of at
+their budget and made a `tg128` cell a different experiment. Receipts and
+rejected alternatives: `../research.md`, 2026-10-22 "benchmark analysis:
+thinking-mode budget starvation" and 2026-10-23 "measurement contamination".
 
 ## Update procedure
 

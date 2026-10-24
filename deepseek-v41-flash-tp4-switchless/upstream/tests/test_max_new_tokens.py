@@ -125,15 +125,90 @@ def test_floor_ignores_non_thinking_requests():
     assert req.max_tokens == 256
 
 
-def test_floor_uses_engine_default_thinking():
-    req = _req(256, None)
+def test_floor_ignores_engine_default_thinking():
+    """The engine default renders reasoning; it must not rewrite the budget.
+
+    llama-benchy's throughput probes and tool-eval-bench ``--spec-bench`` send
+    ``max_tokens`` and no thinking kwarg at all. Folding the default into the
+    floor decision raised those fixed budgets to 16384, so the probes stopped
+    at EOS instead of at their budget and the cell stopped being the
+    measurement its `tg128` label advertises (2026-10-23 fix1 run).
+    """
+    req = _req(128, None)
 
     def run():
         return _with_env('true', lambda: apply_request_max_tokens(req),
                          key='SGLANG_DEFAULT_THINKING')
 
     _with_env('16384', run, key='DSV41_MAX_NEW_TOKENS_FLOOR')
+    assert req.max_tokens == 128
+
+
+def test_floor_ignores_engine_default_for_max_completion_tokens():
+    req = _req(16, None, completion=128)
+
+    def run():
+        return _with_env('true', lambda: apply_request_max_tokens(req),
+                         key='SGLANG_DEFAULT_THINKING')
+
+    _with_env('16384', run, key='DSV41_MAX_NEW_TOKENS_FLOOR')
+    assert req.max_completion_tokens == 128
+    assert req.max_tokens == 16
+
+
+def test_floor_raises_explicit_thinking_when_engine_default_off():
+    req = _req(256, {'thinking': True})
+
+    def run():
+        return _with_env('0', lambda: apply_request_max_tokens(req),
+                         key='SGLANG_DEFAULT_THINKING')
+
+    _with_env('16384', run, key='DSV41_MAX_NEW_TOKENS_FLOOR')
     assert req.max_tokens == 16384
+
+
+def test_floor_treats_explicit_none_as_absent():
+    """An explicit ``thinking: null`` is not an opt-in."""
+    req = _req(128, {'thinking': None})
+
+    def run():
+        return _with_env('true', lambda: apply_request_max_tokens(req),
+                         key='SGLANG_DEFAULT_THINKING')
+
+    _with_env('16384', run, key='DSV41_MAX_NEW_TOKENS_FLOOR')
+    assert req.max_tokens == 128
+
+
+def test_install_keeps_probe_budget_when_engine_default_thinks():
+    """End-to-end ordering guard for the 2026-10-23 contamination.
+
+    SGLang's ``_convert_to_internal_request`` calls ``_process_messages``
+    itself, so the floor wrapper (outermost) sees the client's raw kwargs. The
+    injection that makes the default explicit happens afterwards — it must not
+    feed back into the floor decision, or a probe with no kwargs gets the
+    reasoning parser's rendering *and* a 16384-token budget again.
+    """
+
+    class FakeServing:
+        class OpenAIServingChat:
+            def _process_messages(self, request, is_multimodal):
+                return 'processed'
+
+            def _convert_to_internal_request(self, request, raw_request=None):
+                self._process_messages(request, False)
+                return request
+
+    def run():
+        install_serving_chat(FakeServing)
+        serving = FakeServing.OpenAIServingChat()
+        req = SimpleNamespace(max_tokens=128, max_completion_tokens=None,
+                              chat_template_kwargs=None)
+        return serving._convert_to_internal_request(req)
+
+    out = _with_env('true', run, key='SGLANG_DEFAULT_THINKING')
+    assert out.max_tokens == 128
+    # the parser still gets an explicit kwarg, so the think block is split
+    assert out.chat_template_kwargs == {'thinking': True, 'enable_thinking': True}
 
 
 def test_floor_is_bounded_by_cap():

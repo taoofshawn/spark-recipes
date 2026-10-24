@@ -30,6 +30,17 @@ DEFAULT_MAX_NEW_TOKENS = 32768
 # max_tokens=256, re-run with headroom 42/50 answered correctly; IFEval 26/541).
 # Raising the *floor* keeps the request's own value when it is already large
 # enough and never shortens output the way a thinking cap does. 0 disables.
+#
+# The floor applies only to requests that *ask* for thinking. A request that
+# rides the engine-wide SGLANG_DEFAULT_THINKING without saying so keeps its own
+# budget: that default sets how a request renders, not how much output the
+# client is entitled to. Folding the default in here rewrote measurement
+# clients' fixed budgets (llama-benchy's `max_tokens=128` throughput probes and
+# tool-eval-bench `--spec-bench` both omit every thinking kwarg) into 16384, so
+# the probes stopped at EOS instead of at their budget and reported 366-8,578
+# generated tokens for a `tg128` cell (2026-10-23 fix1 run). Explicit-off and
+# no-kwarg requests are unaffected by design; explicit-on is what the accuracy
+# plugins and the scenario traffic send.
 DEFAULT_MAX_NEW_TOKENS_FLOOR = 16384
 
 
@@ -85,22 +96,25 @@ def configured_max_new_tokens_floor():
         return DEFAULT_MAX_NEW_TOKENS_FLOOR
 
 
-def request_wants_thinking(request):
-    """True when this request renders the reasoning segment.
+def request_enables_thinking_explicitly(request):
+    """True when the client itself asked for the reasoning segment.
 
-    Installed ahead of ``_process_messages``, so ``enable_thinking`` may still
-    be unaliased here; ``thinking`` wins when both keys are present, matching
-    ``normalize_chat_template_kwargs``. No key at all falls back to the
-    engine's ``SGLANG_DEFAULT_THINKING``.
+    Only an explicit ``thinking`` / ``enable_thinking`` key counts. The
+    engine-wide ``SGLANG_DEFAULT_THINKING`` is deliberately not consulted: it
+    decides whether a request renders reasoning, not whether the client's own
+    ``max_tokens`` may be overridden (see ``DEFAULT_MAX_NEW_TOKENS_FLOOR``).
+
+    Runs ahead of ``_process_messages``, so ``enable_thinking`` may still be
+    unaliased here; ``thinking`` wins when both keys are present, matching
+    ``normalize_chat_template_kwargs``. ``None`` values are treated as absent.
     """
     kwargs = getattr(request, 'chat_template_kwargs', None)
     if isinstance(kwargs, dict):
-        if 'thinking' in kwargs:
+        if kwargs.get('thinking') is not None:
             return bool(kwargs['thinking'])
-        if 'enable_thinking' in kwargs:
+        if kwargs.get('enable_thinking') is not None:
             return bool(kwargs['enable_thinking'])
-    return os.environ.get('SGLANG_DEFAULT_THINKING', '0').strip().lower() in (
-        '1', 'true', 'yes', 'on')
+    return False
 
 
 def apply_request_max_tokens(request):
@@ -108,15 +122,17 @@ def apply_request_max_tokens(request):
 
     Mutates ``request`` in place and returns it. ``limit <= 0`` is a no-op.
     ``max_completion_tokens`` wins when both fields are set, matching SGLang.
-    A thinking request whose budget is below the floor is raised to it: the
-    reasoning segment otherwise consumes the entire budget and the response
-    ends with no answer (``finish_reason=length``, empty content).
+    A request that explicitly enables thinking whose budget is below the floor
+    is raised to it: the reasoning segment otherwise consumes the entire
+    budget and the response ends with no answer (``finish_reason=length``,
+    empty content). A request that only inherits ``SGLANG_DEFAULT_THINKING``
+    keeps its own budget — see ``request_enables_thinking_explicitly``.
     """
     if request is None:
         return request
     limit = configured_max_new_tokens()
     floor = configured_max_new_tokens_floor()
-    if floor > 0 and request_wants_thinking(request):
+    if floor > 0 and request_enables_thinking_explicitly(request):
         completion = getattr(request, 'max_completion_tokens', None)
         tokens = getattr(request, 'max_tokens', None)
         current = completion if completion is not None else tokens
@@ -189,8 +205,10 @@ def install_serving_chat(module):
         'DSV41 chat_template_kwargs: enable_thinking is accepted as an alias for thinking'
         + (f'; omitted max_tokens defaults and caps at {limit}' if limit > 0
            else '; DSV41_MAX_NEW_TOKENS=0 leaves completions uncapped')
-        + (f'; thinking requests below {configured_max_new_tokens_floor()} tokens are '
-           'raised to it (DSV41_MAX_NEW_TOKENS_FLOOR; 0 = off)'
+        + (f'; requests that explicitly enable thinking below '
+           f'{configured_max_new_tokens_floor()} tokens are raised to it '
+           '(DSV41_MAX_NEW_TOKENS_FLOOR; 0 = off; implicit default-thinking '
+           'requests keep their own budget)'
            if configured_max_new_tokens_floor() > 0 else ''))
 
 

@@ -30,9 +30,15 @@ accepted alias. Reasoning effort is the V4.1 numeric budget: tiers
 field (tier, or a 0–0.99 float = budget/100) or
 `"chat_template_kwargs": {"reasoning_effort": N}`. Sampling defaults when a request
 omits them: temperature 1.0 / top_p 1.0 / top_k whole-vocab (the checkpoint ships no
-`generation_config.json`); thinking requests whose `max_tokens` is below
-`DSV41_MAX_NEW_TOKENS_FLOOR=16384` are raised to it so the reasoning segment cannot
-starve the answer. Behind the model-name proxy clients keep
+`generation_config.json`). Requests that **explicitly** enable thinking and ask for
+fewer than `DSV41_MAX_NEW_TOKENS_FLOOR=16384` tokens are raised to it, so the
+reasoning segment cannot starve the answer. A request that only inherits the
+default keeps the `max_tokens` it sent — say `{"thinking": true}` if you want the
+floor (fixed 2026-10-23: the inherited default used to authorize the raise, which
+inflated fixed-budget throughput probes; bench rows from `fix1` are not comparable
+with earlier rows). Clients that want fixed-length generation for measurement MUST
+keep sending `max_tokens` and no thinking kwarg, or send `{"thinking": false}`.
+Behind the model-name proxy clients keep
 sending `spark-llm`; at switch time set `BACKEND_MODEL=deepseek-v41-flash` and add it to
 `SPOOF_FROM` (model-name-proxy/.env).
 

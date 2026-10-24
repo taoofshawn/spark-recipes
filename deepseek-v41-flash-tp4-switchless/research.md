@@ -139,6 +139,61 @@ packed shards, profiler-estimate off.
 
 ## Changelog
 
+### 2026-10-23 — measurement contamination: the floor no longer catches implicit thinking
+- **Symptom.** tool-eval-bench `fix1` (`dsv41flash-miaai-gpu2100-fix1`) reported
+  `tg128` sweep cells generating 366 / 1,215 / 2,536 / 3,293 / 780 tokens and
+  `--spec-bench` cells up to 8,578, where the 2026-10-22 run's cells all landed in
+  111–128 tokens. The numbers were not a regression: they were a different
+  measurement (decode windows 2.1–6.1 s → 6.8–86.9 s).
+- **Root cause (live-confirmed on the running instance).** Two commits interact.
+  `request_wants_thinking()` fell back to `SGLANG_DEFAULT_THINKING` when the
+  request carried no thinking kwarg, so once thinking went default-on (3c53eed)
+  every kwarg-less request became "a thinking request" for budget purposes, and
+  the floor raised its `max_tokens` to 16384. llama-benchy's probes and
+  `--spec-bench` send `max_tokens=128` with no kwargs — `max_tokens` is their only
+  bound — so their cells stopped at EOS. Probes against the live server:
+  `max_tokens=128` + no kwargs → **1,968** completion tokens (`finish_reason=stop`);
+  + `{"thinking": false}` → **128** (`length`); + `{"thinking": true}` → 1,281
+  (`stop`, floor by design). The floor itself was never wrong for its purpose:
+  the accuracy plugins send `enable_thinking: true` explicitly and kept their
+  gains (MMLU 50→0 truncations, IFEval 26→0, GSM8K 1→0).
+- **Fix (adapter).** The floor is now gated on a new
+  `request_enables_thinking_explicitly()`: only an explicit `thinking` /
+  `enable_thinking` key (non-`None`) opts into the raise. The engine default still
+  decides how a request *renders* (the 4dd72ce injection is untouched) — it just
+  no longer authorizes overriding the client's own budget. Explicit-on traffic is
+  unchanged; explicit-off and no-kwarg traffic keeps `max_tokens` as sent.
+  Note the ordering that makes this safe: in this SGLang, the adapter's floor
+  wrapper runs *outside* `_convert_to_internal_request`, which calls
+  `_process_messages` itself — so the floor sees the client's raw kwargs, never
+  the injected default (verified in the served
+  `serving_chat.py:1099/1153`; no provenance flag is needed, and a pydantic
+  `ChatCompletionRequest` refuses ad-hoc attributes anyway).
+- **Tests.** `tests/test_max_new_tokens.py`: the case that pinned the removed
+  behaviour (`test_floor_uses_engine_default_thinking`) is replaced by
+  `test_floor_ignores_engine_default_thinking`, plus
+  `max_completion_tokens`-variant, explicit-on-with-default-off,
+  explicit-`None`-is-absent, and an install-level ordering guard
+  (`test_install_keeps_probe_budget_when_engine_default_thinks`). 20/20 pass;
+  reverting the gate fails 4 of them. `test_thinking_alias` 7/7, `test_loop_abort`
+  15/15, `test_history_repair` 6/6. `test_switchless_ring_integration` is 4/15 on
+  Windows both before and after the change (exec-line length, pre-existing — run
+  it in WSL).
+- **Cost / residual.** A future client that rides default-thinking *and* sends a
+  tiny `max_tokens` will again spend it all in reasoning and get no answer. That
+  is upstream's behaviour and the reason the floor exists; the fix narrows it to
+  clients that stay silent about thinking.
+- **Bench-side follow-up (separate repo, not done here).** tool-eval-bench's
+  `_invalid_sample_error` only fails all-zero or errored cells, so an un-enforced
+  `max_tokens` renders as a normal row. An `observed_tg_tokens > 1.25 × configured
+  tg` guard (in `runner/llama_benchy.py` and `runner/speculative.py`) would have
+  caught this without arithmetic. Filed as a suggestion only.
+- **Not yet re-benchmarked.** The `fix1` row's `Throughput @d0 tg t/s` and
+  `Spec best eff t/s` stay treated as unmeasured until a sweep re-run shows every
+  cell at `2048+110…128` / ≈128 with `Total (ms)` back in the 2–13 s range. Judge
+  it by the `Tokens` column: the tool derives `Total` and `tg t/s` *from* the
+  observed token count, so that arithmetic agrees by construction.
+
 ### 2026-10-22 — bring-up: GLM NVFP4 → MiaAI-Lab SGLang vehicle swap (owner window)
 - Window opened by owner; GLM NVFP4 stopped all-ranks (`start.sh stop`, exit 0 ×4,
   worker-first) and the stopped containers were `docker rm`'d on all four (NVFP4
@@ -246,7 +301,16 @@ packed shards, profiler-estimate off.
   nothing here: the checkpoint ships no `generation_config.json` (checked on the head's
   weights dir and in-container).
 - **Cost of the floor:** thinking requests that used to die silently now run to
-  completion; bench wall time on MMLU/IFEval grows, throughput (`tg`) is unchanged.
+  completion; bench wall time on MMLU/IFEval grows.
+- **CORRECTED 2026-10-23 — "throughput (`tg`) is unchanged" was wrong.** The floor
+  also caught *measurement* clients, which never ask for thinking: llama-benchy's
+  throughput probes and tool-eval-bench `--spec-bench` send `max_tokens` with no
+  thinking kwarg, so (once thinking went default-on) `request_wants_thinking()`'s
+  engine-default fallback authorized the rewrite and their fixed budgets became
+  16384 — the probes ran to EOS instead of to their budget and `tg` moved for
+  workload reasons, not engine reasons. Do not use `tg` continuity as a sanity
+  check across 2026-10-22 → 2026-10-23. Fixed same day (see the 2026-10-23
+  "measurement contamination" entry); the starvation recovery is unaffected.
 - **Deployed 2026-10-23 (owner-authorized window, no bench):** preflight
   `verify-fabric-p2.sh` ALL PASS → repo pulled on the head (bff8ce7) → lane stopped
   all-ranks (`start-cluster.sh stop`, rank 0 first, clean) → image

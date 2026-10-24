@@ -188,6 +188,20 @@ packed shards, profiler-estimate off.
   `max_tokens` renders as a normal row. An `observed_tg_tokens > 1.25 × configured
   tg` guard (in `runner/llama_benchy.py` and `runner/speculative.py`) would have
   caught this without arithmetic. Filed as a suggestion only.
+- **Deployed 2026-10-23/24 (owner switched the serving backend first).** preflight
+  `verify-fabric-p2.sh` ALL PASS → head repo pulled to the fix commit → stack
+  re-synced via `git archive` (correct `-C …/stack --strip-components=2` path) →
+  lane stopped all-ranks (clean, no stopped-container leftovers) → images rebuilt
+  on all four nodes, each verified in-image (`grep` finds the new gate 3×; the
+  in-build test suite also proves the new tests shipped — the old suite asserts the
+  removed behaviour and would have failed the build) → `serve` ready in ~3 min,
+  `dsv41-local-weights` OK on every worker. Gates: full smoke, structured output +
+  tool round trip + CJK/emoji probe clean, **0 NCCL WARNs ×4**, env pins intact
+  (`DSV41_MAX_NEW_TOKENS_FLOOR=16384`, `SGLANG_DEFAULT_THINKING=true`), boot warning
+  carries the new "implicit default-thinking requests keep their own budget" text.
+  Fix verified on the served path: `max_tokens=128` + no kwargs → **128 tokens,
+  `finish_reason=length`** (was 1,968/`stop` pre-fix); `thinking:false` → 128
+  unchanged; `thinking:true` → 1,222 tokens/`stop` (floor still raises).
 - **Not yet re-benchmarked.** The `fix1` row's `Throughput @d0 tg t/s` and
   `Spec best eff t/s` stay treated as unmeasured until a sweep re-run shows every
   cell at `2048+110…128` / ≈128 with `Total (ms)` back in the 2–13 s range. Judge
@@ -353,6 +367,23 @@ packed shards, profiler-estimate off.
   4. **Stack re-syncs also drop exec bits again** — `site/start-cluster.sh` now
      `chmod +x`es the launcher chain on every run (commit "restore launcher exec
      bits").
+  5. **`cmd_build`'s worker rsync is destructive — never run it (2026-10-23, hit
+     for real).** `start-cluster.sh build` reaches the worker stage and
+     `rsync -aH --delete`s the recipe into `WORKER_DIR` = `~/.local/ds41f-miaai`
+     on the workers — the engram/weights/state dir. On spark-6d14 that deleted
+     `weights/deepseek-v41-flash-1017`, the bind source of the
+     `dsv41-local-weights` volume: the volume then refused to mount
+     ("no such file or directory") and the worker could not have booted. It also
+     scattered the recipe tree next to the legit dirs (cleaned by hand) and died
+     on the head's root-owned `b12x-next-compile` cache files (rsync code 23) —
+     so it destroys worker state *and* fails. Restore path that worked:
+     `site/materialize-miaai-weights.sh spark-6d14.shawndo.intra` (hardlink from
+     the node's own HF cache, zero copy, 48 shards, volume mounts again).
+     Permanent fix: `site/build-cluster.sh` builds head+workers via `git archive`
+     streams into `~/.local/ds41f-miaai/stack` (head) and `~/dsv41-miaai`
+     (workers) with no rsync, then sha256-verifies the adapter inside every built
+     image before reporting success. Use it for every rebuild; the launcher's
+     `build` command is unsafe on this layout until upstream changes the rsync.
 
 ### 2026-10-23 — thinking ON by default (GLM parity, owner decision)
 - `SGLANG_DEFAULT_THINKING=true` added to the site env's `EXTRA_CONTAINER_ENV`

@@ -39,12 +39,14 @@ QPS_PER_CONNECTION`) go through `EXTRA_CONTAINER_ENV` per
 
 ## Site modifications to upstream files — MUST be re-applied on re-vendor
 
-One site modification is carried (2026-10-22): the **thinking-mode completion floor**
-(`DSV41_MAX_NEW_TOKENS_FLOOR`). Everything else is still supplied by variable
+Two site modifications are carried: the **thinking-mode completion floor**
+(`DSV41_MAX_NEW_TOKENS_FLOOR`, 2026-10-22) and the **image-placeholder sanitize in the
+production build** (2026-10-25). Everything else is still supplied by variable
 (`IB_HCA`, `NCCL_HOST_DIR`, `PORT`, `SERVED_MODEL_NAME`, `WORKER_HOSTS`, `MODEL_DIR`, …).
 
 | file | change | re-apply |
 |---|---|---|
+| `Dockerfile.canary-roce` | after the `flash_mla_sm120.canary.py` COPY: `COPY runtime/patch_encoding_dsv41.py /tmp/` + `RUN python3 /tmp/patch_encoding_dsv41.py && rm /tmp/patch_encoding_dsv41.py` — applies upstream's own placeholder-sanitize patch (sanitize-and-warn instead of raise in `_validate_no_image_sp_tokens` and the `_process_image_blocks` text-block branch) to the canary branch tree. The plain `Dockerfile` already ran it; the production build file did not, so every deployed `canary-roce-miaai` image raised the stock 400 on any transcript carrying `<｜deepseek_image｜>` | re-add the two lines after the flash_mla COPY. The patch's own anchor check fails the build if the branch tree drifts |
 | `adapter/encoding_compat.py` | `DEFAULT_MAX_NEW_TOKENS_FLOOR = 16384`, `configured_max_new_tokens_floor()`, `request_enables_thinking_explicitly()`, and the floor branch at the top of `apply_request_max_tokens()` | re-add the four blocks after upstream's `DEFAULT_MAX_NEW_TOKENS` / `configured_max_new_tokens()`. The gate MUST stay explicit-only: an engine-default fallback there rewrites fixed budgets sent by measurement clients (2026-10-23 contamination) |
 | `start.sh` | `-e "DSV41_MAX_NEW_TOKENS_FLOOR=${DSV41_MAX_NEW_TOKENS_FLOOR:-16384}"` under each of the two `DSV41_MAX_NEW_TOKENS` `-e` lines (head + worker) | re-add both lines; `start.sh`'s `-e` whitelist is why this cannot ride in the site env alone |
 | `.env.example`, `.env.tp4.example`, `README.md` | `DSV41_MAX_NEW_TOKENS_FLOOR` knob + rationale | re-add the rows |

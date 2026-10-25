@@ -139,6 +139,43 @@ packed shards, profiler-estimate off.
 
 ## Changelog
 
+### 2026-10-25 — image-placeholder 400 loop: the production build never got upstream's sanitize
+- **Symptom.** omp sessions against the lane die with a repeating
+  `400 ... Message content contains image special token '<｜deepseek_image｜>'. Images
+  should be provided as image content blocks.` — once it starts, every later turn in the
+  session fails the same way (self-sustaining: the token rides in the client's history).
+- **Root cause (live-verified).** The stock V4.1 encoder validates
+  `_validate_no_image_sp_tokens()` over the WHOLE message list — string `content`,
+  `reasoning_content`, and text blocks — and raises. The token is also in the model's
+  output vocabulary, and agent traffic runs with `skip_special_tokens=False` (set whenever
+  tools are in the request), so the model CAN emit the placeholder as plain text; a client
+  that stores that assistant turn then 400s forever. Chain reproduced on the running lane:
+  (a) sending the token in a user message → the exact 400, before decode; (b) asking the
+  model to assemble the string from characters (no literal sent) → the model emitted
+  `｜deepseek_image｜` into `content` in a tools-on request. 14 × `400 Bad Request` in the
+  head log since boot, including bursts matching the 2026-10-25 effort-probe sessions.
+- **Why the deployed image still raises.** Upstream already fixed this exact failure
+  (`runtime/patch_encoding_dsv41.py`: sanitize-and-warn → `[image]` in both raise sites,
+  anchor-checked; its docstring documents the same self-sustaining loop at 111/145 failed
+  Anthropic requests) — but only `upstream/Dockerfile` runs it. The site's production build
+  file `Dockerfile.canary-roce` (the `BUILD_DOCKERFILE` in `site/env.switchless`) never
+  applied it, so the 2026-10-23 rebuild shipped a lane that still raises. Nothing in the
+  repo docs recorded the gap.
+- **Fix (site mod, upstream's own patch).** `Dockerfile.canary-roce` now applies
+  `runtime/patch_encoding_dsv41.py` to the branch tree after the RoCEnante overlay /
+  flash_mla override (COPY to /tmp + RUN, mirroring `Dockerfile`). Verified against the
+  production SGLang tree on a throwaway copy inside the running container: both anchors
+  match the branch tree (`patched ...: anchor1(string content), anchor2(text block /
+  tool_result)`), and the patched `encode_messages` sanitizes instead of raising. The
+  patch's anchor check fails the build if the branch tree drifts. Rejected alternative:
+  a new runtime adapter hook wrapping `encoding_dsv41.encode_messages` (implemented,
+  tested 8/8, then removed) — strictly more site code than re-using upstream's
+  build-time patch for the same behavior.
+- **Deployment.** Needs `build-cluster.sh` (image rebuild on all four ranks) + a lane
+  restart; the adapter/encoder are baked into the image, so no running-lane change is
+  possible before that. Until then: a session that errors with this 400 is carrying the
+  token in its history — re-asking without the literal (or in a fresh session) works.
+
 ### 2026-10-23 — measurement contamination: the floor no longer catches implicit thinking
 - **Symptom.** tool-eval-bench `fix1` (`dsv41flash-miaai-gpu2100-fix1`) reported
   `tg128` sweep cells generating 366 / 1,215 / 2,536 / 3,293 / 780 tokens and

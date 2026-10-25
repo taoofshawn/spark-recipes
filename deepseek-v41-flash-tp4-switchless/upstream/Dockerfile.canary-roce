@@ -36,6 +36,12 @@ COPY adapter /opt/dsv41/adapter
 RUN g++ -O2 -Wall -Wextra -Werror -std=c++17 -shared -fPIC -pthread \
     -DDSV41_ROW_STORE_DRM adapter/row_store.cpp -o adapter/librow_store.so
 COPY runtime/flash_mla_sm120.canary.py /sgl-workspace/sglang/python/sglang/kernels/ops/attention/flash_mla_sm120.py
+# Tolerate the DeepSeek image placeholder token in message text. The branch tree still
+# raises there, which turns any transcript carrying the token into a self-sustaining
+# 400/500 loop once a client stores the emitted token in its history. Same patch
+# Dockerfile applies; the anchor check fails the build if the branch tree drifts.
+COPY runtime/patch_encoding_dsv41.py /tmp/
+RUN python3 /tmp/patch_encoding_dsv41.py && rm /tmp/patch_encoding_dsv41.py
 COPY boot.py /opt/dsv41/boot.py
 COPY scripts /opt/dsv41/scripts
 COPY tests /opt/dsv41/tests

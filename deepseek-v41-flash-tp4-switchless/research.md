@@ -139,6 +139,52 @@ packed shards, profiler-estimate off.
 
 ## Changelog
 
+### 2026-10-26 (later) — radix-retention fix adopted from upstream: sgl-project/sglang#35515 backported into the canary build
+- **Upstream survey (preference: adopt, don't invent).**
+  - MiaAI-Lab/DeepSeek-v4.1-Flash-DGX-Sparks: no commits since the vendored pin
+    `64b02dea` (2026-10-17); open PRs are launcher/ops only (#71 readiness check,
+    #67-#69 ring/env hardening, #65 TP balance, #58 tool_choice backport — already
+    covered site-side, #15 image placeholder — already shipped here as the 2026-10-25
+    sanitize patch). Nothing on KV retention.
+  - sgl-project/sglang `main` after our pinned dsv4.1 tree (`f80c91a4`, 2026-09-16):
+    #40075 (owned_kv_len rename — explicitly no observed behavior change) and #40313
+    (2026-09-20, **deletes `SWARadixCache`/`MambaRadixCache`** — hybrid SWA routes to
+    `UnifiedRadixCache` since #30468). Porting UnifiedRadixCache into this canary tree
+    (DSV4 pool + kv_canary walker + DSPARK draft integration) is a major refactor, not
+    a patch — rejected for now.
+  - **#43502 (merged 2026-10-15)** describes our exact symptom ("conversations idle
+    for 3–5 minutes lose their tail while their full KV is still on the GPU; they
+    re-prefill 130K–755K tokens") but its changes are encoder-replay-scoped (we run
+    decoder replay) and it explicitly defers the retention cascade: "that retention is
+    a separate issue and is not changed here".
+  - **#35515 (open, @QAQEthan) is that separate issue** — and it is verbatim our
+    diagnosis: `SWARadixCache.evict()` tombstones a node inside the branch's trailing
+    `sliding_window_size` (128 here), which makes the whole branch unmatchable, and
+    `_iteratively_delete_tombstone_leaf` then frees the branch's full-attention KV —
+    the measured collapse-to-zero. Open/mooted on main only because main deleted the
+    file; our pinned tree still runs it, so the PR applies where we actually need it.
+- **Adopted as a site backport** (the established build-time patch pattern, like
+  `runtime/patch_encoding_dsv41.py`): `upstream/runtime/patch_swa_tail_eviction.py`
+  applies the PR's three changes to the branch tree at image build — (1) the SWA
+  eviction loop skips candidates within one page-aligned window of a branch end and
+  retries them only as a fallback (deprioritization, not reservation: the eviction
+  target is still met, no new OOM/retract risk), (2) `_swa_tail_size()` factors the
+  page-aligned window formula, (3) `_is_swa_branch_tail()` walks at most the branch
+  tail. Adapted to this tree's `free_swa_segment` allocator API (the PR base used
+  `free_swa`). Anchor-checked and idempotent; refuses to patch on tree drift; compiles
+  the result before writing. Wired into `Dockerfile.canary-roce` right after the
+  sanitize step; VENDORED-AT.md row added.
+- **Pre-flight verified** against the running container's actual
+  `swa_radix_cache.py` (1462 lines — same generation upstream deleted): 3/3 anchors
+  applied, idempotent re-run no-ops, patched source compiles.
+- **Expected effect:** agent turns stop re-prefilling their whole history; a parked
+  conversation's cached prefix stays matchable (tail window protected from SWA
+  eviction, so no tombstone cascade). Validation harness: identical-prefix A→B client
+  pairs — B must report `cached_tokens ≈ full prompt` after both idle gaps AND after
+  ~480K-token unrelated prefill churn (it returns 0 today in the churn case).
+- Not yet deployed at the time of writing: images rebuild next; lane restart pending
+  owner go-ahead.
+
 ### 2026-10-26 — token-guard image deployed; SWA-ratio resize tried and reverted; radix retention bleeds empty under churn (open)
 - **Deployed (owner-authorized window, agents stopped).** `verify-fabric-p2.sh` not re-run
   (no transport change; lane restart only) → repo pulled on the head to `27b668a` →

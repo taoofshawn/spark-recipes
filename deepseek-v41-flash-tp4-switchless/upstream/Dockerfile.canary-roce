@@ -42,6 +42,13 @@ COPY runtime/flash_mla_sm120.canary.py /sgl-workspace/sglang/python/sglang/kerne
 # Dockerfile applies; the anchor check fails the build if the branch tree drifts.
 COPY runtime/patch_encoding_dsv41.py /tmp/
 RUN python3 /tmp/patch_encoding_dsv41.py && rm /tmp/patch_encoding_dsv41.py
+# Deprioritize evicting a branch's trailing sliding window in SWARadixCache (site
+# backport of sgl-project/sglang#35515). Without it, one recycled 128-slot SWA tail
+# tombstone-cascades into deleting the whole branch's full-attention KV, and agent
+# conversations re-prefill 130K-755K tokens every turn. The anchor check fails the
+# build if the branch tree drifts.
+COPY runtime/patch_swa_tail_eviction.py /tmp/
+RUN python3 /tmp/patch_swa_tail_eviction.py && rm /tmp/patch_swa_tail_eviction.py
 COPY boot.py /opt/dsv41/boot.py
 COPY scripts /opt/dsv41/scripts
 COPY tests /opt/dsv41/tests

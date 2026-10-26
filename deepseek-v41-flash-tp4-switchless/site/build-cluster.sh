@@ -67,6 +67,9 @@ image_has_commit_adapter() {  # <host|local> <image>
 
 build_one() {  # <host|local> <tree-dir>
   local where="$1" tree="$2" run_ssh=()
+  # expand a leading ~ locally (printf %q would escape it and the remote cd would
+  # fail on a literal '\~/dsv41-miaai'); head and workers share the same $HOME
+  tree="${tree/#\~/$HOME}"
   [[ "$where" == local ]] || run_ssh=(ssh -o BatchMode=yes "${WORKER_USER:+${WORKER_USER}@}$where")
   echo "=== build on $where ($tree)"
   local cmd="

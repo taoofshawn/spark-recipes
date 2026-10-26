@@ -224,6 +224,39 @@ packed shards, profiler-estimate off.
   store/restore conditions (engram_backend.py / engram_prefetch.py, the 2 GiB 16-way
   DRAM cache vs NVMe shards, page/junction alignment) — that is where the agent-TTFT
   fix actually lives.
+- **Second restart + full harness (owner go-ahead, 2026-10-26 ~02:50 UTC):
+  `--swa-full-tokens-ratio 0.3` + the #35515 backport together.** Boot: `swa_size=403,712`
+  (7.8× cap), `c4_size=336,448/rank` = **1,345,792 tokens global** (thinner than the
+  3.4M projection — the state-pool pricing is superlinear; ~1.6× the two-agent working
+  set, watch for retraction when both agents run large). Harness: **idle retention now
+  WORKS** — B at +180 s idle: full 161,280 hit, and `full_token_usage` 0.12 afterward
+  (~800K retained: the test conversations all stayed resident; the cap-boot 2–4 s wipe
+  is gone in this configuration). **But the agent-turn shape still misses:** B after
+  ~480K churn = 0; B after a 60 s quiet gap = **256** (one page); B after a single tiny
+  request = 256; and the live agent's turns on this boot: 7,424 cached (system prefix)
+  then 0 — each turn re-prefills ~110–250K.
+- **Root cause, final form: the DSV4 compressed-attention compressor state.**
+  `get_compress_state_ring_size()` (deepseek_v4_memory_pool.py): the c4 compress state
+  lives in a **position-addressed ring 16 deep** (speculative, ratio-4; c128 online
+  ring = 1). A cached prefix is only extensible while its boundary compressor state is
+  intact — and ANY later forward writing nearby positions (the other conversation's
+  prefill, the agent's own tool-call sub-requests, even the ~2/min idle 1-token probe
+  forwards) clobbers those ring slots. Matchability therefore DECAYS under any traffic
+  within seconds-to-a-minute and survives only across pure idle — which is exactly the
+  measured matrix: +2 s hit (nothing in between), +60 s quiet = 256 (probe forwards
+  clobbered it), +180 s idle after a fresh insert = full hit (no forwards), churn case
+  = 0. The two-agent `cached=8192` era was the OTHER agent's in-flight path keeping
+  its own state warm. This is a design gap in cross-request reuse for the DSV4
+  compressed cache, not an eviction-ordering bug: #35515 (deployed, kept) and pool
+  sizing cannot close it. The fix belongs at the pool/design level — retain the
+  boundary compressor state per cached prefix (small: per-boundary, not per-token) or
+  recompute it from the prefix's stored KV at match time — upstream material.
+- **Net operational state after 2026-10-26:** ratio-0.3 boot (swa 403K, c4 1.35M
+  global), #35515 + token-guard patches live. Agents get full-prefix hits only when
+  their turn follows pure idle; any interleaved traffic (their own tool-call
+  sub-requests, the second agent) decays reuse to the system prefix. Per-turn
+  re-prefill cost remains ~1–2.5 min at 100–600K contexts until the compressor-state
+  retention is fixed at the design level.
 
 ### 2026-10-26 — token-guard image deployed; SWA-ratio resize tried and reverted; radix retention bleeds empty under churn (open)
 - **Deployed (owner-authorized window, agents stopped).** `verify-fabric-p2.sh` not re-run

@@ -69,7 +69,7 @@ build_one() {  # <host|local> <tree-dir>
   local where="$1" tree="$2" run_ssh=()
   [[ "$where" == local ]] || run_ssh=(ssh -o BatchMode=yes "${WORKER_USER:+${WORKER_USER}@}$where")
   echo "=== build on $where ($tree)"
-  "${run_ssh[@]}" "
+  local cmd="
     set -e
     docker image inspect $(printf '%q' "$BASE_IMAGE") >/dev/null 2>&1 \
       || docker pull --platform linux/arm64 $(printf '%q' "$BASE_IMAGE")
@@ -78,7 +78,11 @@ build_one() {  # <host|local> <tree-dir>
     docker image inspect -f '{{.Architecture}}' $(printf '%q' "$IMAGE") | grep -qx arm64 \
       || { echo 'not arm64' >&2; exit 1; }
     docker image inspect -f '{{.Id}}' $(printf '%q' "$IMAGE")
-  " || fatal "build failed on $where"
+  "
+  # local: no ssh array — execute via bash directly (an empty array would run the
+  # string as a command name and die with "No such file or directory")
+  if [[ "$where" == local ]]; then bash -c "$cmd" || fatal "build failed on $where"
+  else "${run_ssh[@]}" "$cmd" || fatal "build failed on $where"; fi
   image_has_commit_adapter "$where" "$IMAGE"
 }
 

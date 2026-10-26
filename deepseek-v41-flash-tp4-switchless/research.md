@@ -198,8 +198,32 @@ packed shards, profiler-estimate off.
   eviction, so no tombstone cascade). Validation harness: identical-prefix A→B client
   pairs — B must report `cached_tokens ≈ full prompt` after both idle gaps AND after
   ~480K-token unrelated prefill churn (it returns 0 today in the churn case).
-- Not yet deployed at the time of writing: images rebuild next; lane restart pending
-  owner go-ahead.
+- **Deployed + validated 2026-10-26 ~02:15 UTC (owner go-ahead):** stop → serve → boot
+  gates green (cap mode `swa_tokens=51712 prefix_tails=64`, `max_total_num_tokens=6,309,632`,
+  0 NCCL WARNs, patch tags present in the running container). Harness result: A→B at +2 s
+  full hit (161,280 cached) — **but B after ~480K-token unique churn STILL reports 0 cached;
+  the retention problem is NOT closed by the backport alone.**
+- **New instrumented finding (the deeper layer): the GPU radix tree is emptied within
+  ~2–4 s of the engine going fully idle — on the FRESH boot too** — and a request sent
+  minutes later can still report `cached_tokens=161,280` while `full_token_usage` reads
+  0.00, with the Engram tick in that window showing `lookups=355,604 reads=161` for the
+  161K-token prompt (≈1 read per 1K tokens). Interpretation: this stack has a second KV
+  tier — the Engram NVMe n-gram store — that takes finished conversations' KV out of the
+  GPU pool within seconds (the "wipe") and services later requests from NVMe (the
+  "cached" counts). The 1-token probe forwards seen at idle (~2/min, no HTTP POST in the
+  access log) ride the same machinery. kv_canary is `none`/sweep 0/perturb probs 0.0 —
+  ruled out; scheduler `flush_cache` never runs (no "Cache flushed successfully!" line);
+  `--sleep-on-idle`'s IdleSleeper only does torch `empty_cache` (interval env unset).
+- **Consequences:** (a) the #35515 backport remains correct and shipped — the
+  tombstone-cascade it fixes is real and upstream-confirmed, and it may matter again
+  once the offload tier is understood; (b) the retention problem's operative layer is
+  the Engram store/restore path (why identical replays restore in full while
+  extended-prefix requests — the agent-turn shape — restore nothing and re-prefill);
+  (c) the 44 h boot's agent behavior (8192-only hits) is consistent with the restore
+  path never engaging for those conversations. NEXT: decode the Engram
+  store/restore conditions (engram_backend.py / engram_prefetch.py, the 2 GiB 16-way
+  DRAM cache vs NVMe shards, page/junction alignment) — that is where the agent-TTFT
+  fix actually lives.
 
 ### 2026-10-26 — token-guard image deployed; SWA-ratio resize tried and reverted; radix retention bleeds empty under churn (open)
 - **Deployed (owner-authorized window, agents stopped).** `verify-fabric-p2.sh` not re-run

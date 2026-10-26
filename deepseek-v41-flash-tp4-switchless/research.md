@@ -139,6 +139,50 @@ packed shards, profiler-estimate off.
 
 ## Changelog
 
+### 2026-10-26 — token-guard image deployed; SWA-ratio resize tried and reverted; radix retention bleeds empty under churn (open)
+- **Deployed (owner-authorized window, agents stopped).** `verify-fabric-p2.sh` not re-run
+  (no transport change; lane restart only) → repo pulled on the head to `27b668a` →
+  `start-cluster.sh stop` (clean) → `site/build-cluster.sh` rebuilt
+  `dsv41-4x-spark:canary-roce-miaai` on head + all three workers, adapter sha256
+  `024a1a72…` verified in-image on every rank → `serve` → `/v1/models` 1,048,576 OK.
+  Ships the 2026-10-25 `<｜deepseek_image｜>` placeholder-sanitize patch (verified
+  in-image: `encoding_dsv41.py` carries the `[encoding_dsv41-placeholder-sanitize]`
+  anchors at both raise sites).
+- **First build-cluster.sh run hit two launcher bugs, fixed same commit range:**
+  `BUILD_ARGS` unbound (`set -u`) — now defined in `site/env.switchless` (`e0334da`);
+  local build executed the ssh command string as a command name — now `bash -c`
+  (`3ee0bac`); worker `~/dsv41-miaai` tilde escaped by `printf %q` — now expanded
+  before quoting (`27b668a`).
+- **SWA-ratio experiment (tried, measured, reverted).** Premise: agent turns re-prefill
+  their whole 200–600K conversation because the finished conversation's radix tail is
+  SWA-tombstoned (cap-mode SWA pool 51,712 slots/rank turns over in ~15 s of prefill
+  churn). `--swa-full-tokens-ratio 0.5` booted `mode=ratio (explicit),
+  swa_tokens=419,072` (8×) but **`c4_size=209,600/rank` (838K global)** — an SWA slot
+  costs ≈3.9 full-slot-equivalents, so ratio sizing trades c4 capacity 8:1 against SWA.
+  838K global is under the two live agent conversations' ~810K working set → retraction
+  wall. Reverted to cap mode (`31b2074` flag added, reverted in the same session).
+- **The deeper finding (open, engine-level): radix retention dies under churn at ANY
+  pool size.** Controlled client tests through the model-name proxy: identical-prefix
+  A→B pairs — full radix hit (161,280 `cached_tokens`) at +2 s, +10 s, +45 s and
+  +180 s IDLE gaps; **0 cached after ~2.5 min of unrelated ~480K-token prefill churn**,
+  with `full_token_usage` collapsing to ~0 afterward (no memory pressure: 644K resident
+  vs ≥838K pool). On the pre-restart 44 h boot the same pair also lost everything
+  during a ≤137 s quiet gap (tree empty, `usage 0.00`). No `Cache flushed
+  successfully!` lines in 44 h (scheduler `flush_cache` never ran); `--sleep-on-idle`
+  exonerated (`SGLANG_EMPTY_CACHE_INTERVAL` unset → IdleSleeper's `empty_cache`
+  disabled); `kv_canary` sweep/perturb is read-only (no evict/invalidate calls);
+  no site adapter touches the tree. Rendered prompts are byte-deterministic
+  (`encoding_dsv41.encode_messages` verified: X1 render is a strict prefix of X2's) —
+  the client/proxy path is clean. Under churn the engine behaves as if tree-held KV
+  (full-attention included) is recycled almost immediately once requests complete;
+  the shared ~8,192-token system prefix stays matchable only because in-flight
+  requests continuously re-insert it. Next lever when someone picks this up: DSV4
+  pool/allocator retention semantics (`enable_decoder_swa_bounded_replay`,
+  c4-state ring accounting) — likely upstream-design, needs the canary owner.
+- **Net state after this session:** token-guard image live, config back to the
+  2026-10-23 baseline (cap-mode SWA, c4 1,652,160/rank), agent turns still pay full
+  re-prefill per turn (unchanged from before this session).
+
 ### 2026-10-25 — image-placeholder 400 loop: the production build never got upstream's sanitize
 - **Symptom.** omp sessions against the lane die with a repeating
   `400 ... Message content contains image special token '<｜deepseek_image｜>'. Images

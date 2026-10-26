@@ -155,6 +155,54 @@ packed shards, profiler-estimate off.
 
 ## Changelog
 
+### 2026-10-26 — agent-turn retention FIXED: `--swa-prefix-tails 128` + ratio 0.065 (knapcio certified profile + MiaAI #43 band)
+- **The real failure, finally instrumented.** tcpdump on the head (:4000 client→nginx
+  proxy→:8000 engine, host network; SLL2 pcap + python reassembly) captured the agents'
+  actual turn bodies and replayed them byte-identically straight to the engine:
+  **the real 479K-token / 1,629-message conversation returned `cached=5,632 (1%)` and
+  re-prefilled 135 s** — while synthetic conversations of the same shape retained 89–99%
+  up to 242K (idle, churn, interleaved churn, thinking on/off — all pass). Client-side
+  capture diffed across turns: **PREFIX-STABLE, append-only** (1,627 → 1,629 → 1,648 →
+  1,650 → 1,652 msgs) — the client is innocent; the offline encoder renders are
+  prefix-stable too; the model-name proxy is out of the path (engine binds :8000
+  directly; nginx :4000 forwards it verbatim).
+- **Root cause: pool capacity, not a matching bug.** The ratio-0.3-derived full pool
+  (1.35M) cannot hold TWO concurrent 280–480K agent conversations plus growth: LRU
+  evicted the older session's prefix between turns, so every agent turn matched only its
+  ~9K system prefix. My synthetic probes kept "passing" partly because they re-warmed
+  their own entries while evicting the agents' older data — measurement pressure masking
+  the failure. (The truncation ladder on the real body confirmed content-innocence:
+  first 50 msgs = 31,488/31,973 = 98%.)
+- **Fix (two knobs, both from the community's validated playbook):**
+  1. `--swa-prefix-tails 128` + `--prefill-decode-interval 2` — knapcio's own certified
+     multi-user profile (README "Prefix cache"/"Multi-user" rows; issue-16 qualification:
+     1,445 requests, 0 failures), which our site env had NOT carried over from the miaai
+     swap. 128 tails vs the default 4 × max_running_requests = 64.
+  2. `--swa-full-tokens-ratio 0.3 → 0.065` — the two-fleet-validated band in MiaAI #43
+     (default ❌ / 0.05 ❌ / 0.065 ✓ / 0.22 ✓; "0.065 is the lowest that keeps multi-session
+     prefixes alive"). The ratio, not the MAX_TOTAL pin, decides the pool: boot now shows
+     **full=3,641,856** (was 1,348,352, +170%), **c4=910,464** (was 337,536 — better for
+     the agent compress-state working set), swa=236,544 (smaller; fleet-validated: needle
+     PASS, decode unchanged).
+- **Validation against the REAL captured bodies (the workload that failed):**
+
+  | replay (real bytes, post-fix) | cached | wall |
+  |---|---|---|
+  | A (479K) cold | 4,096 | 343 s (cold prefill + agent contention) |
+  | A warm, same-session | **479,232 (99%)** | 43 s |
+  | B (286K) cold | 0 | 86 s |
+  | A revisit — CROSS-SESSION | **479,232 (99%)** | 133 s |
+  | B revisit — CROSS-SESSION | **285,952 (99%)** | 131 s |
+  | A revisit 2 | **99%** | **9 s** |
+  | B revisit 2 | **99%** | **3 s** |
+
+  Pre-fix the cross-session revisits were the 0–1% failure; B revisit 2 was 85%/112 s.
+  Warm revisits now run at community speeds (3–9 s for 286–479K contexts).
+- Gates on the retuned boot: corruption 0, tool round-trip clean, DSpark acceptance 2.81,
+  0 NCCL WARNs. Note: agents were RESTARTED mid-work for both fix boots (owner-authorized).
+- Scripts: `.research/dsv41-{turn-diff,replay-captured,trunc-ladder,validate-tails}.py`
+  (untracked scratch); pcaps in `/tmp` on the head.
+
 ### 2026-10-26 — churn retention harness on the knapcio stack: the miaai churn-case failure does NOT reproduce
 - **Harness** (synthetic, `/generate` `meta_info.cached_tokens` instrument — the API
   `usage` field does not carry it; run while all agent traffic was paused; scripts in

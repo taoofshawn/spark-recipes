@@ -65,7 +65,7 @@ else
 fi
 [[ ${#WORKER_HOSTS[@]} -eq ${#WORKER_IPS[@]} ]] || { echo "WORKER_HOSTS and WORKER_IPS differ in length" >&2; exit 1; }
 WORKER1_IP="${WORKER_IPS[0]}"; WORKER2_IP="${WORKER_IPS[1]:-}"   # legacy names, still read by files/nfs-share.sh
-WORKER_USER="${WORKER_USER-zurih}"   # set to "" to let ~/.ssh/config pick each worker's user
+WORKER_USER="${WORKER_USER-zurih}"   # set to "" to let ~/.ssh/config choose per-host users
 SSH_IDENTITY="${SSH_IDENTITY:-$HOME/.ssh/id_ed25519_shared}"
 FABRIC_IFACE="${FABRIC_IFACE:-enp1s0f1np1}"
 GLOO_SOCKET_IFNAME="${GLOO_SOCKET_IFNAME:-enP7s7}"
@@ -78,34 +78,42 @@ NCCL_SHM_DISABLE="${NCCL_SHM_DISABLE:-1}"
 NCCL_DEBUG="${NCCL_DEBUG:-WARN}"
 NCCL_HOST_DIR="${NCCL_HOST_DIR:-$HOME/nccl-2.30.7}"
 NCCL_CONTAINER_DIR="${NCCL_CONTAINER_DIR:-/nccl}"
-# Container path of the base image's pip-installed NCCL. A patched host build
-# can be overlaid here (NCCL_OVERLAY_PIP) instead of being pushed onto
-# LD_LIBRARY_PATH, which leaves two NCCL runtimes visible and makes DeepEP's
-# check_nccl_so() abort before NCCL is ever initialised.
-NCCL_PIP_SO="${NCCL_PIP_SO:-/opt/sglang/lib/python3.12/site-packages/nvidia/nccl/lib/libnccl.so.2}"
-# Overlay the patched library; defaults to the switchless-ring switch below,
-# so it can also be enabled on its own with NCCL_OVERLAY_PIP=1.
+# ─── Switchless ring (opt-in, default off) ────────────────────────────────────
+# On, this stack boots on a four-node CX7 ring wired without a switch. Off, every
+# other deployment is unchanged. See files/nccl.sh and docs/switchless-ring.md.
 NCCL_SWITCHLESS_RING_ONLY="${NCCL_SWITCHLESS_RING_ONLY:-0}"
+# Ring-only NCCL knobs (only read when the switch is on).
+NCCL_ALGO="${NCCL_ALGO:-}"
+NCCL_SKIP_TREE_CONNECT="${NCCL_SKIP_TREE_CONNECT:-}"
+NCCL_IB_SUBNET_PREFIX_LEN="${NCCL_IB_SUBNET_PREFIX_LEN:-}"
+NCCL_MIN_NCHANNELS="${NCCL_MIN_NCHANNELS:-}"
+NCCL_P2P_LEVEL="${NCCL_P2P_LEVEL:-}"
+# Overlay the patched library over the image's pip NCCL instead of LD_LIBRARY_PATH.
+# Defaults to following the ring switch, so it can also be enabled on its own.
 NCCL_OVERLAY_PIP="${NCCL_OVERLAY_PIP:-$NCCL_SWITCHLESS_RING_ONLY}"
+NCCL_PIP_SO="${NCCL_PIP_SO:-/opt/sglang/lib/python3.12/site-packages/nvidia/nccl/lib/libnccl.so.2}"
 
-MODEL_DIR="${MODEL_DIR:-$HOME/NewModels/DeepSeek-V4.1-Flash-1017}"
-COMMON_MODEL="${COMMON_MODEL:-/var/tmp/DeepSeek-V4.1-Flash-1017}"
-HF_REPO="${HF_REPO:-deepseek-ai/DeepSeek-V4.1-Flash-1017}"
-HF_REVISION="${HF_REVISION:-1bae0e1088993b9b82de08f59de5be5a34e42170}"
+MODEL_DIR="${MODEL_DIR:-$HOME/NewModels/DeepSeek-V4.1-Flash}"
+COMMON_MODEL="${COMMON_MODEL:-/var/tmp/DeepSeek-V4.1-Flash}"
+HF_REPO="${HF_REPO:-deepseek-ai/DeepSeek-V4.1-Flash}"
+HF_REVISION="${HF_REVISION:-fb2764a5cf321eaa5070ca8f9e892818f477c16d}"
 EXPECTED_SHARDS="${EXPECTED_SHARDS:-48}"
 
-BASE_IMAGE="${BASE_IMAGE:-lmsysorg/sglang:dev-dsv41@sha256:3dbc313030a6ef2c5d7de8ecf48e9aece722694a82182cb618cc82b588816349}"   # same pin as the Dockerfile FROM
+BASE_IMAGE="${BASE_IMAGE:-lmsysorg/sglang:dev-dsv41}"
 IMAGE="${IMAGE:-dsv41-3x-spark:local}"
-# Honoured only when start-tp4.sh has set DSV41_LAUNCHER=tp4. ./start.sh always
-# builds Dockerfile and does not read these. A TP4 profile that runs one of the
-# canary images sets BUILD_DOCKERFILE so `build` produces $IMAGE from that recipe;
-# BUILD_ARGS carries the rest, e.g. --build-arg PIP_INDEX=<mirror>/simple.
+# What `build` compiles, and extra flags for it. A site that runs one of the optional
+# canary images sets BUILD_DOCKERFILE=Dockerfile.canary so `./start.sh build` produces
+# $IMAGE from the recipe the profile names instead of retagging it with the base one;
+# BUILD_ARGS carries the rest, e.g. --build-arg PIP_INDEX=<mirror> without pypi.org.
 BUILD_DOCKERFILE="${BUILD_DOCKERFILE:-Dockerfile}"
 BUILD_ARGS="${BUILD_ARGS:-}"
 HEAD_CTN="${HEAD_CTN:-dsv41-head}"
 WORKER_CTN="${WORKER_CTN:-dsv41-worker}"
 WORKER_DIR="${WORKER_DIR:-/home/${WORKER_USER}/dsv41-3x-spark}"
-[[ -n "$WORKER_USER" || "$WORKER_DIR" != /home//* ]] || { echo "WORKER_USER is empty: set WORKER_DIR to an absolute path (it defaults to /home/<user>/...)" >&2; exit 1; }
+[[ -n "$WORKER_USER" || "$WORKER_DIR" != /home//* ]] || {
+  echo "WORKER_USER is empty: set WORKER_DIR to an absolute path" >&2
+  exit 1
+}
 
 NNODES="${NNODES:-$(( ${#WORKER_IPS[@]} + 1 ))}"
 [[ "$NNODES" -eq $(( ${#WORKER_IPS[@]} + 1 )) ]] || { echo "NNODES=$NNODES but ${#WORKER_IPS[@]} workers are configured" >&2; exit 1; }
@@ -141,33 +149,7 @@ MAX_RUNNING_REQUESTS="${MAX_RUNNING_REQUESTS:-4}"
 CHUNKED_PREFILL_SIZE="${CHUNKED_PREFILL_SIZE:-2048}"
 MAX_TOTAL_TOKENS="${MAX_TOTAL_TOKENS:-320000}"
 SPEC_ALGO="${SPEC_ALGO:-DSPARK}"
-DSPARK_BLOCK_SIZE="${DSPARK_BLOCK_SIZE:-3}"
-# The TP4 decode adapters are loaded in the image but off. Turning them on
-# made spark3 drop its weights at FlashInfer autotune: that pass is a
-# target-verify forward, rank 2 is the padded shard, and wo_a DROP has already
-# replaced those parameters with a 1-element stand-in while Engram prefetch
-# and the verify remap run inside the profiled forward.
-if [[ "$TP_SIZE" == "3" ]]; then
-  DSV41_WO_A_W8="${DSV41_WO_A_W8:-0}"
-  DSV41_WO_A_W8_MID="${DSV41_WO_A_W8_MID:-0}"
-  DSV41_WO_A_W8_DROP="${DSV41_WO_A_W8_DROP:-0}"
-  DSV41_DRAFT_HEAD_FP8="${DSV41_DRAFT_HEAD_FP8:-0}"
-  DSV41_VERIFY_CAP="${DSV41_VERIFY_CAP:-0}"
-  DSV41_DRAFT_TAU="${DSV41_DRAFT_TAU:-1}"
-  DSV41_BLOCK_VERIFY="${DSV41_BLOCK_VERIFY:-0}"
-  DSV41_ENGRAM_PREFETCH="${DSV41_ENGRAM_PREFETCH:-0}"
-  DSV41_FOLDED_FENCE="${DSV41_FOLDED_FENCE:-0}"
-else
-  DSV41_WO_A_W8="${DSV41_WO_A_W8:-0}"
-  DSV41_WO_A_W8_MID="${DSV41_WO_A_W8_MID:-0}"
-  DSV41_WO_A_W8_DROP="${DSV41_WO_A_W8_DROP:-0}"
-  DSV41_DRAFT_HEAD_FP8="${DSV41_DRAFT_HEAD_FP8:-0}"
-  DSV41_VERIFY_CAP="${DSV41_VERIFY_CAP:-0}"
-  DSV41_DRAFT_TAU="${DSV41_DRAFT_TAU:-1}"
-  DSV41_BLOCK_VERIFY="${DSV41_BLOCK_VERIFY:-0}"
-  DSV41_ENGRAM_PREFETCH="${DSV41_ENGRAM_PREFETCH:-0}"
-  DSV41_FOLDED_FENCE="${DSV41_FOLDED_FENCE:-0}"
-fi
+DSPARK_BLOCK_SIZE="${DSPARK_BLOCK_SIZE:-5}"
 SERVED_MODEL_NAME="${SERVED_MODEL_NAME:-deepseek-v4.1-flash}"
 SKIP_PREPARE="${SKIP_PREPARE:-1}"
 SKIP_VERIFY="${SKIP_VERIFY:-1}"
@@ -198,6 +180,9 @@ mkdir -p "$LOG_DIR" "$STATE_DIR"
 source "$ROOT/files/nfs-share.sh"
 # shellcheck source=files/nccl.sh
 source "$ROOT/files/nccl.sh"
+source "$ROOT/files/doctor-network.sh"
+source "$ROOT/files/image-build.sh"
+DOCKER_PROXY_CHECK_CODE="$(cat "$ROOT/scripts/docker_proxy_check.py")"
 
 remote_on() {
   local host="$1"; shift
@@ -256,6 +241,17 @@ api_key() {
   esac
 }
 
+resolved_gid() {
+  local detected="$1"
+  if [[ -n "${NCCL_IB_GID_INDEX:-}" ]]; then
+    echo "$NCCL_IB_GID_INDEX"
+  elif [[ -n "$detected" ]]; then
+    echo "$detected"
+  elif [[ "${NCCL_IB_GID_AUTO:-0}" != 1 ]]; then
+    echo 3
+  fi
+}
+
 gid_index_local() {
   local ip="$1" hex hca g i
   hex=$(printf '%02x%02x:%02x%02x' $(echo "$ip" | tr . ' '))
@@ -302,7 +298,6 @@ docker_common_args() {
     -v "$HOME/.cache:/root/.cache"
     -e "OFFLOAD_MODE=$OFFLOAD_MODE"
     -e "DSV41_CACHE_GIB=$DSV41_CACHE_GIB"
-    -e "DSV41_SERIAL_WEIGHT_LOAD=${DSV41_SERIAL_WEIGHT_LOAD:-0}"
     -e "DSV41_IO_THREADS=$DSV41_IO_THREADS"
     -e "DSV41_RESIDENT_SCALES=$DSV41_RESIDENT_SCALES"
     -e "DSV41_CACHE_WAYS=$DSV41_CACHE_WAYS"
@@ -327,18 +322,6 @@ docker_common_args() {
     -e "CUDA_GRAPH_MAX_BS_DECODE=$MAX_RUNNING_REQUESTS"
     -e "SPEC_ALGO=$SPEC_ALGO"
     -e "DSPARK_BLOCK_SIZE=$DSPARK_BLOCK_SIZE"
-    -e "DSV41_WO_A_W8=$DSV41_WO_A_W8"
-    -e "DSV41_WO_A_W8_MID=$DSV41_WO_A_W8_MID"
-    -e "DSV41_WO_A_W8_DROP=$DSV41_WO_A_W8_DROP"
-    -e "DSV41_DRAFT_HEAD_FP8=$DSV41_DRAFT_HEAD_FP8"
-    -e "DSV41_VERIFY_CAP=$DSV41_VERIFY_CAP"
-    -e "DSV41_DRAFT_TAU=$DSV41_DRAFT_TAU"
-    -e "DSV41_BLOCK_VERIFY=$DSV41_BLOCK_VERIFY"
-    -e "DSV41_ENGRAM_PREFETCH=$DSV41_ENGRAM_PREFETCH"
-    -e "DSV41_FOLDED_FENCE=$DSV41_FOLDED_FENCE"
-    -e "DSV41_AUTOTUNE_KEEP=${DSV41_AUTOTUNE_KEEP:-0}"
-    -e "DSV41_WO_A_W8_DRAFT=${DSV41_WO_A_W8_DRAFT:-0}"
-    -e "DSV41_ENGRAM_PREFETCH_CHECK=${DSV41_ENGRAM_PREFETCH_CHECK:-0}"
     -e "SERVED_MODEL_NAME=$SERVED_MODEL_NAME"
     -e "SKIP_PREPARE=$SKIP_PREPARE"
     -e "SKIP_VERIFY=$SKIP_VERIFY"
@@ -362,6 +345,8 @@ docker_common_args() {
     -e "NCCL_MAX_NCHANNELS=${NCCL_MAX_NCHANNELS:-32}"
     -e "NCCL_DEBUG_SUBSYS=${NCCL_DEBUG_SUBSYS:-INIT}"
     -e "DSV41_MXFP8_BACKEND=${DSV41_MXFP8_BACKEND:-b12x}"
+    -e "DSV41_SHARED_PAD_K=${DSV41_SHARED_PAD_K:-0}"
+    -e "DSV41_SHARED_PAD_BUF_ROWS=${DSV41_SHARED_PAD_BUF_ROWS:-256}"
     -e "SGLANG_FLASHINFER_MOE_FUSED_FINALIZE=${SGLANG_FLASHINFER_MOE_FUSED_FINALIZE:-1}"
     -e "SGLANG_DSV41_REASONING_EFFORT=${SGLANG_DSV41_REASONING_EFFORT:-75}"
     -e "DSV41_MAX_NEW_TOKENS=${DSV41_MAX_NEW_TOKENS:-32768}"
@@ -376,51 +361,28 @@ docker_common_args() {
     -e "DSV41_TP_PAD=${DSV41_TP_PAD:-1}"
     -e "VLLM_HOST_IP=$hip"
     -e "HOST_IP=$hip"
-    -e "NCCL_IB_GID_INDEX=$gid"
   )
+  [[ -z "$gid" ]] || _a+=(-e "NCCL_IB_GID_INDEX=$gid")
   if [[ -n "${API_KEY}" ]]; then
     _a+=(-e "API_KEY=$API_KEY")
   fi
   if [[ -n "${EXTRA_SGLANG_ARGS:-}" ]]; then
     _a+=(-e "EXTRA_SGLANG_ARGS=$EXTRA_SGLANG_ARGS")
   fi
-  # Unset means the engine's AUTO (decided from min free memory across ranks); only forward an explicit mode.
-  if [[ -n "${SGLANG_DSPARK_FOLDED_SAMPLING:-}" ]]; then
-    _a+=(-e "SGLANG_DSPARK_FOLDED_SAMPLING=$SGLANG_DSPARK_FOLDED_SAMPLING")
-  fi
-  switchless_ring_args _a
-  nccl_mount_args _a || die "NCCL mount setup failed"
-  # start-tp4.sh only. ./start.sh does not pass these and does not read EXTRA_CONTAINER_ENV.
-  if [[ "${DSV41_LAUNCHER:-}" == tp4 ]]; then
-    _a+=(
-      -e "DSV41_LAUNCHER=tp4"
-      -e "DSV41_SHARED_PAD_K=${DSV41_SHARED_PAD_K:-0}"
-      -e "DSV41_SHARED_PAD_BUF_ROWS=${DSV41_SHARED_PAD_BUF_ROWS:-256}"
-    )
-    extra_container_env_args _a
-  fi
-}
+  # Generic passthrough so an experiment is one .env line, not a launcher edit.
+  [[ "${DSV41_TRITON_CACHE:-0}" != 1 ]] || _a+=(-e "TRITON_CACHE_DIR=/state/triton")
 
-# EXTRA_CONTAINER_ENV="KEY=VALUE KEY2=VALUE2" (whitespace separated). Called only from the
-# start-tp4.sh path. Container env for the head and every worker, so the TP4 profile's
-# switches are one .env line. A key the launcher already passes is replaced in place, not
-# repeated: a repeated -e leaves both entries, and which one a process reads depends on it.
-extra_container_env_args() {
-  local -n _xa=$1
-  local -a _items=()
-  local _kv _i _found
-  read -r -a _items <<<"${EXTRA_CONTAINER_ENV:-}"
-  for _kv in "${_items[@]}"; do
-    [[ "$_kv" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] || die "EXTRA_CONTAINER_ENV: '$_kv' is not KEY=VALUE"
-    _found=0
-    for _i in "${!_xa[@]}"; do
-      if [[ "${_xa[$_i]}" == -e && "${_xa[$((_i + 1))]:-}" == "${_kv%%=*}="* ]]; then
-        _xa[$((_i + 1))]="$_kv"
-        _found=1
-      fi
-    done
-    [[ "$_found" == 1 ]] || _xa+=(-e "$_kv")
-  done
+  # EXTRA_CONTAINER_ENV="FOO=1 BAR=2" (whitespace separated KEY=VALUE pairs).
+  if [[ -n "${EXTRA_CONTAINER_ENV:-}" ]]; then
+    local _kv
+    for _kv in ${EXTRA_CONTAINER_ENV}; do _a+=(-e "$_kv"); done
+  fi
+  if [[ "$NCCL_SWITCHLESS_RING_ONLY" == "1" ]]; then
+    switchless_ring_args _a
+    nccl_mount_args _a || die "NCCL setup for the switchless ring failed"
+  elif [[ -f "$NCCL_HOST_DIR/libnccl.so.2.30.7" || -f "$NCCL_HOST_DIR/libnccl.so.2" ]]; then
+    _a+=(-v "$NCCL_HOST_DIR:$NCCL_CONTAINER_DIR:ro" -e "LD_LIBRARY_PATH=$NCCL_CONTAINER_DIR")
+  fi
 }
 
 # Every rank builds its own planner, so the SPS/STS calibration has to exist on
@@ -429,19 +391,19 @@ push_spec_tables() {
   local name local_path host
   for name in dspark_sps.json dspark_sts.json; do
     local_path="$STATE_DIR/$name"
-    for host in "${WORKER_HOSTS[@]}"; do   # host names, so per-host ssh config applies
+    for host in "${WORKER_HOSTS[@]}"; do
       if [[ -f "$local_path" ]]; then
         local payload
         payload=$(base64 -w0 <"$local_path")
         # Every rank derives its verify schedule from its own copy of this file.
         # A rank that disagrees with the others builds a different verify shape
         # and the TP collective hangs, so a failed push is fatal, not a warning.
-        remote_on "$host" "mkdir -p $(printf '%q' "$WORKER_DIR/state") && printf %s $(printf '%q' "$payload") | base64 -d > $(printf '%q' "$WORKER_DIR/state/$name")" \
+        remote_on "$host" "mkdir -p $WORKER_DIR/state && echo $payload | base64 -d > $WORKER_DIR/state/$name" \
           || die "could not push $name to $host: ranks would disagree on the DSpark verify schedule"
         info "pushed $name to $host"
       else
         # Likewise for a stale copy left from an earlier run.
-        remote_on "$host" "rm -f $(printf '%q' "$WORKER_DIR/state/$name")" \
+        remote_on "$host" "rm -f $WORKER_DIR/state/$name" \
           || die "could not clear a stale $name on $host"
       fi
     done
@@ -450,132 +412,70 @@ push_spec_tables() {
 
 worker_env_lines() {
   local wip="$1" wgid="$2" rank="$3"
-  local -a worker_args=(
-    -e "NODE_RANK=$rank"
-    -e "NNODES=$NNODES"
-    -e "TP_SIZE=$TP_SIZE"
-    -e "EP_SIZE=$EP_SIZE"
-    -e "DIST_INIT_ADDR=$HEAD_IP:$DIST_PORT"
-    -e "OFFLOAD_MODE=$OFFLOAD_MODE"
-    -e "DSV41_CACHE_GIB=$DSV41_CACHE_GIB"
-    -e "DSV41_IO_THREADS=$DSV41_IO_THREADS"
-    -e "DSV41_SERIAL_WEIGHT_LOAD=${DSV41_SERIAL_WEIGHT_LOAD:-0}"
-    -e "DSV41_RESIDENT_SCALES=$DSV41_RESIDENT_SCALES"
-    -e "DSV41_CACHE_WAYS=$DSV41_CACHE_WAYS"
-    -e "DSV41_STATS_SECONDS=$DSV41_STATS_SECONDS"
-    -v "$WORKER_ENGRAM_DIR:/engram"
-    -e "DSV41_PACKED_DIR=$DSV41_PACKED_DIR"
-    -e "DSPARK_SPS_TABLE=$DSPARK_SPS_TABLE"
-    -e "DSPARK_STS_TABLE=$DSPARK_STS_TABLE"
-    -e "DSV41_SOURCE=/models/DeepSeek-V4.1-Flash"
-    -e "MODEL_PATH=/models/DeepSeek-V4.1-Flash"
-    -e "STATE_PATH=/state"
-    -e "SERVER_PORT=$PORT"
-    -e "HOST=0.0.0.0"
-    -e "CONTEXT_LENGTH=$CONTEXT_LENGTH"
-    -e "MEM_FRACTION_STATIC=$MEM_FRACTION_STATIC"
-    -e "MAX_RUNNING_REQUESTS=$MAX_RUNNING_REQUESTS"
-    -e "CHUNKED_PREFILL_SIZE=$CHUNKED_PREFILL_SIZE"
-    -e "MAX_TOTAL_TOKENS=$MAX_TOTAL_TOKENS"
-    -e "CUDA_GRAPH_MAX_BS_DECODE=$MAX_RUNNING_REQUESTS"
-    -e "SPEC_ALGO=$SPEC_ALGO"
-    -e "DSPARK_BLOCK_SIZE=$DSPARK_BLOCK_SIZE"
-    -e "DSV41_WO_A_W8=$DSV41_WO_A_W8"
-    -e "DSV41_WO_A_W8_MID=$DSV41_WO_A_W8_MID"
-    -e "DSV41_WO_A_W8_DROP=$DSV41_WO_A_W8_DROP"
-    -e "DSV41_DRAFT_HEAD_FP8=$DSV41_DRAFT_HEAD_FP8"
-    -e "DSV41_VERIFY_CAP=$DSV41_VERIFY_CAP"
-    -e "DSV41_DRAFT_TAU=$DSV41_DRAFT_TAU"
-    -e "DSV41_BLOCK_VERIFY=$DSV41_BLOCK_VERIFY"
-    -e "DSV41_ENGRAM_PREFETCH=$DSV41_ENGRAM_PREFETCH"
-    -e "DSV41_FOLDED_FENCE=$DSV41_FOLDED_FENCE"
-    -e "DSV41_AUTOTUNE_KEEP=${DSV41_AUTOTUNE_KEEP:-0}"
-    -e "DSV41_WO_A_W8_DRAFT=${DSV41_WO_A_W8_DRAFT:-0}"
-    -e "DSV41_ENGRAM_PREFETCH_CHECK=${DSV41_ENGRAM_PREFETCH_CHECK:-0}"
-    -e "SERVED_MODEL_NAME=$SERVED_MODEL_NAME"
-    -e "SKIP_PREPARE=1"
-    -e "SKIP_VERIFY=1"
-    -e "SKIP_SMOKE=1"
-    -e "NCCL_NET=$NCCL_NET"
-    -e "NCCL_IB_DISABLE=$NCCL_IB_DISABLE"
-    -e "NCCL_IB_HCA=$IB_HCA"
-    -e "NCCL_SOCKET_IFNAME=$NCCL_SOCKET_IFNAME"
-    -e "GLOO_SOCKET_IFNAME=$GLOO_SOCKET_IFNAME"
-    -e "NCCL_P2P_DISABLE=$NCCL_P2P_DISABLE"
-    -e "NCCL_SHM_DISABLE=$NCCL_SHM_DISABLE"
-    -e "NCCL_CROSS_NIC=${NCCL_CROSS_NIC:-1}"
-    -e "NCCL_IB_MERGE_NICS=${NCCL_IB_MERGE_NICS:-0}"
-    -e "NCCL_IB_SUBNET_AWARE_ROUTING=${NCCL_IB_SUBNET_AWARE_ROUTING:-1}"
-    -e "NCCL_CUMEM_ENABLE=0"
-    -e "NCCL_DEBUG=$NCCL_DEBUG"
-    -e "NCCL_BUFFSIZE=${NCCL_BUFFSIZE:-4194304}"
-    -e "NCCL_LL128_BUFFSIZE=${NCCL_LL128_BUFFSIZE:--2}"
-    -e "NCCL_PROTO=${NCCL_PROTO:-LL,LL128,Simple}"
-    -e "NCCL_MAX_NCHANNELS=${NCCL_MAX_NCHANNELS:-32}"
-    -e "NCCL_DEBUG_SUBSYS=${NCCL_DEBUG_SUBSYS:-INIT}"
-    -e "DSV41_MXFP8_BACKEND=${DSV41_MXFP8_BACKEND:-b12x}"
-    -e "SGLANG_FLASHINFER_MOE_FUSED_FINALIZE=${SGLANG_FLASHINFER_MOE_FUSED_FINALIZE:-1}"
-    -e "SGLANG_DSV41_REASONING_EFFORT=${SGLANG_DSV41_REASONING_EFFORT:-75}"
-    -e "DSV41_MAX_NEW_TOKENS=${DSV41_MAX_NEW_TOKENS:-32768}"
-    -e "DSV41_MAX_NEW_TOKENS_FLOOR=${DSV41_MAX_NEW_TOKENS_FLOOR:-16384}"
-    -e "DSV41_LOOP_ABORT=${DSV41_LOOP_ABORT:-1}"
-    -e "DSV41_LOOP_NGRAM=${DSV41_LOOP_NGRAM:-32}"
-    -e "DSV41_LOOP_REPEATS=${DSV41_LOOP_REPEATS:-4}"
-    -e "DSV41_LOOP_LINE_REPEATS=${DSV41_LOOP_LINE_REPEATS:-8}"
-    -e "PYTORCH_CUDA_ALLOC_CONF=${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:False}"
-    -e "NCCL_IB_GID_INDEX=$wgid"
-    -e "CUDA_DEVICE_ORDER=PCI_BUS_ID"
-    -e "SGLANG_ENABLE_DSV41_ENGRAM_HOST_TABLE=0"
-    -e "DSV41_TP_PAD=${DSV41_TP_PAD:-1}"
-    -e "HOST_IP=$wip"
-    -e "VLLM_HOST_IP=$wip"
-  )
-  if [[ -n "${SGLANG_DSPARK_FOLDED_SAMPLING:-}" ]]; then
-    worker_args+=(-e "SGLANG_DSPARK_FOLDED_SAMPLING=$SGLANG_DSPARK_FOLDED_SAMPLING")
-  fi
-  switchless_ring_args worker_args
-  if [[ "${DSV41_LAUNCHER:-}" == tp4 ]]; then
-    worker_args+=(
-      -e "DSV41_LAUNCHER=tp4"
-      -e "DSV41_SHARED_PAD_K=${DSV41_SHARED_PAD_K:-0}"
-      -e "DSV41_SHARED_PAD_BUF_ROWS=${DSV41_SHARED_PAD_BUF_ROWS:-256}"
-    )
-    extra_container_env_args worker_args
-  fi
-  printf '        %q ' "${worker_args[@]}"
-  printf '\\\n'
-}
-
-# Validate every rank; never stop at the first missing worker image.
-# These probes run disposable containers without network or GPU access.
-preflight_all_nodes() {
-  nccl_validate_config || return 1
-  [[ "$NCCL_OVERLAY_PIP" == 1 || "$NCCL_SWITCHLESS_RING_ONLY" == 1 ]] || return 0
-  local h gid failed=0
-  RING_WORKER_GIDS=()
-  if RING_GID_HEAD=$(nccl_preflight); then
-    info "NCCL preflight head OK${RING_GID_HEAD:+ (ACTIVE HCAs: $IB_HCA, RoCEv2 GID: $RING_GID_HEAD)}"
-  else
-    warn 'NCCL preflight failed on head'; failed=1
-  fi
-  for h in "${WORKER_HOSTS[@]}"; do
-    if gid=$(remote_on "$h" "set -e
-$(nccl_worker_settings)
-nccl_preflight"); then
-      gid="${gid//$'\r'/}"
-      gid="${gid#"${gid%%[![:space:]]*}"}"
-      gid="${gid%"${gid##*[![:space:]]}"}"
-      if [[ "$NCCL_SWITCHLESS_RING_ONLY" == 1 && ! "$gid" =~ ^[0-9]+$ ]]; then
-        warn "NCCL preflight $h returned an invalid GID index"; failed=1
-        continue
-      fi
-      RING_WORKER_GIDS+=("$gid")
-      info "NCCL preflight $h OK${gid:+ (ACTIVE HCAs: $IB_HCA, RoCEv2 GID: $gid)}"
-    else
-      warn "NCCL preflight failed on $h"; failed=1
-    fi
-  done
-  return "$failed"
+  # Mirror of the head's EXTRA_CONTAINER_ENV passthrough; every rank must agree.
+  local _extra_env="-e DSV41_EXTRA_ENV=1" _kv
+  [[ "${DSV41_TRITON_CACHE:-0}" != 1 ]] || _extra_env+=" -e TRITON_CACHE_DIR=/state/triton"
+  for _kv in ${EXTRA_CONTAINER_ENV:-}; do _extra_env+=" -e $(printf '%q' "$_kv")"; done
+  # Ring environment is mirrored to every rank. The leading space comes from here,
+  # not from switchless_ring_env_string, so that with the switch off this line is
+  # byte-identical to before it existed.
+  local _ring_env=""
+  switchless_ring_enabled && _ring_env=" $(switchless_ring_env_string)"
+  cat <<EOF
+        -e NODE_RANK=$rank -e NNODES=$NNODES \\
+        -e TP_SIZE=$TP_SIZE -e EP_SIZE=$EP_SIZE \\
+        -e DIST_INIT_ADDR=$HEAD_IP:$DIST_PORT \\
+        -e OFFLOAD_MODE=$OFFLOAD_MODE -e DSV41_CACHE_GIB=$DSV41_CACHE_GIB \\
+        -e DSV41_IO_THREADS=$DSV41_IO_THREADS \\
+        -e DSV41_RESIDENT_SCALES=$DSV41_RESIDENT_SCALES \\
+        -e DSV41_CACHE_WAYS=$DSV41_CACHE_WAYS \\
+        -e DSV41_STATS_SECONDS=$DSV41_STATS_SECONDS \\
+        -v $WORKER_ENGRAM_DIR:/engram \\
+        -e DSV41_PACKED_DIR=$DSV41_PACKED_DIR \\
+        -e DSPARK_SPS_TABLE=$DSPARK_SPS_TABLE \\
+        -e DSPARK_STS_TABLE=$DSPARK_STS_TABLE \\
+        -e DSV41_SOURCE=/models/DeepSeek-V4.1-Flash \\
+        -e MODEL_PATH=/models/DeepSeek-V4.1-Flash -e STATE_PATH=/state \\
+        -e SERVER_PORT=$PORT -e HOST=0.0.0.0 \\
+        -e CONTEXT_LENGTH=$CONTEXT_LENGTH \\
+        -e MEM_FRACTION_STATIC=$MEM_FRACTION_STATIC \\
+        -e MAX_RUNNING_REQUESTS=$MAX_RUNNING_REQUESTS \\
+        -e CHUNKED_PREFILL_SIZE=$CHUNKED_PREFILL_SIZE \\
+        -e MAX_TOTAL_TOKENS=$MAX_TOTAL_TOKENS \\
+        -e CUDA_GRAPH_MAX_BS_DECODE=$MAX_RUNNING_REQUESTS \\
+        -e SPEC_ALGO=$SPEC_ALGO -e DSPARK_BLOCK_SIZE=$DSPARK_BLOCK_SIZE \\
+        -e SERVED_MODEL_NAME=$SERVED_MODEL_NAME \\
+        -e SKIP_PREPARE=1 -e SKIP_VERIFY=1 -e SKIP_SMOKE=1 \\
+        -e NCCL_NET=$NCCL_NET -e NCCL_IB_DISABLE=$NCCL_IB_DISABLE \\
+        -e NCCL_IB_HCA=$IB_HCA -e NCCL_SOCKET_IFNAME=$NCCL_SOCKET_IFNAME \\
+        -e GLOO_SOCKET_IFNAME=$GLOO_SOCKET_IFNAME \\
+        -e NCCL_P2P_DISABLE=$NCCL_P2P_DISABLE -e NCCL_SHM_DISABLE=$NCCL_SHM_DISABLE \\
+        -e NCCL_CROSS_NIC=${NCCL_CROSS_NIC:-1} \\
+        -e NCCL_IB_MERGE_NICS=${NCCL_IB_MERGE_NICS:-0} \\
+        -e NCCL_IB_SUBNET_AWARE_ROUTING=${NCCL_IB_SUBNET_AWARE_ROUTING:-1} \\
+        -e NCCL_CUMEM_ENABLE=0 -e NCCL_DEBUG=$NCCL_DEBUG \\
+        -e NCCL_BUFFSIZE=${NCCL_BUFFSIZE:-4194304} -e NCCL_LL128_BUFFSIZE=${NCCL_LL128_BUFFSIZE:--2} \\
+        -e NCCL_PROTO=${NCCL_PROTO:-LL,LL128,Simple} -e NCCL_MAX_NCHANNELS=${NCCL_MAX_NCHANNELS:-32} \\
+        -e NCCL_DEBUG_SUBSYS=${NCCL_DEBUG_SUBSYS:-INIT} \\
+        -e DSV41_MXFP8_BACKEND=${DSV41_MXFP8_BACKEND:-b12x} \\
+        -e DSV41_SHARED_PAD_K=${DSV41_SHARED_PAD_K:-0} \\
+        -e DSV41_SHARED_PAD_BUF_ROWS=${DSV41_SHARED_PAD_BUF_ROWS:-256} \\
+        -e SGLANG_FLASHINFER_MOE_FUSED_FINALIZE=${SGLANG_FLASHINFER_MOE_FUSED_FINALIZE:-1} \\
+        -e SGLANG_DSV41_REASONING_EFFORT=${SGLANG_DSV41_REASONING_EFFORT:-75} \\
+        -e DSV41_MAX_NEW_TOKENS=${DSV41_MAX_NEW_TOKENS:-32768} \\
+        -e DSV41_MAX_NEW_TOKENS_FLOOR=${DSV41_MAX_NEW_TOKENS_FLOOR:-16384} \\
+        -e DSV41_LOOP_ABORT=${DSV41_LOOP_ABORT:-1} \\
+        -e DSV41_LOOP_NGRAM=${DSV41_LOOP_NGRAM:-32} \\
+        -e DSV41_LOOP_REPEATS=${DSV41_LOOP_REPEATS:-4} \\
+        -e DSV41_LOOP_LINE_REPEATS=${DSV41_LOOP_LINE_REPEATS:-8} \\
+        -e PYTORCH_CUDA_ALLOC_CONF=${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:False} \\
+        ${wgid:+-e NCCL_IB_GID_INDEX=$wgid} \\
+        -e CUDA_DEVICE_ORDER=PCI_BUS_ID \\
+        -e SGLANG_ENABLE_DSV41_ENGRAM_HOST_TABLE=0 \\
+        -e DSV41_TP_PAD=${DSV41_TP_PAD:-1} \\
+        -e HOST_IP=$wip -e VLLM_HOST_IP=$wip \\
+        $_extra_env$_ring_env \\
+EOF
 }
 
 cmd_doctor() {
@@ -586,9 +486,9 @@ cmd_doctor() {
   echo "model:    $MODEL_DIR"
   echo "parallel: nnodes=$NNODES TP=$TP_SIZE EP=$EP_SIZE  ctx=$CONTEXT_LENGTH  util=$MEM_FRACTION_STATIC (head $HEAD_MEM_FRACTION_STATIC)"
   echo "offload:  $OFFLOAD_MODE  cache=${DSV41_CACHE_GIB}GiB  spec=$SPEC_ALGO-$DSPARK_BLOCK_SIZE  port=$PORT"
-  echo "decode:   wo_a_w8=$DSV41_WO_A_W8 mid=$DSV41_WO_A_W8_MID drop=$DSV41_WO_A_W8_DROP  draft_head_fp8=$DSV41_DRAFT_HEAD_FP8  verify_cap=$DSV41_VERIFY_CAP  draft_tau=$DSV41_DRAFT_TAU  block_verify=$DSV41_BLOCK_VERIFY  engram_prefetch=$DSV41_ENGRAM_PREFETCH  folded_fence=$DSV41_FOLDED_FENCE"
   echo
   local ok=0
+  doctor_network_checks || ok=1
   command -v docker >/dev/null || { warn "docker missing on head"; ok=1; }
   command -v nvidia-smi >/dev/null && info "GPU: $(nvidia-smi -L | head -1)" || { warn "nvidia-smi missing"; ok=1; }
   [[ -f "$SSH_IDENTITY" ]] && info "SSH key $SSH_IDENTITY" || { warn "SSH key missing"; ok=1; }
@@ -600,6 +500,44 @@ cmd_doctor() {
     info "overlay image present ($(docker image inspect -f '{{.Architecture}}' "$IMAGE"))"
   else
     warn "image $IMAGE missing — ./start.sh build (pulls $BASE_IMAGE)"
+  fi
+
+  # Switchless ring. Inert unless NCCL_SWITCHLESS_RING_ONLY=1; validates the config
+  # and every rank's patched NCCL + RoCE v2 GID before any container is replaced.
+  if switchless_ring_enabled; then
+    local ring_gid wi wh wgid
+    if nccl_validate_config; then
+      info "switchless ring: config OK (NNODES=$NNODES TP=$TP_SIZE EP=$EP_SIZE, IB_HCA=$IB_HCA)"
+    else
+      warn "switchless ring: configuration rejected"
+      ok=1
+    fi
+    if ring_gid=$(nccl_preflight "$HEAD_IP"); then
+      info "switchless ring: head preflight OK (RoCEv2 GID index $ring_gid)"
+    else
+      warn "switchless ring: head preflight failed"
+      ok=1
+    fi
+    # Not fatal: the ring still forms, the extra devices just stay idle. Silence
+    # here is what makes a half-used dual-plane board hard to notice.
+    nccl_gid_publication_check
+    for wi in "${!WORKER_HOSTS[@]}"; do
+      wh="${WORKER_HOSTS[$wi]}"
+      if wgid=$(remote_on "$wh" "set -e
+$(nccl_worker_settings)
+nccl_preflight $(printf '%q' "${WORKER_IPS[$wi]:-}")" 2>/dev/null); then
+        wgid="${wgid//[$'\r\n']/}"
+        if [[ "$wgid" =~ ^([0-9]+|auto)$ ]]; then
+          info "switchless ring: $wh preflight OK (RoCEv2 GID index $wgid)"
+        else
+          warn "switchless ring: $wh preflight returned no GID index"
+          ok=1
+        fi
+      else
+        warn "switchless ring: $wh preflight failed"
+        ok=1
+      fi
+    done
   fi
 
   if [[ -f "$MODEL_DIR/config.json" ]]; then
@@ -620,16 +558,14 @@ cmd_doctor() {
     warn "RAM Engram mode pins ~189 GiB into unified memory — will not fit on Spark. Use nvme."
     ok=1
   fi
-  if [[ "$NFS_SHARE" == "1" ]]; then
-    if nfs_rpc_ready 127.0.0.1; then
-      info "NFSv4 listening on head"
-    else
-      warn "NFSv4 not listening yet — ./start.sh share will start or reuse the exporter"
-    fi
-    info "weights: workers read $NFS_VOLUME over NFSv4; head reads $MODEL_DIR"
+  if nfs_rpc_ready 127.0.0.1; then
+    local _mounts="" _i
+    for _i in "${!WORKER_HOSTS[@]}"; do _mounts+=" ${WORKER_HOSTS[$_i]}→$(nfs_server_ip_for "${WORKER_HOSTS[$_i]}" "$_i" 2>/dev/null || echo '?')"; done
+    info "NFSv4 listening on this host (workers should mount CX7:${_mounts})"
   else
-    info "weights: NFS_SHARE=0 — head reads $MODEL_DIR; workers use local volume $NFS_VOLUME"
+    warn "NFSv4 not listening yet — ./start.sh share will start or reuse the exporter"
   fi
+  info "weights: spark2/spark3 use docker NFS volume $NFS_VOLUME (head $MODEL_DIR); no rsync/SSHFS"
   if [[ "$TP_SIZE" -eq 3 ]]; then
     info "TP3 note: heads=64, o_groups=8, vocab=129280 are not divisible by 3; adapter/tp3_pad.py pads them"
     info "  (heads 64→96, groups 8→12, draft experts 128→129). experts=384 divides. Rank 2 holds padded shards only."
@@ -637,8 +573,6 @@ cmd_doctor() {
   elif [[ "$TP_SIZE" -eq 4 ]]; then
     info "TP4 note: heads, o_groups, draft experts and vocab all divide by 4; no padding (DSV41_TP_PAD=${DSV41_TP_PAD:-0})."
   fi
-
-  preflight_all_nodes || ok=1
 
   if nvidia-smi --query-compute-apps=pid,process_name,used_memory --format=csv,noheader 2>/dev/null | grep -q .; then
     warn "GPU already has compute apps:"
@@ -648,17 +582,23 @@ cmd_doctor() {
 
   local h
   for h in "${WORKER_HOSTS[@]}"; do
-    local host_report
-    if host_report=$(remote_on "$h" "hostname" 2>&1); then
-      info "SSH $h OK → ${host_report//$'\r'/}"
+    if remote_on "$h" "hostname" >/tmp/dsv41-host-"$h".txt 2>/tmp/dsv41-ssh-"$h".err; then
+      info "SSH $h OK → $(tr -d '\r' </tmp/dsv41-host-"$h".txt)"
       remote_on "$h" "command -v docker >/dev/null && nvidia-smi -L | head -1 && test -d /dev/infiniband && echo IB_OK" \
         || { warn "docker/GPU/IB check failed on $h"; ok=1; }
+      # Each worker's own volume, in both profiles: NFS volume when sharing,
+      # local checkpoint when not. Catches a half-provisioned node in doctor
+      # rather than in serve.
       if ! nfs_worker_has_model "$h"; then
         warn "$h: weights missing/incomplete or volume $NFS_VOLUME unavailable (NFS_SHARE=$NFS_SHARE)"
         ok=1
+      elif [[ "$NFS_SHARE" == "0" ]] && ! local_model_volume_is_local "$h"; then
+        warn "$h: $NFS_VOLUME is NFS-backed; NFS_SHARE=0 needs a local volume"
+        ok=1
       fi
     else
-      err "SSH to $h FAILED: $host_report"
+      err "SSH to $h FAILED"
+      cat /tmp/dsv41-ssh-"$h".err || true
       ok=1
     fi
   done
@@ -691,36 +631,27 @@ cmd_download() {
 cmd_pull() {
   info "=== pull $BASE_IMAGE on all nodes ==="
   ensure_ssh_keys
-  docker pull --platform linux/arm64 "$BASE_IMAGE"
+  local base
+  base=$(build_base_image) || return 1
+  base_image_ready "$base" 1 || return 1
   local h
   for h in "${WORKER_HOSTS[@]}"; do
     info "pulling on $h ..."
     remote_on "$h" --timeout "${PULL_TIMEOUT:-0}" \
-      "docker pull --platform linux/arm64 $(printf '%q' "$BASE_IMAGE")"
+      "$(base_image_worker_command "$base" 1)" || return 1
   done
   info "base image present on all nodes"
 }
 
 cmd_build() {
-  local dockerfile="Dockerfile" build_args=""
-  if [[ "${DSV41_LAUNCHER:-}" == tp4 ]]; then
-    info "=== build $IMAGE from $ROOT ($BUILD_DOCKERFILE) ==="
-    dockerfile="$BUILD_DOCKERFILE"
-    case "$dockerfile" in /*) die "BUILD_DOCKERFILE must be inside the repository (got $dockerfile)";; esac
-    [[ -f "$ROOT/$dockerfile" ]] || die "no such Dockerfile: $ROOT/$dockerfile"
-    build_args="$BUILD_ARGS"
-  else
-    info "=== build $IMAGE from $ROOT ==="
-  fi
-  if ! docker image inspect "$BASE_IMAGE" >/dev/null 2>&1; then
-    cmd_pull
-  fi
-  # shellcheck disable=SC2086  # build_args is a list of docker build flags on the TP4 path
-  if [[ "${DSV41_LAUNCHER:-}" == tp4 ]]; then
-    docker build -f "$ROOT/$dockerfile" -t "$IMAGE" $build_args "$ROOT"
-  else
-    docker build -t "$IMAGE" "$ROOT"
-  fi
+  info "=== build $IMAGE from $ROOT ($BUILD_DOCKERFILE) ==="
+  local base
+  base=$(build_base_image) || return 1
+  base_image_ready "$base" || return 1
+  local dockerfile="$BUILD_DOCKERFILE"
+  case "$dockerfile" in /*) die "BUILD_DOCKERFILE must be inside the repository (got $dockerfile)";; esac
+  [[ -f "$ROOT/$dockerfile" ]] || die "no such Dockerfile: $ROOT/$dockerfile"
+  docker build -f "$ROOT/$dockerfile" -t "$IMAGE" $BUILD_ARGS --build-arg "BASE_IMAGE=$base" --pull=false "$ROOT"
   local img_arch
   img_arch=$(docker image inspect -f '{{.Architecture}}' "$IMAGE")
   [[ "$img_arch" == "arm64" ]] || die "expected arm64 image, got $img_arch"
@@ -731,40 +662,25 @@ cmd_build() {
   for h in "${WORKER_HOSTS[@]}"; do
     info "rsync recipe → $h:$WORKER_DIR"
     remote_on "$h" "mkdir -p $(printf '%q' "$WORKER_DIR")"
-    if [[ "${DSV41_LAUNCHER:-}" == tp4 ]]; then
-      # rsync-tp4
-      # Anchored on purpose: an unanchored `models` also matches .../sglang/srt/models (and
-      # `engram` any engram/ package), and an excluded directory is never transferred, so the
-      # worker's copy goes stale. runtime/fetched/ is host-side staging, never built from.
-      rsync -aH --delete --exclude '.env' --exclude '.env.tp4' \
-        --exclude '/state' --exclude '/state-tp4' \
-        --exclude '/logs' --exclude '/logs-tp4' --exclude '/models' \
-        --exclude '/engram' --exclude '/runtime/fetched' \
-        -e "$(ssh_rsync_e)" \
-        "$ROOT/" "${WORKER_USER:+${WORKER_USER}@}${h}:${WORKER_DIR}/"
-      # end-rsync-tp4
-      info "docker build on $h ..."
-      remote_on "$h" --timeout "${BUILD_TIMEOUT:-0}" \
-        "docker image inspect $(printf '%q' "$BASE_IMAGE") >/dev/null || docker pull --platform linux/arm64 $(printf '%q' "$BASE_IMAGE")
-         cd $(printf '%q' "$WORKER_DIR") && docker build -f $(printf '%q' "$dockerfile") -t $(printf '%q' "$IMAGE") $build_args ."
-    else
-      # rsync-start
-      rsync -aH --delete --exclude '.env' --exclude '.env.tp4' --exclude 'state' --exclude 'state-tp4' \
-        --exclude 'logs' --exclude 'logs-tp4' --exclude 'models' \
-        --exclude 'engram' \
-        -e "$(ssh_rsync_e)" \
-        "$ROOT/" "${WORKER_USER:+${WORKER_USER}@}${h}:${WORKER_DIR}/"
-      # end-rsync-start
-      info "docker build on $h ..."
-      remote_on "$h" --timeout "${BUILD_TIMEOUT:-0}" \
-        "docker image inspect $(printf '%q' "$BASE_IMAGE") >/dev/null || docker pull --platform linux/arm64 $(printf '%q' "$BASE_IMAGE")
-         cd $(printf '%q' "$WORKER_DIR") && docker build -t $(printf '%q' "$IMAGE") ."
-    fi
+    # Anchored on purpose: an unanchored `models` also matches .../sglang/srt/models,
+    # and an excluded directory is never transferred, so the worker's copy goes stale.
+    rsync -aH --delete --exclude '.env' --exclude '.env.tp4' \
+      --exclude '/state' --exclude '/state-tp4' \
+      --exclude '/logs' --exclude '/logs-tp4' --exclude '/models' \
+      --exclude '/engram' \
+      -e "$(ssh_rsync_e)" \
+      "$ROOT/" "${WORKER_USER:+${WORKER_USER}@}${h}:${WORKER_DIR}/"
+    info "docker build on $h ..."
+    remote_on "$h" --timeout "${BUILD_TIMEOUT:-0}" \
+      "$(base_image_worker_command "$base")
+       cd $(printf '%q' "$WORKER_DIR") && docker build -f $(printf '%q' "$dockerfile") -t $(printf '%q' "$IMAGE") $BUILD_ARGS --build-arg $(printf '%q' "BASE_IMAGE=$base") --pull=false ."
   done
   info "overlay image on all 3 nodes"
 }
 
 cmd_share() {
+  # NFS_SHARE=0 means local weights on every node — sharing here would replace
+  # the local worker volumes and undo them. Idempotent so serve can call it blind.
   [[ "$NFS_SHARE" == 1 ]] || { info "NFS_SHARE=0 — keeping local worker volumes"; return 0; }
   info "=== share spark1 checkpoint over NFSv4 on ConnectX ==="
   [[ -f "$MODEL_DIR/config.json" ]] || die "no checkpoint — ./start.sh download"
@@ -779,7 +695,7 @@ cmd_share() {
       info "$h: $NFS_VOLUME has config.json"
     else
       remote_ok_on "$h" "docker image inspect $(printf '%q' "$IMAGE")" \
-        || die "Serving image $IMAGE is not on $h yet. Run the build step first (./start${DSV41_LAUNCHER:+-$DSV41_LAUNCHER}.sh build); share probes the NFS volume with that image."
+        || die "Serving image $IMAGE is not on $h yet. Run ./start.sh build first; share probes the NFS volume with that image."
       die "$h cannot see the checkpoint over NFS. Check ACL (10.0.23.0/24 for spark3) and docker logs of the nfs exporter."
     fi
     i=$((i + 1))
@@ -796,8 +712,32 @@ _busy_gpu() {
   nvidia-smi --query-compute-apps=pid --format=csv,noheader 2>/dev/null | grep -q '[0-9]'
 }
 
+_validate_d2_recovery_lock_fd() {
+  case "${D2_RECOVERY_LOCK_FD:-}" in
+    ""|9) return 0 ;;
+    *)
+      err "D2_RECOVERY_LOCK_FD must be empty or exactly 9"
+      return 64
+      ;;
+  esac
+}
+
+_start_detached_head_log_follower() {
+  # A D2 controller deliberately lets start.sh and every boot-time child inherit
+  # its recovery flock.  The post-readiness reader is the sole exception: it is
+  # read-only and intentionally outlives this launcher, so retaining descriptor 9
+  # there would retain the recovery lock forever.
+  (
+    if [[ "${D2_RECOVERY_LOCK_FD:-}" == 9 ]]; then
+      exec 9>&-
+      unset D2_RECOVERY_LOCK_FD
+    fi
+    setsid docker logs -f --since 1s "$HEAD_CTN" >>"$SERVE_LOG" 2>&1 </dev/null &
+  ) 2>/dev/null
+}
+
 cmd_serve() {
-  nccl_validate_config || die "invalid NCCL/loader configuration"
+  _validate_d2_recovery_lock_fd
   DOCTOR_STRICT=0 cmd_doctor || true
   [[ -f "$MODEL_DIR/config.json" ]] || cmd_download
   ln -sfn "$MODEL_DIR" "$COMMON_MODEL"
@@ -810,6 +750,13 @@ cmd_serve() {
     cmd_build
   fi
 
+  # Fatal here, unlike doctor: a ring that fails its preflight would die at NCCL
+  # init anyway, after replacing four containers.
+  if switchless_ring_enabled; then
+    nccl_validate_config || die "switchless ring: invalid configuration (./start.sh doctor)"
+    nccl_preflight "$HEAD_IP" >/dev/null || die "switchless ring: head preflight failed (./start.sh doctor)"
+  fi
+
   local h
   for h in "${WORKER_HOSTS[@]}"; do
     if ! remote_ok_on "$h" "docker image inspect $(printf '%q' "$IMAGE") >/dev/null 2>&1"; then
@@ -818,20 +765,28 @@ cmd_serve() {
       break
     fi
   done
-  preflight_all_nodes || die "NCCL preflight failed; see docs/switchless-ring.md"
-  if [[ "$NFS_SHARE" == 1 ]]; then
+
+  if [[ "$NFS_SHARE" == "1" ]]; then
     cmd_share
   else
-    local_model_has_weights || die "head: $MODEL_DIR is missing/incomplete; NFS_SHARE=0 requires a complete local checkpoint"
+    # Validate local weights before replacing containers: a missing shard
+    # otherwise surfaces as a load failure twenty minutes later, with four
+    # containers already down. Same reason the ring gate above is fatal.
+    local_model_has_weights \
+      || die "head: $MODEL_DIR is missing/incomplete; NFS_SHARE=0 requires a complete local checkpoint"
     for h in "${WORKER_HOSTS[@]}"; do
-      nfs_worker_has_model "$h" || die "$h: local volume $NFS_VOLUME is missing/incomplete. Provision local weights (docs/switchless-ring.md); NFS_SHARE=0 disables NFS setup."
+      nfs_worker_has_model "$h" \
+        || die "$h: local volume $NFS_VOLUME is missing/incomplete. Provision local weights (docs/switchless-ring.md); NFS_SHARE=0 disables NFS setup."
+      local_model_volume_is_local "$h" \
+        || die "$h: $NFS_VOLUME is NFS-backed (left over from an NFS_SHARE=1 run) — NFS_SHARE=0 would still read over NFS. Remove it and copy the checkpoint locally: ssh $h docker volume rm $NFS_VOLUME"
     done
+    info "weights: NFS_SHARE=0 — head reads $MODEL_DIR; workers use local volume $NFS_VOLUME"
   fi
 
   API_KEY="$(api_key)"
   export API_KEY
   if [[ -n "$API_KEY" ]]; then
-    (umask 077; printf '%s\n' "$API_KEY" > "$STATE_DIR/api-key")
+    echo "$API_KEY" > "$STATE_DIR/api-key"
     chmod 600 "$STATE_DIR/api-key"
   else
     rm -f "$STATE_DIR/api-key"
@@ -839,22 +794,17 @@ cmd_serve() {
 
   local GID_HEAD gi g
   local -a WORKER_GIDS=()
-  if [[ "$NCCL_SWITCHLESS_RING_ONLY" == 1 ]]; then
-    GID_HEAD="$RING_GID_HEAD"
-    WORKER_GIDS=("${RING_WORKER_GIDS[@]}")
-  else
-    GID_HEAD=$(gid_index_local "$HEAD_IP" 2>/dev/null || true)
-    GID_HEAD="${GID_HEAD:-${NCCL_IB_GID_INDEX:-3}}"
-    for gi in "${!WORKER_IPS[@]}"; do
-      g=$(gid_index_remote "${WORKER_HOSTS[$gi]}" "${WORKER_IPS[$gi]}" | tr -d '\r' || true)
-      WORKER_GIDS+=("${g:-${NCCL_IB_GID_INDEX:-3}}")
-    done
-  fi
+  GID_HEAD=$(gid_index_local "$HEAD_IP" 2>/dev/null || true)
+  GID_HEAD="$(resolved_gid "$GID_HEAD")"
+  for gi in "${!WORKER_IPS[@]}"; do
+    g=$(gid_index_remote "${WORKER_HOSTS[$gi]}" "${WORKER_IPS[$gi]}" | tr -d '\r' || true)
+    WORKER_GIDS+=("$(resolved_gid "$g")")
+  done
   info "RoCEv2 GID indexes: head=$GID_HEAD workers=${WORKER_GIDS[*]}"
 
   docker rm -f "$HEAD_CTN" >/dev/null 2>&1 || true
   for h in "${WORKER_HOSTS[@]}"; do
-    remote_on "$h" "docker rm -f $(printf '%q' "$WORKER_CTN") >/dev/null 2>&1 || true" || true
+    remote_on "$h" "docker rm -f $WORKER_CTN >/dev/null 2>&1 || true" || true
   done
 
   push_spec_tables
@@ -866,24 +816,24 @@ cmd_serve() {
     rank=$((idx + 1))
     remote_on "$h" "
       set -e
-      docker volume inspect $(printf '%q' "$NFS_VOLUME") >/dev/null
-      test -d /dev/infiniband
-      mkdir -p $(printf '%q' "$WORKER_DIR/state") $(printf '%q' "$WORKER_DIR/logs")
+      docker volume inspect $NFS_VOLUME >/dev/null || { echo 'MISSING docker volume $NFS_VOLUME on $h — run ./start.sh share'; exit 1; }
+      test -d /dev/infiniband || { echo 'MISSING /dev/infiniband on $h'; exit 1; }
+      mkdir -p $WORKER_DIR/state $WORKER_DIR/logs
 $(nccl_worker_settings)
       nccl_args=()
       nccl_mount_args nccl_args
-      docker run -d --name $(printf '%q' "$WORKER_CTN") \
+      docker run -d --name $WORKER_CTN \
         --network host --ipc host --privileged --cap-add IPC_LOCK --gpus all \
-        --shm-size $(printf '%q' "${SHM_SIZE:-32g}") \
+        --shm-size ${SHM_SIZE:-32g} \
         --ulimit memlock=-1:-1 --ulimit stack=67108864 \
         --device /dev/infiniband:/dev/infiniband \
-        -v $(printf '%q' "$NFS_VOLUME:/models/DeepSeek-V4.1-Flash:ro") \
-        -v $(printf '%q' "$WORKER_DIR/state:/state") \
-        -v \"\$HOME/.cache:/root/.cache\" \
+        -v $NFS_VOLUME:/models/DeepSeek-V4.1-Flash:ro \
+        -v $WORKER_DIR/state:/state \
+        -v \$HOME/.cache:/root/.cache \
         \"\${nccl_args[@]}\" \\
 $(worker_env_lines "$wip" "$wgid" "$rank")
-        -e $(printf '%q' "API_KEY=$API_KEY") \\
-        -e $(printf '%q' "EXTRA_SGLANG_ARGS=${EXTRA_SGLANG_ARGS:-}") \\
+        -e API_KEY=$(printf '%q' "$API_KEY") \\
+        -e EXTRA_SGLANG_ARGS=$(printf '%q' "${EXTRA_SGLANG_ARGS:-}") \\
         $(printf '%q' "$IMAGE") run
     "
     idx=$((idx + 1))
@@ -960,14 +910,14 @@ $(worker_env_lines "$wip" "$wgid" "$rank")
       # this terminal (the TTY follower above is what was stopped). Without this the
       # file ends at readiness and a later failure leaves no trace once the
       # container is removed.
-      ( setsid docker logs -f --since 1s "$HEAD_CTN" >>"$SERVE_LOG" 2>&1 </dev/null & ) 2>/dev/null
+      _start_detached_head_log_follower
       echo
       info "API is up on :$PORT (smoke + warm-up passed) — engine keeps running, this script is done."
       cmd_status
       echo
       echo "  curl http://$HEAD_IP:$PORT/v1/chat/completions \\"
       if [[ -n "$API_KEY" ]]; then
-        echo "    -H 'Authorization: Bearer ***' -H 'Content-Type: application/json' \\"
+        echo "    -H 'Authorization: Bearer $API_KEY' -H 'Content-Type: application/json' \\"
       else
         echo "    -H 'Content-Type: application/json' \\"
       fi
@@ -1005,11 +955,16 @@ cmd_status() {
   local h
   for h in "${WORKER_HOSTS[@]}"; do
     echo "== worker $h =="
-    remote_on "$h" "docker ps --filter $(printf '%q' "name=$WORKER_CTN") --format 'table {{.Names}}\t{{.Status}}\t{{.Image}}'" || warn "status SSH $h failed"
-    # Look inside $NFS_VOLUME, not at $COMMON_MODEL: the latter is a head-side symlink
-    # to MODEL_DIR and never exists on a worker, so the old check reported
-    # weights:MISSING on healthy workers in the NFS_SHARE=0 profile.
-    if nfs_worker_has_model "$h"; then echo "weights:OK ($NFS_VOLUME)"; else echo "weights:MISSING ($NFS_VOLUME)"; fi
+    remote_on "$h" "docker ps --filter name=$WORKER_CTN --format 'table {{.Names}}\t{{.Status}}\t{{.Image}}'" \
+      || { warn "status SSH $h failed"; continue; }
+    # Look inside $NFS_VOLUME, not at $COMMON_MODEL: the latter is a head-side
+    # symlink to MODEL_DIR and never exists on a worker, so the old check
+    # reported weights:MISSING on healthy workers in the NFS_SHARE=0 profile.
+    if nfs_worker_has_model "$h"; then
+      echo "weights:OK ($NFS_VOLUME)"
+    else
+      echo "weights:MISSING ($NFS_VOLUME)"
+    fi
     echo
   done
   echo "== API =="
@@ -1067,17 +1022,15 @@ shift || true
 cmd_pack() {
   local src
   src=$(model_src)
-  # `stop` can take the NFS exporter down with the engine; a worker's docker
-  # volume then fails to mount (`mount :/`) and the pack dies on the first
-  # worker after the head has already spent its ~10 minutes. Do what cmd_serve
-  # does: re-share when any worker cannot see the checkpoint, before packing.
-  local h need_share=0
-  for h in "${WORKER_HOSTS[@]}"; do
-    nfs_worker_has_model "$h" || need_share=1
-  done
-  if [[ "$need_share" -eq 1 ]]; then
-    info "a worker cannot see the checkpoint over NFS — running share first"
-    cmd_share
+  if [[ "$NFS_SHARE" == 1 ]]; then
+    local h need_share=0
+    for h in "${WORKER_HOSTS[@]}"; do
+      nfs_worker_has_model "$h" || need_share=1
+    done
+    if [[ "$need_share" == 1 ]]; then
+      info "a worker cannot see the checkpoint over NFS — running share first"
+      cmd_share
+    fi
   fi
   info "packing Engram shards: head $ENGRAM_DIR, workers $WORKER_ENGRAM_DIR"
   mkdir -p "$ENGRAM_DIR"
@@ -1089,7 +1042,7 @@ cmd_pack() {
     /opt/dsv41/scripts/pack_engram.py --rank 0 --tp "$TP_SIZE" --out /engram \
     || die "pack failed on head"
   local idx=1 host
-  for host in "${WORKER_IPS[@]}"; do
+  for host in "${WORKER_HOSTS[@]}"; do
     info "packing rank $idx on $host..."
     remote_on "$host" "mkdir -p $WORKER_ENGRAM_DIR && docker run --rm --network host \
       -v $NFS_VOLUME:/models/DeepSeek-V4.1-Flash:ro \
@@ -1100,7 +1053,7 @@ cmd_pack() {
       || die "pack failed on $host"
     idx=$((idx + 1))
   done
-  info "Engram shards packed on all $NNODES nodes"
+  info "Engram shards packed on all 3 nodes"
 }
 
 case "$CMD" in

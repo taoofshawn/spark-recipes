@@ -20,8 +20,10 @@ import threading
 import time
 import urllib.request
 
-REPO = 'deepseek-ai/DeepSeek-V4.1-Flash-1017'
-REVISION = '1bae0e1088993b9b82de08f59de5be5a34e42170'
+from mxfp8_mode import mxfp8_backend_disabled
+
+REPO = 'deepseek-ai/DeepSeek-V4.1-Flash'
+REVISION = 'fb2764a5cf321eaa5070ca8f9e892818f477c16d'
 MODEL = Path(os.environ.get('MODEL_PATH', '/models/DeepSeek-V4.1-Flash'))
 STATE = Path(os.environ.get('STATE_PATH', '/state'))
 PORT = int(os.environ.get('SERVER_PORT', '8888'))
@@ -259,30 +261,40 @@ def _gpu_lines():
         text=True).strip().splitlines()
 
 
-def with_fp8_gemm_backend(tokens):
-    """The MXFP8 route needs --fp8-gemm-backend flashinfer_*; without it SGLang runs the
-    dense FP8 GEMMs through its 'auto' runner (-25..-45% decode). An EXTRA_SGLANG_ARGS that
-    only adds something unrelated must not drop it, so add the flag unless the user chose one
-    or the MXFP8 route is switched off (DSV41_MXFP8_BACKEND=off)."""
-    if os.environ.get('DSV41_MXFP8_BACKEND', 'b12x').strip().lower() in ('', 'off', '0'):
-        return tokens
-    if any(t == '--fp8-gemm-backend' or t.startswith('--fp8-gemm-backend=') for t in tokens):
-        return tokens
-    print('EXTRA_SGLANG_ARGS has no --fp8-gemm-backend; adding flashinfer_cutlass '
-          '(required by the MXFP8 route)', flush=True)
-    return ['--fp8-gemm-backend', 'flashinfer_cutlass', *tokens]
+def required_sglang_args(args, backend):
+    """Keep the required dense-kernel route when users supply extra arguments."""
+    if mxfp8_backend_disabled(backend):
+        return args
+    flag = '--fp8-gemm-backend'
+    result, values = [], []
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg == flag:
+            value = args[i + 1] if i + 1 < len(args) and not args[i + 1].startswith('--') else ''
+            values.append(value)
+            i += 2 if value else 1
+        elif arg.startswith(flag + '='):
+            values.append(arg.split('=', 1)[1])
+            i += 1
+        else:
+            result.append(arg)
+            i += 1
+    effective = values[-1] if values else 'auto (omitted)'
+    if effective != 'flashinfer_cutlass':
+        print(f'WARNING: DSV41_MXFP8_BACKEND={backend} requires '
+              f'{flag} flashinfer_cutlass; effective value {effective!r} replaced', flush=True)
+    return result + [flag, 'flashinfer_cutlass']
 
 
 def sps_table_args(table, env=None):
-    """Flags for a profiled DSpark SPS cost table, or [] to stay on verify-all.
+    """Return SPS flags only when the Engram incompatibility is overridden.
 
-    A table turns on compact ragged verify, which makes the verify batch
-    non-rectangular. V4.1-Flash always has Engram layers, and their hasher
-    (srt/layers/engram.py, target-verify) asserts one equal block per request, so
-    the engine dies during CUDA-graph capture ("engram target-verify expects one
-    equal block per request, got 42 tokens for 8 requests of 6"; issues #6, #12;
-    upstream sgl-project/sglang#39173). The table is therefore ignored, with a
-    message, unless DSPARK_SPS_ALLOW_ENGRAM=1 says the engine has been fixed.
+    A profiled SPS table enables compact ragged verification. DeepSeek V4.1
+    Flash has Engram layers whose target-verify path requires one equally sized
+    block per request, so enabling the table currently crashes during CUDA graph
+    capture. Keep the safe verify-all scheduler unless a future engine fix is
+    explicitly acknowledged by the operator.
     """
     env = os.environ if env is None else env
     if not table:
@@ -293,15 +305,16 @@ def sps_table_args(table, env=None):
         return []
     if env.get('DSPARK_SPS_ALLOW_ENGRAM', '0') != '1':
         print(f'DSPARK_SPS_TABLE={table} ignored: compact ragged verify is '
-              'incompatible with the Engram layers of this model (the engine '
-              'asserts at CUDA-graph capture). Staying on the verify-all '
-              'schedule. Set DSPARK_SPS_ALLOW_ENGRAM=1 to override once '
-              'sgl-project/sglang#39173 is fixed.', flush=True)
+              'incompatible with this model\'s Engram layers and crashes at '
+              'CUDA-graph capture. Staying on the verify-all schedule. Set '
+              'DSPARK_SPS_ALLOW_ENGRAM=1 in EXTRA_CONTAINER_ENV only after the '
+              'engine path is fixed.',
+              flush=True)
         return []
-    # Fills each step's verify window up to the cuda-graph tier the forward is
-    # padded to anyway: free verification at the same cost.
-    return ['--speculative-dspark-sps-table-path', table,
-            '--speculative-dspark-align-verify-tokens-to-graph-tier']
+    return [
+        '--speculative-dspark-sps-table-path', table,
+        '--speculative-dspark-align-verify-tokens-to-graph-tier',
+    ]
 
 
 def serve():
@@ -345,7 +358,6 @@ def serve():
         '--cuda-graph-max-bs-decode', graph_bs,
         '--random-seed', '0',
         '--enable-decoder-swa-bounded-replay',
-        '--enable-cache-report',
         '--tool-call-parser', os.environ.get('TOOL_CALL_PARSER', 'deepseekv41'),
         '--reasoning-parser', os.environ.get('REASONING_PARSER', 'deepseek-v41'),
         '--host', os.environ.get('HOST', '0.0.0.0'),
@@ -356,12 +368,9 @@ def serve():
             '--speculative-algorithm', spec,
             '--speculative-dspark-block-size', os.environ.get('DSPARK_BLOCK_SIZE', '5'),
         ]
-        # The ragged-verify scheduler is where DSpark's throughput actually comes
-        # from, and it needs a profiled SPS cost table: without one the planner
-        # falls back to verify-all and the whole thing is a no-op. NOTE: on this Engram
-        # model a table crashes the engine, so sps_table_args() ignores it. Build one with
-        #   python -m sglang.benchmark.dspark_sps_profiler
-        # against a running server, then point DSPARK_SPS_TABLE at it.
+        # A profiled table would enable compact ragged verify, but the Engram
+        # target-verify path currently requires equal blocks. Keep verify-all
+        # unless a later engine fix is explicitly acknowledged.
         args += sps_table_args(os.environ.get('DSPARK_SPS_TABLE', '').strip())
         sts = os.environ.get('DSPARK_STS_TABLE', '').strip()
         if sts and Path(sts).is_file():
@@ -381,7 +390,10 @@ def serve():
     if total_tokens and total_tokens != '0':
         args += ['--max-total-tokens', total_tokens]
 
-    args += with_fp8_gemm_backend(os.environ.get('EXTRA_SGLANG_ARGS', '').split())
+    extra = os.environ.get('EXTRA_SGLANG_ARGS', '').strip()
+    if extra:
+        args += extra.split()
+    args = required_sglang_args(args, os.environ.get('DSV41_MXFP8_BACKEND', 'b12x'))
 
     save('launch.json', {
         'revision': REVISION, 'offload_mode': mode, 'args': args, 'gpus': gpu,

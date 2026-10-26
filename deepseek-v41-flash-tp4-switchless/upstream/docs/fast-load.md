@@ -110,7 +110,7 @@ and compares every slice of one real shard with the stock tensor's narrow.
 
 ## Pinned slabs (2026-09-24, booted on the fleet)
 
-The KV pool investigation found 1.1-1.9 GiB
+The KV pool investigation (`sparks/diagnostics/dsv41-kv-pool-ep1/RESULTS.md`) found 1.1-1.9 GiB
 more memory missing from the head's `MemAvailable` at pool sizing with the fast loader than with
 the stock one (3.3-3.5 GiB non-torch at EP2, 4.0 at EP1, against 1.2-2.1 GiB stock). No counter
 shows it: not shmem, not the page cache, not the CUDA cache. The suspect is driver-side
@@ -185,7 +185,7 @@ Booted on the fleet 2026-09-24 (EP1 target): 330 slabs, 0 alive after release, a
 
 Decode and prefill numbers are single sparkDash runs right after each boot and sit inside the
 run-to-run spread of the production table (the first point after a boot reads low). Raw outputs:
-[`docs/results/fastload-20260918/`](https://github.com/knapcio/DeepSeek-V4.1-Flash-4x-DGX-Spark-TP4/tree/main/docs/results/fastload-20260918) in the TP4 repository.
+`docs/results/fastload-20260918/`.
 
 ## Correctness
 
@@ -217,7 +217,7 @@ buffers are now pinned (torch's caching host allocator, returned with `_host_emp
 the engine measures). That closed most of the gap: `MemAvailable` after the draft load is
 35.1 GB against 35.9 GB for the stock loader (pool 7.27 M vs 7.75 M). The last ~0.8 GB shows up
 only as `Mapped` (file pages mapped by the scheduler process, 1.5 GB vs 0.6 GB) with the CUDA
-allocator, anonymous memory, slab and page tables identical; not chased further. The raw snapshots are in [`docs/results/fastload-20260918/`](https://github.com/knapcio/DeepSeek-V4.1-Flash-4x-DGX-Spark-TP4/tree/main/docs/results/fastload-20260918)
+allocator, anonymous memory, slab and page tables identical; not chased further. The raw snapshots are in `docs/results/fastload-20260918/`
 (`control-boot-observe*.txt`, `control-late.txt` for the stock loader; `fastload-verify-v*.txt`
 for the fast-load boots).
 
@@ -226,24 +226,3 @@ with pinned buffers on a *serving* worker it pushed the node into a state where 
 answering and the fleet went down. It now compares tensor by tensor and holds nothing, and it
 must only be run with the fleet stopped. The pinned-buffer boot ran the next morning
 (`fastload-verify-v13-pinned.txt`, control `control-boot-observe3.txt`).
-
-## Host-memory fragmentation after a load (issue #23)
-
-Two independent reports (a 2-node EXL3 pack and a 4-node FP4 pack) saw a node wedge hard after a
-model load: SSH times out while ICMP still answers, `nvidia-smi` blocks, no OOM kill, and the kernel
-log shows `NVRM: ... Out of memory [NV_ERR_NO_MEMORY] ... _memdescAllocInternal` with gigabytes
-still free. On GB10 driver allocations are unmovable host pages; after a load the order-8+ free
-blocks in `/proc/buddyinfo` zone `Normal` can be near zero, and the driver's contiguous request
-cannot be satisfied (MemAvailable stays healthy, so `scripts/verify/memguard.py`, which watches
-MemAvailable, does not fire). This is the reporters' diagnosis, not something measured on this
-repo's fleet. Their repair is one compaction after the load, as root:
-
-```bash
-awk '{t=0; for(i=13;i<=15;i++) t+=$i; s+=t} END{print "order8+ (>=1MiB):", s}' /proc/buddyinfo
-echo 1 | sudo tee /proc/sys/vm/compact_memory     # 0.04-0.06 s, no memory cost
-```
-
-Do not raise `vm.min_free_kbytes` / `vm.watermark_scale_factor` instead (reported to livelock a loaded
-box). The loader above already drops each shard's page cache when its handle closes
-(`POSIX_FADV_DONTNEED` in `adapter/fast_load.py`) and again after `load_weights`, rather than only at
-the end; whether that narrows the fragmenting window has not been measured.

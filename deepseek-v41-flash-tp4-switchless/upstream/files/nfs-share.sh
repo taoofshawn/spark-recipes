@@ -74,6 +74,24 @@ nfs_rpc_ready() {
   timeout 3 rpcinfo -t "$ip" nfs 4 >/dev/null 2>&1
 }
 
+nfs_container_export_mount() {
+  local ctn="$1"
+  docker inspect --format '{{range .Mounts}}{{if eq .Destination "/export"}}{{printf "%s\t%s\n" .Type .Source}}{{end}}{{end}}' \
+    "$ctn" 2>/dev/null | head -1
+}
+
+nfs_require_current_model_export() {
+  local ctn="$1" mount_type source expected
+  IFS=$'\t' read -r mount_type source <<<"$(nfs_container_export_mount "$ctn" || true)"
+  expected="$(_abs "$MODEL_DIR")"
+  [[ -n "$source" ]] || die "$ctn is running but has no /export bind mount; refusing to reuse it"
+  [[ "$mount_type" == "bind" ]] || die \
+    "$ctn mounts /export as $mount_type, not a host bind; refusing to reuse it"
+  source="$(_abs "$source")"
+  [[ "$source" == "$expected" ]] || die \
+    "$ctn exports $source, but MODEL_DIR resolves to $expected; refusing to change a live exporter (stop it explicitly, then rerun share)"
+}
+
 nfs_write_exports() {
   local ctn="$1" clients="$2"
   docker exec -e NFS_CLIENTS="$clients" -e NFS_OPTS="${NFS_OPTS:-ro,sync,no_subtree_check,no_root_squash,insecure,fsid=0}" \
@@ -99,17 +117,18 @@ nfs_ensure_server() {
   live="$(nfs_live_container || true)"
 
   if [[ -n "$live" ]] && nfs_rpc_ready 127.0.0.1; then
-    local export_source
-    export_source=$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/export"}}{{.Source}}{{end}}{{end}}' "$live")
-    if [[ "$export_source" == "$MODEL_DIR" ]]; then
-      NFS_REUSE_EXPORT=0
-    elif [[ "$export_source" == "$HF_EXPORT_ROOT" ]]; then
-      NFS_REUSE_EXPORT=1
-    else
-      die "NFS $live exports $export_source; expected $MODEL_DIR or $HF_EXPORT_ROOT"
+    if [[ "$live" == "$NFS_CONTAINER" ]]; then
+      # A same-named container can survive a profile/model-path change. Never
+      # silently make workers mount that stale checkpoint or replace a live server.
+      nfs_require_current_model_export "$live"
     fi
-    info "NFS already up ($live) — configuring worker clients"
+    info "NFS already up ($live) — adding spark2/spark3 CX7 clients"
     nfs_write_exports "$live" "$clients"
+    if [[ "$live" == "$NFS_CONTAINER" ]]; then
+      NFS_REUSE_EXPORT=0   # our exporter has MODEL_DIR at the NFSv4 root
+    else
+      NFS_REUSE_EXPORT=1   # HF-cache exporter needs the published subtree
+    fi
     NFS_LIVE_CTN="$live"
     return 0
   fi
@@ -173,15 +192,18 @@ nfs_ensure_worker_volume() {
   info "NFS volume $NFS_VOLUME on $host → nfs://${addr}${device}"
   remote_on "$host" "
     set -e
-    docker volume rm $(printf '%q' "$NFS_VOLUME") >/dev/null 2>&1 || true
+    docker volume rm '$NFS_VOLUME' >/dev/null 2>&1 || true
     docker volume create --driver local \
       --opt type=nfs \
-      --opt $(printf '%q' "o=addr=${addr},${NFS_OPTS_CLIENT}") \
-      --opt $(printf '%q' "device=${device}") \
-      $(printf '%q' "$NFS_VOLUME") >/dev/null
+      --opt o=addr=${addr},${NFS_OPTS_CLIENT} \
+      --opt device=${device} \
+      '$NFS_VOLUME' >/dev/null
   "
 }
 
+# Head-side complete-checkpoint test, used by the NFS_SHARE=0 profile before it
+# starts four containers. NFS_SHARE=1 does not need it: it shares whatever the
+# head has and lets the load fail loudly.
 local_model_has_weights() {
   [[ -r "$MODEL_DIR/config.json" && -s "$MODEL_DIR/config.json" ]] || return 1
   local -a shards=("$MODEL_DIR"/model-*-of-*.safetensors)
@@ -192,11 +214,26 @@ local_model_has_weights() {
   done
 }
 
+# NFS_SHARE=0 needs a *local* volume. A leftover NFS-backed volume of the same name
+# still contains config.json, so the existence probe above passes and the worker
+# quietly keeps reading over NFS — the exact thing NFS_SHARE=0 exists to avoid, and
+# it fails confusingly the moment the exporter is gone. `Driver` cannot tell the two
+# apart (both report "local"); the mount options can: a plain volume reports null,
+# an NFS one reports {"type":"nfs",...}. nfs_unmount_workers() never removes it here.
+local_model_volume_is_local() {
+  local host="$1"
+  remote_on "$host" --timeout 60 \
+    "opts=\$(docker volume inspect -f '{{json .Options}}' $(printf '%q' "$NFS_VOLUME") 2>/dev/null) || exit 1
+     case \"\$opts\" in *'\"type\":\"nfs\"'*) exit 1 ;; esac" \
+    >/dev/null 2>&1
+}
+
 nfs_worker_has_model() {
   local host="$1"
-  # Inspect first: docker run -v would create an empty volume on a typo.
+  # Inspect first: `docker run -v` would create an empty volume on a typo.
   # Use the serving image already required by serve; status must not pull an
   # unrelated mutable image, and the probe needs neither network nor GPUs.
+  # Only config.json used to be checked, so a half-copied volume passed.
   local check='test -r /m/config.json && test -s /m/config.json || exit 1
     expected=$1
     set -- /m/model-*-of-*.safetensors
@@ -214,6 +251,6 @@ nfs_worker_has_model() {
 nfs_unmount_workers() {
   local h
   for h in "${WORKER_HOSTS[@]}"; do
-    remote_on "$h" "docker volume rm $(printf '%q' "$NFS_VOLUME") >/dev/null 2>&1 || true" || true
+    remote_on "$h" "docker volume rm '$NFS_VOLUME' >/dev/null 2>&1 || true" || true
   done
 }

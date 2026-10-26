@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Sanitize textual image-placeholder tokens instead of rejecting the request.
 
-`encoding_dsv41` raises `ValueError` in two places when the literal image placeholder
-(`[image]`) appears in a message's *text*:
+`encoding_dsv41` raises `ValueError` in two places when its reserved image placeholder token
+(`IMAGE_PLACEHOLDER`, `<｜deepseek_image｜>` at the pinned revision) appears in a message's
+*text*; it is replaced with the plain text `[image]`:
 
 1. ``_validate_no_image_sp_tokens()`` -- string-form ``content`` / ``reasoning_content``.
    On the Anthropic endpoint this is the one that fires; the observed failure was HTTP 500
@@ -17,9 +18,10 @@
    content, which `/v1/chat/completions` accepts natively. Rejected with HTTP 400.
 
 Both branches become sanitize-and-warn, so such requests keep serving. The rewrite is in
-place on a ``copy.deepcopy``'d message (``process_image_messages`` copies before validating),
-so it cannot leak into the caller's dict or a cache key. Real image content blocks are
-untouched.
+place on a ``copy.deepcopy``'d message: the SGLang #44751 adaptation copies context and
+messages before its early validation, while the older layout copied inside
+``process_image_messages``. It therefore cannot leak into the caller's dict or a cache key.
+Real image content blocks are untouched.
 
 Idempotent, per anchor. Exits non-zero if an anchor no longer matches, so a base-image change
 cannot silently drop the fix. Optionally takes the target path as argv[1].
@@ -101,38 +103,31 @@ def ensure_logger(src: str) -> str:
     return src[:at] + "\n" + LOGGER_BOOTSTRAP + src[at:]
 
 
-def patch_text_block(src: str) -> tuple:
-    """Anchor 2: replace the raise in the `type == "text"` branch with a sanitize.
+OLD2 = """                raise ValueError(
+                    f"Text block contains image placeholder '{IMAGE_PLACEHOLDER}': "
+                    f"'{text[:100]}'. Images should be separate content blocks."
+                )
+"""
+NEW2 = """                logger.warning(
+                    "encoding_dsv41: sanitizing image placeholder token in a text block "
+                    "(upstream would raise) # [encoding_dsv41-placeholder-sanitize]"
+                )
+                block = dict(block)
+                block["text"] = text.replace(IMAGE_PLACEHOLDER, "[image]")
+"""
 
-    The raise is the last statement of that branch, so the branch still falls through to
-    `new_blocks.append(block)` with the sanitized copy.
-    """
-    lines = src.splitlines(keepends=True)
-    hit = next((i for i, ln in enumerate(lines) if RAISE2 in ln), None)
-    if hit is None:
+
+def patch_text_block(src: str) -> tuple:
+    """Require the complete pinned raise block, including indentation."""
+    if src.count(OLD2) != 1:
         return src, False
-    start = hit
-    while start >= 0 and lines[start].strip() != "raise ValueError(":
-        start -= 1
-    end = hit
-    while end < len(lines) and lines[end].strip() != ")":
-        end += 1
-    if start < 0 or end >= len(lines):
-        raise SystemExit("anchor 2: could not bracket the raise block")
-    ind = lines[start][: len(lines[start]) - len(lines[start].lstrip())]
-    new = [
-        ind + "logger.warning(\n",
-        ind + "    \"encoding_dsv41: sanitizing image placeholder token in a text block \"\n",
-        ind + "    \"(upstream would raise) # [encoding_dsv41-placeholder-sanitize]\"\n",
-        ind + ")\n",
-        ind + "block = dict(block)\n",
-        ind + "block[\"text\"] = text.replace(IMAGE_PLACEHOLDER, \"[image]\")\n",
-    ]
-    return "".join(lines[:start] + new + lines[end + 1:]), True
+    return src.replace(OLD2, NEW2), True
 
 
 def verify(src: str) -> list:
     problems = []
+    if src.count(NEW1) != 1 or src.count(NEW2) != 1:
+        problems.append("complete sanitize anchors do not match; re-derive the patch")
     if RAISE1 in src:
         problems.append("anchor 1 still raises")
     if RAISE2 in src:
@@ -157,9 +152,6 @@ def main() -> int:
     changed = []
     src = ensure_logger(src)
     did1, did2 = SENT1 in src, SENT2 in src
-    if did1 and did2:
-        print("already patched: %s" % target)
-        return 0
     if not did1:
         if src.count(OLD1) != 1:
             print("ERROR: expected exactly 1 match for anchor 1, found %d -- re-derive the patch"

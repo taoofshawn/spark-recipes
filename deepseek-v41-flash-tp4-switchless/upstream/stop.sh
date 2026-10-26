@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
-# stop.sh — tear down DeepSeek-V4.1-Flash SGLang on all 3 Sparks.
+# stop.sh — tear down DeepSeek-V4.1-Flash SGLang on the head and every worker.
 #
 # Stops:
 #   - dsv41-head on spark1 (rank 0 + API :8888)
-#   - dsv41-worker on spark2 and spark3
+#   - dsv41-worker on each WORKER_HOSTS node
 #   - log-tail helper
 #   - leftover sglang.launch_server in those containers
 #
 # Keeps:
 #   - checkpoint on spark1
 #   - overlay image dsv41-3x-spark:local
-#   - shared NFSv4 exporter (vllm-fn-nfs) — Qwen/GLM still use it
+#   - shared NFSv4 exporter (dsv41-nfs, or a reused vllm-fn-nfs/glm53-nfs)
 #   - docker volume dsv41-weights unless you pass --unmount
 #
 # Usage:
-#   ./stop.sh              stop serve on all 3 nodes
+#   ./stop.sh              stop serve on every node
 #   ./stop.sh --unmount    also drop worker NFS volumes (weights stay on spark1)
 #   ./start.sh stop        same
 #
@@ -67,7 +67,7 @@ else
     WORKER_HOSTS+=("${!_v:-${WORKER_IPS[$_i]}}")
   done
 fi
-WORKER_USER="${WORKER_USER-zurih}"   # "" lets ~/.ssh/config pick each worker's user (as start.sh)
+WORKER_USER="${WORKER_USER-zurih}"   # "" lets ~/.ssh/config choose per-host users
 SSH_IDENTITY="$(_abs "${SSH_IDENTITY:-$HOME/.ssh/id_ed25519_shared}")"
 NFS_VOLUME="${NFS_VOLUME:-dsv41-weights}"
 IMAGE="${IMAGE:-dsv41-3x-spark:local}"
@@ -107,7 +107,7 @@ _stop_sglang_in() {
   ' 2>/dev/null || true
 }
 
-info "=== stop DeepSeek-V4.1-Flash (3× Spark SGLang) ==="
+info "=== stop DeepSeek-V4.1-Flash ($(( ${#WORKER_HOSTS[@]} + 1 ))× Spark SGLang) ==="
 
 if [[ -f "$LOG_DIR/logtail.pid" ]]; then
   kill "$(cat "$LOG_DIR/logtail.pid")" 2>/dev/null || true
@@ -118,8 +118,12 @@ pkill -f "docker logs -f ${HEAD_CTN}" >/dev/null 2>&1 || true
 info "head: SIGTERM sglang in $HEAD_CTN, then remove"
 _stop_sglang_in "$HEAD_CTN"
 _rm_ctn "$HEAD_CTN"
-# anything else this recipe named
-ids=$(docker ps -aq --filter "name=dsv41-" 2>/dev/null || true)
+# Anything else this recipe named, except the shared NFS exporter.  The
+# exporter is deliberately kept across serving restarts; killing dsv41-nfs
+# here makes the worker volumes unavailable and turns the next `share` into a
+# slow/stuck exporter teardown.
+ids=$(docker ps -a --filter "name=dsv41-" --format '{{.ID}} {{.Names}}' 2>/dev/null \
+  | awk '$2 != "dsv41-nfs" { print $1 }' || true)
 if [[ -n "$ids" ]]; then
   # shellcheck disable=SC2086
   timeout "$RM_TIMEOUT" docker rm -f $ids >/dev/null 2>&1 || true
@@ -136,7 +140,8 @@ for h in "${WORKER_HOSTS[@]}"; do
       ' 2>/dev/null || true
     fi
     timeout ${RM_TIMEOUT} docker rm -f $(printf '%q' "$WORKER_CTN") >/dev/null 2>&1 || docker rm -f $(printf '%q' "$WORKER_CTN") >/dev/null 2>&1 || true
-    ids=\$(docker ps -aq --filter name=dsv41- 2>/dev/null || true)
+    ids=\$(docker ps -a --filter name=dsv41- --format '{{.ID}} {{.Names}}' 2>/dev/null \
+      | awk '\$2 != \"dsv41-nfs\" { print \$1 }' || true)
     [ -n \"\$ids\" ] && docker rm -f \$ids >/dev/null 2>&1 || true
     echo STOPPED_$h
   " 2>/dev/null | grep -q "STOPPED_$h"; then
@@ -158,13 +163,17 @@ else
   info "API down on :${PORT}"
 fi
 
-left=$(docker ps --format '{{.Names}}' 2>/dev/null | grep -E '^dsv41-' || true)
+# the shared exporter is kept on purpose (above), so it is not "still running"
+left=$(docker ps --format '{{.Names}}' 2>/dev/null | grep -E '^dsv41-' | grep -vx 'dsv41-nfs' || true)
 if [[ -n "$left" ]]; then
   warn "still running on head: $left"
 else
-  info "no dsv41-* containers on head"
+  info "no dsv41-* serving containers on head"
 fi
 
-info "kept: spark1 weights, $IMAGE overlay, vllm-fn-nfs exporter"
+nfs=$(docker ps --format '{{.Names}}' 2>/dev/null | grep -E '^(vllm-fn-nfs|glm53-nfs|dsv41-nfs)$' | head -1 || true)
+kept="kept: spark1 weights, $IMAGE overlay"
+[[ -z "$nfs" ]] || kept+=", shared NFS exporter ($nfs)"
+info "$kept"
 [[ "$UNMOUNT" == "1" ]] || info "worker NFS volume $NFS_VOLUME kept (./stop.sh --unmount to drop it)"
 info "start again with: ./start.sh"

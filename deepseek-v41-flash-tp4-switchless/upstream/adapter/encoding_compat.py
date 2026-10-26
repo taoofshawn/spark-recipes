@@ -16,14 +16,19 @@ not install a server cap either — vLLM does the same fill — but every smoke 
 README example there sends ``max_tokens``. This adapter fills *and* clamps at
 ``DSV41_MAX_NEW_TOKENS`` (default 32768; 0 restores the uncapped engine behaviour).
 """
+import hashlib
+import inspect
 import logging
 import os
+import textwrap
 
 logger = logging.getLogger(__name__)
 
 # Publisher encoding/encoding.py REASONING_EFFORT_MAPPINGS, plus SGLang's xhigh alias.
 PUBLISHER_REASONING_EFFORT = {'low': 50, 'high': 75, 'xhigh': 75, 'max': 100}
 DEFAULT_MAX_NEW_TOKENS = 32768
+# Staged SGLang AnthropicThinkingParam._validate_thinking_shape, dedented inspect source.
+ANTHROPIC_THINKING_SHAPE_SHA256 = 'a94a9e59de88daa15d7ff86ea1b3c616d3b1b550ca90a5203c21b0aed363740e'
 # Thinking-mode completion floor. A thinking request that asks for a small
 # max_tokens spends the whole budget inside the reasoning segment and returns
 # no answer at all (observed tool-eval-bench MMLU: 50/500 questions truncated at
@@ -228,14 +233,24 @@ def install_anthropic_protocol(module):
     entry = validators.get('_validate_thinking_shape')
     if entry is None:
         logger.warning('DSV41 Anthropic thinking: AnthropicThinkingParam shape check not found; unchanged')
-        return
+        return False
+    if getattr(entry.func, '_dsv41_optional_budget', False):
+        return False
     original = entry.func
+    try:
+        source = textwrap.dedent(inspect.getsource(original))
+        if hashlib.sha256(source.encode()).hexdigest() != ANTHROPIC_THINKING_SHAPE_SHA256:
+            raise ValueError('AnthropicThinkingParam._validate_thinking_shape source drift')
+    except (TypeError, OSError, ValueError) as exc:
+        logger.warning('DSV41 Anthropic thinking: refusing to patch; %s; unchanged', exc)
+        return False
 
     def _validate_thinking_shape(self):
         if self.type == 'enabled' and self.budget_tokens is None:
             return self
         return original(self)
 
+    _validate_thinking_shape._dsv41_optional_budget = True
     entry.func = _validate_thinking_shape
     cls.model_rebuild(force=True)
     for name in ('AnthropicMessagesRequest', 'AnthropicCountTokensRequest'):
@@ -244,3 +259,4 @@ def install_anthropic_protocol(module):
             model.model_rebuild(force=True)
     logger.warning('DSV41 Anthropic thinking: "enabled" is accepted without budget_tokens '
                    '(effort comes from output_config.effort; budgets are not enforced)')
+    return True

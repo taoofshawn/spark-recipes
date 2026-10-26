@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# start-cluster.sh — site wrapper for the MiaAI TP4 switchless launcher.
+# start-cluster.sh — site wrapper for the knapcio TP4 launcher.
 #
 # Renders the site env into the vendored launcher's .env.tp4-switchless on the head
-# node and execs ./start-tp4-switchless.sh with the requested command (doctor | build |
-# pack | serve | stop | status | logs | smoke). Run FROM THE HEAD NODE — the launcher
-# SSHes to the workers itself and the workstation has no python3 remote helper.
+# node and execs ./start.sh with the requested command (doctor | build | pack | serve |
+# stop | status | logs | smoke). Run FROM THE HEAD NODE — the launcher SSHes to the
+# workers itself and the workstation has no python3 remote helper.
 #
 # Layout on the head:
 #   ~/.local/ds41f-miaai/stack/   vendored upstream tree (rsynced from the repo clone)
@@ -29,13 +29,14 @@ envsubst '$HOME' < "$SRC_ENV" > "$ENV_OUT.tmp" 2>/dev/null || sed "s|\$HOME|$HOM
 mv "$ENV_OUT.tmp" "$ENV_OUT"
 # The vendored tree ships 0644 scripts and every stack re-sync (rsync/tar/git-archive)
 # restores those modes; make the launcher chain executable on every run.
-chmod +x "$STACK/start.sh" "$STACK/start-tp4.sh" "$STACK/start-tp4-switchless.sh" \
-  "$STACK/stop.sh" 2>/dev/null || true
+chmod +x "$STACK/start.sh" "$STACK/start-tp4.sh" "$STACK/stop.sh" 2>/dev/null || true
 export ENV_FILE="$ENV_OUT"
 
-# 3. Exec the launcher's switchless profile.
+# 3. Exec the launcher. The knapcio stack has no start-tp4-switchless.sh profile file —
+# the switchless ring is env-driven (NCCL_SWITCHLESS_RING_ONLY=1 + ring block in the
+# rendered env) and ENV_FILE is exported above, so start.sh IS the switchless profile.
 cd "$STACK"
 # exec via bash, not ./ — the vendored tree ships 0644 scripts, so a stack re-sync
 # from the repo (which also ships 0644) would otherwise lose the exec bit and die
 # here with "Permission denied" (hit 2026-10-22 after a tar re-sync of the stack).
-exec bash ./start-tp4-switchless.sh "$@"
+exec bash ./start.sh "$@"

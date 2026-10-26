@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 # materialize-miaai-weights.sh — materialize the DeepSeek-V4.1-Flash-1017 checkpoint as a
-# real-file directory for the MiaAI lane (NFS_SHARE=0 local weights).
+# real-file directory for the deepseek lane (NFS_SHARE=0 local weights; "miaai" in the name
+# is historical — the file name and the ds41f-miaai node paths outlived the 2026-10-26
+# vehicle swap to the knapcio stack, since renaming would force re-materialization +
+# docker-volume recreation).
 #
-# Why: MiaAI's launcher mounts MODEL_DIR directly on the head and binds a docker volume
+# Why: the launcher mounts MODEL_DIR directly on the head and binds a docker volume
 # (NFS_VOLUME=dsv41-local-weights → $HOME/.local/ds41f-miaai/weights/deepseek-v41-flash-1017)
 # on each worker. HF snapshots use relative symlinks into blobs/, which break inside a
 # container bind mount — the same reason the NVFP4 lane materializes (site/materialize-

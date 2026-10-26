@@ -5,22 +5,37 @@
   "source_path": "runtime/glm53-spark-mtp3-mesh/performance/transport/bundle-source/b12x_overlay/b12x/comm/roce",
   "source_license": "Apache-2.0 (runtime/b12x/LICENSE); derived from local-inference-lab/b12x PR 295 (RoCEnante)",
   "sparkring_recorded_b12x_commit": "eac260a8257cc6b14e7d4ad674f51e9a09b8790f",
+  "ported_fixes": [
+    {
+      "commit": "2d83bb60402fc2de5708ddcf3f962a007772600f",
+      "summary": "atomic proxy diagnostic counters"
+    },
+    {
+      "commit": "e4d092181007f9a1060b9c172804b37f37c782f3",
+      "summary": "memory-scope and polling contract clarification"
+    },
+    {
+      "commit": "f91b5c87ef2352014b8724388ab26c6ad441a0e1",
+      "summary": "timeout detection across uint32 sequence wrap"
+    }
+  ],
   "source_files_sha256": {
-    "__init__.py": "d1eabaa9395bbdc568d503c79cc1a57ab74626feed0c67851a00be0ba2718a7e",
-    "_allgather_cute.py": "e26ab2e7cce1cff334452ea237b1c0db8ab11ecba8e0a933f5cad35075a37f0f",
-    "_cute_intrinsics.py": "ff0847d986243bf92444cd4c3db9156a6fc10d8c2e1a16d54761375e6aa7a78e",
-    "_oneshot_cute.py": "1dd563020d15e50c7b391aac8bbee2e2760e66ced1bb891de7e59da5cc477173",
-    "_path_config.py": "7c5550b16a70d74216970cd08a8d969a9928a975d1efcb9fb70e247eb0322e3a",
-    "_proxy.py": "3ace33c00f64ce43317a00b19879bbc6562bb3e466aa94683ed95ce211ec25c0",
-    "_roce_proxy.c": "b208f07d4bb12613a6aef3e8e59ac334b53028655b76f3f5c6e531bd354b369e",
-    "api.py": "02becd3757e71c917a71e98ab3f779d52bb18e6801b8efebd792ab186277ea46",
-    "roce_oneshot.py": "2e431e7c5ef714636247b81602fdc1b85b38ebe1cef7665bc8d486f7841a65e1"
+    "__init__.py": "ccaf305d9b45bb8a9acc472d980400435a6a306e202148a7889c5a46af74fd99",
+    "_allgather_cute.py": "9b3abaea3468b0298fcff68e65c51c47a100c6f4c08d81024c9c40f811e44de9",
+    "_cute_intrinsics.py": "0d3460b81d77926bbcfdc1ef75e759640b98d7ed3653eaf52bb8a4202e8e271d",
+    "_oneshot_cute.py": "7c897a582c38b1aa2e0ab2eeb96df4e98eb6353062e3c26985e567a7eeca1bde",
+    "_path_config.py": "73e1ab9194d44a73254214ac16f6b9ae672fcfaa1df7a19b1be5b45fb076b756",
+    "_proxy.py": "1fe847d0074bea58a3fe59c13e60a174eb40a7814ee81aea5aa9c0c1a7b16262",
+    "_roce_proxy.c": "6942354e2c185ba9c99d7dbb69fdc0599590ccf99c9abb1d37d08542aeba5572",
+    "api.py": "7432f699b670b65414c1f3e727061d6739c983a4921c283b7d8c2652547effd9",
+    "roce_oneshot.py": "7cb8410230f10f06bb62426cb10495e583e6f935c52d927711f914c92c000d72"
   },
   "modifications": [
     "package renamed roce -> roce_ring: OpMeta name, the two CuTe kernel ids (comm.roce_ring.oneshot / .allgather), the default proxy cache subdirectory (b12x/roce_ring) and two messages, so a shared B12X_COMPILE_CACHE_DIR never hands one package the other's compiled kernels (proxy builds are keyed by source hash)",
     "_path_config.py: B12X_ROCE_PEER_HCA_MAPS (four ';'-separated peer maps selected by rank) so one launcher env line serves every rank; B12X_ROCE_PEER_HCA_MAP still wins when set",
     "_roce_proxy.c: ROCE_IDLE_SPINS 200000 -> 20000000 (the value of the SG17 proxy in runtime/b12x); at 200000 the proxy napped between the decode step's collectives",
+    "ported the maintained sparkring timeout-wrap, atomic diagnostic-counter, and memory-scope/polling fixes without replacing the measured path-routing base",
     "line endings normalized to LF"
   ],
-  "source_note": "sparkring keeps two copies of this package; this is the frozen release copy (bundle-source, last changed 2026-09-06), which is what was measured. The maintained third_party/b12x_roce copy has three later fixes not included here: timeout detection across sequence wrap (f91b5c8), atomic proxy counters (2d83bb6), memory-scope and polling fixes (e4d0921)."
+  "source_note": "The measured path-routing base remains sparkring's frozen release copy (bundle-source, last changed 2026-09-06). Three bounded fixes from the maintained third_party/b12x_roce copy are now ported and recorded above; no later transport feature or scheduling change is included."
 }

@@ -9,6 +9,11 @@ import sys
 import pexpect
 
 
+def ssh_destination(host: str, user: str) -> str:
+    """Let an empty user delegate identity selection to ~/.ssh/config."""
+    return f"{user}@{host}" if user else host
+
+
 def load_dotenv(path: str) -> None:
     if not os.path.isfile(path):
         return
@@ -18,21 +23,24 @@ def load_dotenv(path: str) -> None:
             if not line or line.startswith("#") or "=" not in line:
                 continue
             k, v = line.split("=", 1)
-            v = v.strip().strip('"').strip("'")
-            v = os.path.expandvars(v)
+            v = v.strip()
+            if len(v) >= 2 and v[0] == v[-1] == "'":
+                v = v[1:-1]
+            else:
+                if len(v) >= 2 and v[0] == v[-1] == '"':
+                    v = v[1:-1]
+                v = os.path.expandvars(v)
             os.environ.setdefault(k.strip(), v)
 
 
 def env_file_from_argv(argv: list[str]) -> str:
-    """Return the --env-file value from argv (both "--env-file X" and
-    "--env-file=X" forms) so the file can be loaded before argument
-    defaults are evaluated. Empty string when absent."""
-    for i, a in enumerate(argv):
-        if a == "--env-file" and i + 1 < len(argv):
+    """Read the env file before argparse captures environment-based defaults."""
+    for i, arg in enumerate(argv):
+        if arg == '--env-file' and i + 1 < len(argv):
             return argv[i + 1]
-        if a.startswith("--env-file="):
-            return a.split("=", 1)[1]
-    return ""
+        if arg.startswith('--env-file='):
+            return arg.split('=', 1)[1]
+    return ''
 
 
 def ssh_cmd(
@@ -43,8 +51,8 @@ def ssh_cmd(
     identity: str | None,
     timeout: int,
 ) -> int:
-    dest = f"{user}@{host}" if user else host  # empty user: ~/.ssh/config picks it
     identity = os.path.expandvars(os.path.expanduser(identity or ""))
+    dest = ssh_destination(host, user)
     base = [
         "ssh",
         "-o",
@@ -143,11 +151,7 @@ def ssh_cmd(
 
 
 def main() -> int:
-    # Load the env file BEFORE the parser captures os.environ-based defaults,
-    # so SSH_IDENTITY / WORKER_HOST / WORKER_USER / REMOTE_TIMEOUT from .env
-    # take effect (previously they were only honored if exported in the shell).
     load_dotenv(env_file_from_argv(sys.argv))
-
     ap = argparse.ArgumentParser()
     ap.add_argument("--env-file", default="")
     ap.add_argument("--host", default=os.environ.get("WORKER_HOST", "10.0.0.2"))

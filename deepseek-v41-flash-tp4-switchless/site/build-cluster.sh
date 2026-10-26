@@ -7,9 +7,11 @@
 # are ~/dsv41-miaai instead), and its `--delete` is destructive there: on 2026-10-23 it
 # removed ~/.local/ds41f-miaai/weights on spark-6d14, which is the bind source of the
 # dsv41-local-weights volume — the volume stopped mounting until the weights were
-# re-materialized (research.md, 2026-10-23 deploy gotchas). This wrapper never rsyncs;
-# it streams `git archive` of the checked-out commit into each build tree (LF-safe,
-# keeps the gitignored state/logs/benchmarks), the same re-sync the head stack uses.
+# re-materialized (research.md, 2026-10-23 deploy gotchas). This wrapper never rsyncs the
+# repo tree; it streams `git archive` of the checked-out commit into each build tree (LF-safe,
+# keeps the gitignored state/logs/benchmarks), the same re-sync the head stack uses. The ONE
+# rsync is the gitignored staged SGLang canary tree (head → workers; step 2b), which cannot
+# ride the archive.
 #
 # Run FROM THE HEAD NODE, in a repo clone checked out at the commit to ship:
 #   bash site/build-cluster.sh [commit-ish]      # default HEAD
@@ -100,6 +102,18 @@ STACK_SHA="$(sha256sum "$STACK/adapter/encoding_compat.py" | cut -d' ' -f1)"
 [[ "$STACK_SHA" == "$REPO_SHA" ]] || fatal "stack re-sync mismatch ($STACK_SHA)"
 echo "=== head stack re-synced to $(head_info)"
 
+# 2b. Stage the pinned SGLang canary tree. runtime/sglang-canary/ is gitignored in the
+# vendored repo (staged by scripts/fetch-sglang-canary.sh) and therefore absent from the
+# archive extract, but Dockerfile.canary-roce COPYs it — the build fails without it.
+# Fetch it into the head stack (pinned refs, deterministic), then rsync to every worker
+# build tree: workers never talk to github directly, mirroring the upstream launcher's
+# own build shape (head stages, workers get the copy).
+if [[ ! -d "$STACK/runtime/sglang-canary/python" ]]; then
+  echo "=== staging SGLang canary tree (pinned refs) in the head stack"
+  (cd "$STACK" && bash scripts/fetch-sglang-canary.sh) || fatal "fetch-sglang-canary failed on the head"
+fi
+[[ -d "$STACK/runtime/sglang-canary/python" ]] || fatal "no staged runtime/sglang-canary/python under $STACK"
+
 build_one local "$STACK"
 
 # 3. Workers: stream the same archive into each worker build tree and build there.
@@ -110,6 +124,11 @@ for h in ${WORKER_HOSTS:-}; do
   got="$(ssh -o BatchMode=yes "${WORKER_USER:+${WORKER_USER}@}$h" \
     "sha256sum $WORKER_TREE/adapter/encoding_compat.py" | cut -d' ' -f1)"
   [[ "$got" == "$REPO_SHA" ]] || fatal "worker tree re-sync mismatch on $h ($got)"
+  # Ship the staged canary tree (see 2b); --delete keeps the worker copy bit-identical.
+  rsync -aH --delete -e "ssh -o BatchMode=yes" \
+    "$STACK/runtime/sglang-canary/" \
+    "${WORKER_USER:+${WORKER_USER}@}$h:$WORKER_TREE/runtime/sglang-canary/" \
+    || fatal "canary tree rsync failed on $h"
   build_one "$h" "$WORKER_TREE"
 done
 

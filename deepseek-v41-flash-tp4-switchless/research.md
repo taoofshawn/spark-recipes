@@ -155,6 +155,74 @@ packed shards, profiler-estimate off.
 
 ## Changelog
 
+### 2026-10-26 — vehicle swap: MiaAI-Lab stack → knapcio stack (`aff52fa`)
+- **Decision (owner go-ahead):** adopt
+  `github.com/knapcio/DeepSeek-V4.1-Flash-4x-DGX-Spark-TP4` @ `aff52fa` (2026-10-24 tip)
+  as the serving stack. Drivers: (a) the 2026-10-25/26 retention investigation ended with
+  the DSV4 compressor-state ring as the root cause of agent-turn re-prefills — a
+  stack-level design gap neither stack fixes, but knapcio's tree carries ~24 more
+  credited SGLang backports than the MiaAI pin (`64b02dea`, 2026-10-17, idle since);
+  (b) his production profile is re-qualified on THIS checkpoint (1017, 2026-10-22:
+  issue-16 reproducer 1,445 requests / 0 failures) on the same 4x Spark topology;
+  (c) his upstream is materially more active; (d) the survey earlier this morning found
+  no better dsv41f-1017 switchless candidate.
+- **Same pins where it matters:** SGLang canary ref `f80c91a4b` is IDENTICAL to the
+  MiaAI pin (the #35515 patch ports verbatim — 3/3 anchors verified against a freshly
+  staged tree, and his fetch pipeline's extra backports did not drift the anchors);
+  base image digest `sha256:3dbc3130…` unchanged; same checkpoint, same four-PF NCCL
+  contract, same node paths (`~/.local/ds41f-miaai/...` kept — renaming would force
+  weight re-materialization + docker-volume recreation for no operational gain).
+- **Fix disposition (owner requirement: retest, re-apply if needed, drop if not):**
+  - **Image placeholder sanitize — his natively.** knapcio ships his own
+    `runtime/patch_encoding_dsv41.py` (same sanitize-and-warn semantics, stricter
+    whole-block anchors + completeness self-checks) and runs it in `Dockerfile.canary-roce`.
+    Our MiaAI-tree variant NOT carried; verified applying cleanly to the staged tree.
+  - **Thinking floor (`DSV41_MAX_NEW_TOKENS_FLOOR=16384`) — re-applied.** Ported the four
+    blocks into his `adapter/encoding_compat.py` (his tree has the same
+    `configured_max_new_tokens` anchor), added the `-e` line to both container env blocks
+    in `start.sh`, and the knob rows to both `.env*example` files. His `tests/test_max_new_tokens.py`
+    replaced with our superset — 20/20 pass against the ported adapter, and his
+    Dockerfile runs this file at build so the explicit-only gate is enforced in-image.
+  - **SGLANG_DEFAULT_THINKING explicit-kwarg injection — re-applied** (his tree lacks it;
+    without it a default-on request leaks the think block into `content` unsplit,
+    verified live 2026-10-23).
+  - **#35515 SWA tail-eviction backport — re-applied** (absent from his tree;
+    `runtime/patch_swa_tail_eviction.py` copied + wired after his sanitize step in
+    `Dockerfile.canary-roce`; anchor-checked at build).
+  - **His adapter suites re-run against the ported adapter:** `test_thinking_alias`,
+    `test_chat_encoding`, `test_anthropic_thinking`, `test_loop_abort` all pass —
+    the port did not regress his adapter behavior. (His `install_anthropic_protocol`
+    keeps his SHA-verified staging; ours was not carried.)
+- **Site integration changes (all in `site/`):**
+  - `env.switchless`: header/pin updated; `EXTRA_CONTAINER_ENV` extended with his
+    production-profile lever set verbatim (`SGLANG_DSPARK_FOLDED_SAMPLING=2`,
+    `DSV41_ENGRAM_PREFETCH/WO_A_W8(+MID/DROP)/DRAFT_TAU/DRAFT_HEAD_FP8/BLOCK_VERIFY/
+    FOLDED_FENCE/VERIFY_CAP/AUTOTUNE_KEEP`) — his `-e` whitelist is NARROWER than the
+    MiaAI launcher's, so those plain-key lines would have silently never reached the
+    containers. `DSV41_PREFILL_EMPTY_CACHE_TOKENS` stays a plain line: it matches the
+    in-image adapter default (8192), delivery unnecessary. RoCEnante all-reduce +
+    `SPARK_PREFILL_TP_SPLIT` stay OFF (ring has no all-to-all RDMA path — profile
+    default). Image tag → `dsv41-4x-spark:canary-roce-knapcio`.
+  - `start-cluster.sh`: execs `./start.sh` (his stack has NO `start-tp4-switchless.sh`
+    profile file — the ring is env-driven; the rendered `.env.tp4-switchless` + exported
+    `ENV_FILE` make start.sh the switchless profile).
+  - `build-cluster.sh`: stages the gitignored `runtime/sglang-canary/` tree (his
+    Dockerfile COPYs it; `git archive` cannot carry it) — fetch on the head stack,
+    rsync head→worker build trees; `BUILD_ARGS` now pins the base digest (his
+    `ARG BASE_IMAGE` defaults to the mutable tag).
+  - `build-engram-packed.sh` DELETED — replaced by the launcher's own `pack` command
+    (wraps `scripts/pack_engram.py`, env-driven, idempotent per layer: complete shards
+    skipped, incomplete rebuilt; the on-disk MiaAI-packed shards converge on first pack).
+- **NOT done here (bring-up window work):** image rebuild on the nodes
+  (`site/build-cluster.sh`), `start-cluster.sh pack` convergence, `doctor` + serve +
+  gates, and the A→B retention harness re-run (identical-prefix pairs after idle gaps
+  AND after ~480K churn — the swap must NOT be declared a retention win until the
+  churn case reads nonzero; the compressor-state ring root cause predicts the
+  agent-turn shape STILL re-prefills on this stack too). The `--swa-full-tokens-ratio
+  0.3` boot delta and c4 gate carry over unchanged in `EXTRA_SGLANG_ARGS`.
+- **Rollback:** `upstream-miaai-archive/` (tree), the `canary-roce-miaai` image on the
+  nodes, and the pre-swap site env from git history.
+
 ### 2026-10-26 (later) — radix-retention fix adopted from upstream: sgl-project/sglang#35515 backported into the canary build
 - **Upstream survey (preference: adopt, don't invent).**
   - MiaAI-Lab/DeepSeek-v4.1-Flash-DGX-Sparks: no commits since the vendored pin

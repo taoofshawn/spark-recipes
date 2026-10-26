@@ -6,7 +6,8 @@
 HEAD W1 W2 W3 are SSH names of the four Sparks in tensor-parallel rank order (the head, then
 WORKER_HOSTS). Each is inventoried over SSH with inventory.sh; the cabling is read from the
 fabric subnets (each DAC is its own /24), the ring is numbered the way sparkring's planner
-requires (physical port f0 clockwise), and FujitsuPolycom/sparkring's own planner
+requires (physical port f0 clockwise; --reversed HOST for a node cabled the other way round,
+see below), and FujitsuPolycom/sparkring's own planner
 (spark_transport/fabric/cx7_hairpin_diagonal/fabric.py, tested at f16b5f4) builds the RoCEnante
 selection: per rank two /32 routes to the opposite node via a neighbour, two hardware-only tc
 redirect rules for the traffic it forwards, and two source markers. Writes into --out:
@@ -16,6 +17,12 @@ redirect rules for the traffic it forwards, and two source markers. Writes into 
     mesh-down-<host>.sh        removes exactly what mesh-up created
     env.txt                    the EXTRA_CONTAINER_ENV additions, with the per-rank peer maps
                                translated from sparkring's ring numbering to the TP rank order
+
+--reversed HOST (repeatable, one of the four hosts) swaps that node's ring roles in software: its
+f1 ports carry the clockwise direction and its f0 ports the counter-clockwise one, so a ring with
+one node's two plugs swapped needs no recabling. Function f stays function f (same PCIe domain).
+b12x roce_ring's proxy checks for the canonical map (f0 clockwise on every rank) only with
+B12X_ROCE_OPPOSITE_PATHS=4 or a B12X_ROCE_WAVE_MODE other than two: leave both unset with it.
 
 Nothing on the hosts is changed. See docs/switchless-ring.md for installation.
 """
@@ -36,6 +43,7 @@ PORTS = {
     ("counter_clockwise", 0): "enp1s0f1np1",
     ("counter_clockwise", 1): "enP2p1s0f1np1",
 }
+FLIP = {"clockwise": "counter_clockwise", "counter_clockwise": "clockwise"}
 HCAS = ("rocep1s0f0", "rocep1s0f1", "roceP2p1s0f0", "roceP2p1s0f1")  # B12X_ROCE_HCA order
 
 
@@ -69,8 +77,14 @@ def _gid_tail(cidr):
     return f"{int(a):02x}{int(b):02x}:{int(c):02x}{int(d):02x}"
 
 
-def ring_order(invs, hosts):
-    """Hosts in sparkring ring order, starting at the TP rank 0 host: each f0 port reaches the next host's f1."""
+def port(host, direction, f, reversed_hosts=()):
+    """The netdev that carries direction on function f; a --reversed host has the roles of f0 and f1 swapped."""
+    return PORTS[(FLIP[direction] if host in reversed_hosts else direction, f)]
+
+
+def ring_order(invs, hosts, reversed_hosts=()):
+    """Hosts in sparkring ring order, starting at the TP rank 0 host: each clockwise port reaches the next
+    host's counter-clockwise port (f0 -> f1, unless one end is reversed)."""
     net = {}
     for h in hosts:
         for nd, p in invs[h]["ports"].items():
@@ -86,10 +100,11 @@ def ring_order(invs, hosts):
         cur = order[-1]
         nxt = []
         for f in (0, 1):
-            h, nd = peer.get((cur, PORTS[("clockwise", f)]), (None, None))
-            if nd != PORTS[("counter_clockwise", f)]:
-                raise SystemExit(f"{cur} {PORTS[('clockwise', f)]} reaches {h} {nd}; sparkring needs every f0 port "
-                                 f"cabled to the next node's f1 port on the same PCIe domain")
+            out = port(cur, "clockwise", f, reversed_hosts)
+            h, nd = peer.get((cur, out), (None, None))
+            if nd != port(h, "counter_clockwise", f, reversed_hosts):
+                raise SystemExit(f"{cur} {out} reaches {h} {nd}; sparkring needs every f0 port (f1 on a --reversed "
+                                 f"node) cabled to the next node's f1 port (f0 if reversed) on the same PCIe domain")
             nxt.append(h)
         if nxt[0] != nxt[1]:
             raise SystemExit(f"{cur}: its two f0 functions reach different nodes {nxt}")
@@ -101,14 +116,14 @@ def ring_order(invs, hosts):
     return order
 
 
-def topology(invs, order, state_root="/run/dsv41-mesh"):
+def topology(invs, order, state_root="/run/dsv41-mesh", reversed_hosts=()):
     ranks = []
     for r, h in enumerate(order):
         ports = {}
         for d in ("clockwise", "counter_clockwise"):
             ports[d] = []
             for f in (0, 1):
-                nd = PORTS[(d, f)]
+                nd = port(h, d, f, reversed_hosts)
                 p = invs[h]["ports"][nd]
                 ports[d].append({
                     "function": f, "netdev": nd, "rdma_device": p["rdma"],
@@ -154,11 +169,11 @@ def host_scripts(plan, fabric, host_rank):
     rules = [x for x in plan.tc_rules if x.intermediate_rank == host_rank]
     qdiscs = sorted({x.ingress_netdev for x in rules})
     for q in qdiscs:
-        up.append(f"tc qdisc show dev {q} | grep -q clsact || tc qdisc add dev {q} clsact")
+        up.append(f"tc qdisc show dev {q} | grep clsact >/dev/null || tc qdisc add dev {q} clsact")
     for x in rules:
         add = fabric.tc_rule_command(x, add=True)
-        up.append(f"tc filter show dev {x.ingress_netdev} ingress pref {x.preference} | grep -q flower || {shlex.join(add)}")
-        up.append(f"tc -s filter show dev {x.ingress_netdev} ingress pref {x.preference} | grep -q in_hw "
+        up.append(f"tc filter show dev {x.ingress_netdev} ingress pref {x.preference} | grep flower >/dev/null || {shlex.join(add)}")
+        up.append(f"tc -s filter show dev {x.ingress_netdev} ingress pref {x.preference} | grep in_hw >/dev/null "
                   f"|| {{ echo 'rule pref {x.preference} on {x.ingress_netdev} is not in hardware'; exit 3; }}")
         down.append(f"tc filter del dev {x.ingress_netdev} ingress pref {x.preference} protocol 0x88b5 "
                     f"handle {x.handle} flower 2>/dev/null || true")
@@ -166,7 +181,7 @@ def host_scripts(plan, fabric, host_rank):
         down.append(f'[ -z "$(tc filter show dev {q} ingress; tc filter show dev {q} egress)" ] '
                     f"&& tc qdisc del dev {q} clsact 2>/dev/null || true")
     for r in (x for x in plan.routes if x.source_rank == host_rank):
-        up.append(f"ip route show exact {r.destination_ipv4}/32 | grep -q . || {shlex.join(fabric.route_command(r, add=True))}")
+        up.append(f"ip route show exact {r.destination_ipv4}/32 | grep . >/dev/null || {shlex.join(fabric.route_command(r, add=True))}")
         down.append(f"ip route del {r.destination_ipv4}/32 2>/dev/null || true")
     devs = sorted({m.rdma_device for m in plan.markers if m.source_rank == host_rank})
     ports = sorted({m.udp_source_port for m in plan.markers})
@@ -185,7 +200,12 @@ def main():
     ap.add_argument("hosts", nargs=4, help="SSH names in TP rank order (head first)")
     ap.add_argument("--sparkring", required=True, help="FujitsuPolycom/sparkring checkout (tested at f16b5f4)")
     ap.add_argument("--out", default="ring-mesh")
+    ap.add_argument("--reversed", action="append", default=[], metavar="HOST",
+                    help="node whose f1 ports carry clockwise and f0 counter-clockwise (repeatable)")
     a = ap.parse_args()
+    reversed_hosts = set(a.reversed)
+    if reversed_hosts - set(a.hosts):
+        ap.error(f"--reversed {' '.join(sorted(reversed_hosts - set(a.hosts)))} is not one of the four hosts")
     sys.path.insert(0, str(Path(a.sparkring) / "spark_transport/fabric/cx7_hairpin_diagonal"))
     import fabric  # sparkring's planner
 
@@ -193,10 +213,11 @@ def main():
     problems = [p for h in a.hosts for p in check_host(h, invs[h])]
     if problems:
         raise SystemExit("hosts not ready for the mesh:\n  " + "\n  ".join(problems))
-    order = ring_order(invs, a.hosts)
+    order = ring_order(invs, a.hosts, reversed_hosts)
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
-    (out / "fabric.json").write_text(json.dumps(topology(invs, order), indent=2) + "\n", newline="\n")
+    (out / "fabric.json").write_text(json.dumps(topology(invs, order, reversed_hosts=reversed_hosts), indent=2) + "\n",
+                                     newline="\n")
     plan = fabric.build_rocenante_plan(fabric.build_plan(fabric.load_topology(out / "fabric.json")))
     for r, h in enumerate(order):
         up, down = host_scripts(plan, fabric, r)

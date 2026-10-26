@@ -2,28 +2,27 @@
 
 DeepSeek-V4.1-Flash **1017 release**
 ([`deepseek-ai/DeepSeek-V4.1-Flash-1017`](https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash-1017)
-@ `1bae0e10`, MIT — weights-only successor of the sparkring-pinned `DeepSeek-V4.1-Flash`
-@ `dba1be0a`; config.json + 48-shard layout byte-identical) served on the **4-node
-switchless ConnectX-7 ring** with vLLM TP4 (`dsv41-feat` branch + FlashInfer 0.7.0rc1),
-DSpark k=5 speculative decoding (draft layers are INSIDE the checkpoint — no separate
-drafter), 1M-token context, Engram n-gram tables on NVMe. Adapted from the
-[FujitsuPolycom sparkring](https://github.com/FujitsuPolycom/sparkring)
-`deepseek-v41-flash-cycle` vLLM lane @ `ad1853fc` (vendored at
-[upstream/VENDORED-AT.md](upstream/VENDORED-AT.md)).
+@ `1bae0e10`, MIT) served on the **4-node switchless ConnectX-7 ring** with SGLang
+(dsv4.1 canary branch) TP4/EP1, DSpark speculative decoding (draft layers are INSIDE the
+checkpoint — no separate drafter), 1M-token context, Engram n-gram tables on NVMe.
+Vendored from [knapcio's 4x-DGX-Spark TP4 stack](https://github.com/knapcio/DeepSeek-V4.1-Flash-4x-DGX-Spark-TP4)
+@ `aff52fa` (vendored at [upstream/VENDORED-AT.md](upstream/VENDORED-AT.md); the MiaAI-Lab
+stack it replaces is archived at `upstream-miaai-archive/` — swap rationale in
+research.md 2026-10-26).
 
 **Transport:** the site's shared four-PF switchless NCCL contract — same lib
-(`~/.local/lib/nccl-patched-4pf`, SHA `8de68def…`), same netplan (all four PCIe views,
-`10.10.0.0/21`), same HCA list and env flags as both GLM lanes. One `verify-fabric-p2.sh`
-preflight serves all three lanes. The sparkring upstream's own transport (SparkRing
-patched NCCL 2.30.7, 2 PFs, donor-image extraction) is the documented rollback
-(VENDORED-AT.md "Transport decision").
+(`~/.local/lib/nccl-patched-4pf`, SHA `8de68def…`), same netplan (all four PCIe views),
+same HCA list and env flags as both GLM lanes. One `verify-fabric-p2.sh` preflight serves
+all three lanes. The launcher overlays the host NCCL onto the container's pip NCCL
+(`NCCL_OVERLAY_PIP=1`, ring-mode default) and refuses a stock library.
 
 **Endpoint (after bring-up):** `http://10.69.43.170:8000/v1` (the head's client
 network, `wlP9s9`; the 10.69.42.x mgmt fabric serves SSH only and refuses :8000) — model name
 `deepseek-v41-flash`, 1,048,576-token context. No auth/TLS — trusted LAN only.
 Thinking **ON by default** (`SGLANG_DEFAULT_THINKING=true` in the site env's
 `EXTRA_CONTAINER_ENV`; upstream's default is off — this is the GLM-lanes parity
-delta, owner-set 2026-10-23). Clients override per request:
+delta, owner-set 2026-10-23; the adapter's explicit-kwarg injection is REQUIRED for the
+parser to split the block). Clients override per request:
 `"chat_template_kwargs": {"thinking": false}` disables it; `enable_thinking` is an
 accepted alias. Reasoning effort is the V4.1 numeric budget: tiers
 `low=50 / high=75 (xhigh alias) / max=100`, server default **75**
@@ -60,77 +59,83 @@ down first (`tp4ctl down` / `./start.sh stop` in its recipe dir).
 
 | path (from repo root) | what |
 |---|---|
-| `deepseek-v41-flash-tp4-switchless/upstream/` | vendored sparkring subset @ `ad1853fc` (image builder, 7 runtime patches, cycle launcher + 2 site mods, serving contract JSON) |
+| `deepseek-v41-flash-tp4-switchless/upstream/` | vendored knapcio tree @ `aff52fa` (launcher, image builder + staged canary tree, adapters, tests); `runtime/sglang-canary/` is gitignored — staged by `scripts/fetch-sglang-canary.sh` |
+| `deepseek-v41-flash-tp4-switchless/upstream-miaai-archive/` | the replaced MiaAI-Lab stack (`64b02dea`), kept for fix provenance/rollback reading — do NOT resurrect |
 | `deepseek-v41-flash-tp4-switchless/site/env.switchless` | the site env (cluster transport + model pins + serving values) |
-| `deepseek-v41-flash-tp4-switchless/site/materialize-weights.sh` | per-node weight materialization (hardlinks from the default HF cache; no download) |
-| `deepseek-v41-flash-tp4-switchless/site/start-cluster.sh` | cluster control (check/serve/stop/status/logs) — wraps the upstream per-rank launcher over the SSH mesh, workers 3,2,1 first |
-| `deepseek-v41-flash-tp4-switchless/site/build-engram-packed.sh` | once-per-rank packed Engram shard builder (measured +15% prefill upstream) |
+| `deepseek-v41-flash-tp4-switchless/site/materialize-miaai-weights.sh` | per-node weight materialization (hardlinks from the default HF cache; no download; name is historical — the destination path it writes is the one the site env points at) |
+| `deepseek-v41-flash-tp4-switchless/site/start-cluster.sh` | cluster control (doctor/build/pack/serve/stop/status/logs/smoke) — renders the site env into `.env.tp4-switchless` and execs the upstream launcher over the SSH mesh |
+| `deepseek-v41-flash-tp4-switchless/site/build-cluster.sh` | per-node image build WITHOUT the launcher's worker-stage rsync (the `--delete` rsync into `WORKER_DIR` destroys the weights bind source — 2026-10-23 gotcha); streams `git archive` per node and verifies the in-image adapter byte-for-byte |
 
-On the nodes: `~/code/spark-recipes` (same branch convention as the GLM lanes — the
-per-lane working branch carries all recipes); `~/.local/ds41f-tp4/` = recipe staging
-(`upstream/`) + materialized weights + cache; `~/.local/lib/nccl-patched-4pf/` = the
+On the nodes (paths kept from the MiaAI bring-up — renaming would force weight
+re-materialization + docker-volume recreation for no operational gain): the head's
+`~/.local/ds41f-miaai/stack/` = vendored tree + rendered `.env.tp4-switchless`;
+`~/.local/ds41f-miaai/{weights,engram}/` = materialized checkpoint + packed Engram
+shards; workers' `~/dsv41-miaai/` = build tree; `~/.local/lib/nccl-patched-4pf/` = the
 SHARED four-PF NCCL build (never modify; both GLM lanes use it). HF cache holds
 `deepseek-ai/DeepSeek-V4.1-Flash-1017` @ `1bae0e10` (≈475 GiB × 4 nodes — one local copy
 per node is REQUIRED: Engram rows are read from shards 47/48 at serve time, NFS will
 bound throughput).
 
-## Image (the highest-risk item)
+## Image
 
-The pinned upstream base image no longer exists on Docker Hub; this site serves
-`local/sparkring-deepseek-v41:overlay6` — rebuilt on substituted base
-`vllm/vllm-openai:nightly-dev-arm64-cu13.0.1-591bb95` plus a pip-installed branch-era
-DeepGEMM (`8b1392b`). Full lineage and rationale: [upstream/VENDORED-AT.md](upstream/VENDORED-AT.md)
-site mod #3 and research.md 2026-10-18.
+Base image `lmsysorg/sglang:dev-dsv41` pinned to digest
+`sha256:3dbc3130…` (verified pullable on spark-0f0b 2026-10-21; the digest rides
+`BUILD_ARGS` in `site/env.switchless` because the vendored Dockerfile's
+`ARG BASE_IMAGE` otherwise resolves the mutable tag). The image adds the pinned
+SGLang dsv4.1 canary tree (staged, not tracked), the sglang-kernel 0.4.7 /
+sgl-deep-gemm 0.2.0 wheels, the b12x/b12x_next MoE line, the SM120 flash-MLA
+override, and the build-time patches: knapcio's image-placeholder sanitize plus the
+site's SWA tail-eviction backport (#35515). Site mods and lineage:
+[upstream/VENDORED-AT.md](upstream/VENDORED-AT.md).
 
-No public image exists — build locally on an idle Spark per
-[upstream/README.md](upstream/README.md) (`build-image.sh`), then
-`docker save local/sparkring-deepseek-v41:overlay6 | ssh <rank> docker load` to the
-other three. Pins: vLLM `dsv41-feat @ e47aa780…`, FlashInfer `0.7.0rc1 @ 07869c61…`,
-receipt in [upstream/image-receipt.json](upstream/image-receipt.json). Pin the built
-image's ID as `IMAGE_ID` in `site/env.switchless` — the launcher refuses a mismatch.
-The full extension build needs an idle node (a CUTLASS TU takes >7 GiB of compiler RSS).
+Build LOCALLY via `site/build-cluster.sh [commit-ish]` FROM THE HEAD NODE (builds the
+head + every worker and verifies each image carries the commit's
+`adapter/encoding_compat.py` byte-for-byte). The first build stages
+`runtime/sglang-canary/` via the fetch script on the head (pinned refs; workers get the
+rsynced copy). Do NOT use the launcher's own `build` for image swaps — its worker stage
+rsyncs `--delete` into `WORKER_DIR` (the weights bind source; the 2026-10-23 incident).
+The launcher's `serve` auto-triggers it only when an image is missing — build first.
 
-## Bring-up (first time)
+## Bring-up (after a stack change)
 
-1. **Weights materialization (every node):**
-   `bash deepseek-v41-flash-tp4-switchless/site/materialize-weights.sh`
-   — hardlinks the HF-cache snapshot @ `1bae0e10` into
-   `~/.local/ds41f-tp4/weights/deepseek-v41-flash-1017/` (zero copy, zero modification;
-   verifies `DeepseekV41ForCausalLM` + shard 48 present).
-2. **Image build + distribution** (above), `IMAGE_ID` pinned in `site/env.switchless`.
-3. **Packed Engram shards (every node, once per checkpoint):**
-   `RANK=<r> bash deepseek-v41-flash-tp4-switchless/site/build-engram-packed.sh`
-   (~9 min/rank, CPU only; ~48 GB allocated per rank; refuses an existing out-dir).
-4. **Preflight:** `bash glm-v53-flash-fp8-tp4-switchless/noswitch-prep/scripts/verify-fabric-p2.sh`
+1. **Preflight:** `bash glm-v53-flash-fp8-tp4-switchless/noswitch-prep/scripts/verify-fabric-p2.sh`
    must print `ALL CHECKS PASS` (shared netplan + NCCL lib verification).
-5. **Validate:** `DRY=1` not supported — use
-   `deepseek-v41-flash-tp4-switchless/site/start-cluster.sh check` (offline `--check`
-   of the upstream launcher on all four ranks; prints the exact docker commands).
-6. **Serve:** `./start-cluster.sh serve` — ranks 3,2,1 then 0; ~8 min to readiness from
-   local NVMe (~4 min weights, ~1 min DSpark draft, ~2 min graphs + autotune).
-7. **Gates (within minutes of `/health` 200):**
+2. **Image build:** `bash deepseek-v41-flash-tp4-switchless/site/build-cluster.sh`
+   (head + workers; adapter sentinel verified per node).
+3. **Packed Engram shards:** `deepseek-v41-flash-tp4-switchless/site/start-cluster.sh pack`
+   — the upstream `pack` command, once per checkpoint. Idempotent per layer: already-complete
+   shards are skipped ("layer N: already complete"), incomplete/mismatched ones rebuilt
+   (the shards on disk came from the MiaAI packer; the launcher's packer converges them).
+4. **Validate:** `deepseek-v41-flash-tp4-switchless/site/start-cluster.sh doctor` — the
+   launcher's connectivity/GPU/weights/ring preflight on all four ranks.
+5. **Serve:** `./start-cluster.sh serve` — worker ranks then head; the launcher refuses
+   a failed ring preflight before replacing containers.
+6. **Gates (within minutes of `/health` 200):**
    - `/v1/models` advertises `deepseek-v41-flash`, 1,048,576-token context.
-   - Coherent response + forced tool call (`deepseek_v41` parser round-trip).
+   - Coherent response + forced tool call (round-trip through the dsv4.1 parser).
    - Corruption probe: emoji/CJK generation, count U+FFFD — must be 0.
-   - Boot log per rank: `Engram DISK mode: layer …` lines (one per Engram layer),
-     `BALANCED column assignment, rank r owns hash columns […]` (six distinct columns
-     per rank — identical `off=` values on every rank mean the rank-offset fix did not
-     mount), `PACKED single-read shard`, `Application startup complete`.
-   - `SpecDecoding metrics` mean acceptance length > 1 (DSpark k=5 active).
-   - Record the actual `GPU KV cache size` line (the pool is sized from free memory —
-     upstream measured 10.94 GiB / 2,182,642 tokens at the 430K limit + 0.83 util;
-     the 1M default's pool is a bring-up observation, not yet a receipt).
+   - Boot log per rank: 0 NCCL WARNs, `SWITCHLESS_RING_ONLY` marker present in the
+     container's NCCL, the patch tags `# [encoding_dsv41-placeholder-sanitize]` and
+     `# [swa-radix-tail-evict]` present in the container's patched sources, and the
+     adapter's boot warning line `…requests that explicitly enable thinking below 16384
+     tokens are raised to it…`.
+   - `SpecDecoding`/DSpark acceptance > 1 (speculative decoding active).
+   - Record the actual `max_total_num_tokens` line (pool sized from free memory).
+   - Retention (the swap's reason): after two agent-style turns with an idle gap, a
+     follow-up request must report `cached_tokens ≈ full prompt` — the A→B harness in
+     research.md 2026-10-26. If the cap-mode 2–4 s GPU wipe or the churn-case 0-hit
+     returns, capture the boot config (`swa_tokens`, `c4_size`, ratio) BEFORE touching
+     anything — that is the diagnostic signal the 2026-10-25/26 investigation was missing.
 
 ## Switching (GLM lanes ↔ this lane)
 
 Runbook: [`../../LANE-SWITCHING.md`](../../LANE-SWITCHING.md) — the one-doc procedure;
 this lane's rows are in "The lanes" table below it. Lane-specific:
 
-- **Teardown of this lane:** `./start-cluster.sh stop` (rank 0 FIRST — a worker that
-  starts while an old head still listens on the rendezvous port joins the old head and
-  hangs; upstream gotcha). Stop preserves nothing here: the site wrapper removes the
-  stopped container (`docker stop --time 30` + `docker rm`) — relaunch is a fresh
-  `serve`, model/cache bind mounts stay on disk.
+- **Teardown of this lane:** `./start-cluster.sh stop`. The site wrapper removes the
+  stopped containers — relaunch is a fresh `serve`, model/cache bind mounts stay on disk.
+  A FAILED boot leaves stopped containers in `Created/Exited` — `docker rm -f` per rank
+  before relaunch (the launcher refuses existing names).
 - **Proxy:** `BACKEND_MODEL=deepseek-v41-flash`; add `deepseek-v41-flash` to
   `SPOOF_FROM` in `model-name-proxy/.env`, then `docker compose --env-file .env up -d`
   (leader node). One-line change, same as every other switch.
@@ -141,27 +146,27 @@ this lane's rows are in "The lanes" table below it. Lane-specific:
 
 ## Day-2 ops
 
-- Start/stop/status/logs: `site/start-cluster.sh` (wraps upstream
-  `deepseek_v41_cycle_serve.sh --check|--run` per rank). The upstream launcher enforces:
-  MemAvailable ≥ 100 GiB before launch (reboot the rank first — memory fragmentation on
-  GB10 costs real throughput), patch MD5 verification, image-ID match, no existing
-  container name.
-- **Sizing:** 1M context is configured but upstream's measurements ran through 430,080
-  tokens (400K needle pass); a full-1M request is NOT yet evidenced. `max_num_seqs 8`
-  is the recorded profile (16 probed OK as an admission option at C16). Changing
-  admission/memory settings requires re-checking startup + MemAvailable + preemption.
-- **Warm restarts:** caches (vLLM/FlashInfer/Triton/TVM-FFI) live in
-  `~/.local/ds41f-tp4/cache/` (bind-mounted at `/cache`) — relaunches against the same
-  paths stay warm.
-- Update procedure: [upstream/VENDORED-AT.md](upstream/VENDORED-AT.md). Any upstream
-  `recipes/deepseek-v41-flash-cycle.json` serving change needs a review against
-  `site/env.switchless` before inheriting.
+- Start/stop/status/logs: `site/start-cluster.sh` (renders env → execs the upstream
+  `start.sh`). The launcher enforces: non-blocking doctor at serve, GPU-busy refusal
+  (`FORCE=1` to override), ring config validation + head preflight BEFORE replacing
+  containers, local-weights completeness checks per node, and the NCCL marker grep.
+- **Sizing:** pinned KV pool 8,000,000 tokens (`MAX_TOTAL_TOKENS`) under
+  `MEM_FRACTION_STATIC=0.80` with `MAX_RUNNING_REQUESTS=16`; `CHUNKED_PREFILL_SIZE=4096`
+  is safe at any context WITH `DSV41_INDEXER_CHUNKED=1` (armed in
+  `EXTRA_CONTAINER_ENV`). Changing admission/memory settings requires re-checking
+  startup + MemAvailable + retraction behavior.
+- **Warm restarts:** state/logs live under the launcher's per-profile dirs
+  (`state-tp4`/`logs-tp4` semantics via `STATE_DIR`/`LOG_DIR` in the rendered env) —
+  relaunches against the same paths stay warm; a stale Triton/JIT cache after an image
+  swap can poison a boot (clear the state dir if a boot hangs in capture).
+- Update procedure: [upstream/VENDORED-AT.md](upstream/VENDORED-AT.md) (fetch-script pin
+  changes cascade into the image; the sglang re-pin plan in research.md §6 item 8
+  supersedes incremental updates when it runs).
 - Do not edit files on the nodes directly — recipe changes flow through the repo
   (topic branch → push → user merges → `git pull` on nodes; agents never open PRs).
 
-References: sparkring
-[quickstart](https://github.com/FujitsuPolycom/sparkring/blob/main/profiles/deepseek-v41-flash-cycle/README.md)
-· [image builder](https://github.com/FujitsuPolycom/sparkring/blob/main/runtime/deepseek-v41-gb10/README.md)
-· [benchmark record](https://github.com/FujitsuPolycom/sparkring/blob/main/performance/records/deepseek-v41-flash/cycle-tp4-dspark5-graphs-20260910.md)
+References: knapcio
+[repo README](https://github.com/knapcio/DeepSeek-V4.1-Flash-4x-DGX-Spark-TP4#readme)
+· [switchless-ring doc](https://github.com/knapcio/DeepSeek-V4.1-Flash-4x-DGX-Spark-TP4/blob/main/docs/switchless-ring.md)
 · sibling GLM recipes `glm-v53-flash-fp8-tp4-switchless/` +
   `glm-v53-flash-nvfp4-tp4-switchless/` (fabric + NCCL provenance)

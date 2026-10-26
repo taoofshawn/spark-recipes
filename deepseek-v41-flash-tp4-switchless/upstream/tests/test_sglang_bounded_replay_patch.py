@@ -36,10 +36,15 @@ class BackportPackagingTests(unittest.TestCase):
             "RUN python3 /opt/dsv41/scripts/verify_sglang_bounded_replay.py "
             "/sgl-workspace/sglang/python"
         )
+        # SITE MOD: Dockerfile.canary-roce chains the verify RUNs into one layer (the
+        # pinned base's layer chain exceeded buildkit max depth); accept either the
+        # standalone RUN or the &&-chained invocation.
+        chained = command.replace("RUN python3", "&& python3")
         for name in ("Dockerfile.canary", "Dockerfile.canary-roce"):
             with self.subTest(name=name):
-                self.assertIn(command, (ROOT / name).read_text())
-                self.assertIn("test_swa_bounded_replay_backport.py", (ROOT / name).read_text())
+                source = (ROOT / name).read_text()
+                self.assertTrue(command in source or chained in source, command)
+                self.assertIn("test_swa_bounded_replay_backport.py", source)
 
 
 class BackportVerifierTests(unittest.TestCase):

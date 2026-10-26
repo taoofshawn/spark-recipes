@@ -194,6 +194,38 @@ packed shards, profiler-estimate off.
   retention working, `full_token_usage` now legitimately ACCUMULATES (0.39 at snapshot)
   — the watch item is the ceiling (~1.0 → retraction/queue pressure with
   MAX_RUNNING_REQUESTS=16), not the climb; the cap-mode 2–4 s idle wipe is gone.
+- **CORRECTION (same day, later): the counter semantics, the chat path, and the agent
+  turns — a three-step instrument story worth keeping because it cost two false alarms.**
+  1. `usage.prompt_tokens_details.cached_tokens` IS present on this build (an early probe
+     showing `None` was a red herring); `/generate` `meta_info.cached_tokens` also works.
+     These two are the authoritative instruments.
+  2. `full_token_usage`/`num_used_tokens` reflect the IN-FLIGHT/live allocation only —
+     they read 0.01–0.08 while hundreds of K of prefix stay cached (independently
+     documented by two fleets in MiaAI-Lab issue #43). The gauge dropping to ~0 between
+     requests is NOT a cache wipe; it cannot observe retention at all. (A first chat-path
+     repro "cached=0" was an artifact of filtering docker logs with a host-`date`
+     timestamp that sits 4 h off the log's UTC stamps.)
+  3. Offline render check (encoder `encode_messages` in the container): both `chat` and
+     `thinking` renders are PREFIX-STABLE across turns — turn N+1's rendered string
+     extends turn N's exactly (thinking mode diverges only in the final generation-prompt
+     header, 6 chars). Client-side `cache_control`-breakpoint loss (issue #43 comment,
+     `/v1/messages` only) does not apply to OpenAI-path traffic.
+  4. **Chat-path retention matrix, all via `/v1/chat/completions` with thinking on:**
+     20K turn-2 after 15 s = 17,920/18,755 (96%); after 132K of INTERLEAVED unique churn
+     = 18,432/18,767 (98%) — the "compressor-state ring clobbered by any later forward"
+     hypothesis does NOT reproduce on this stack at this scale; **242K turn-2 after 20 s
+     = 241,920/242,055 (99%)** — agent-scale chat retention WORKS.
+  5. Therefore the real agents' observed `#cached-token` values of 5,632–21K are consistent
+     with FIRST turns after resume (only the shared ~9K system prompt is matchable; each
+     resumed session replays its history as a fresh conversation). The passive confirmation
+     is each session's next same-session turn reporting `cached_tokens ≈ full context`
+     (2–4 s turn start instead of 60–100 s). NOTE: `--swa-full-tokens-ratio 0.3` sits
+     OUTSIDE the two-fleet-validated retention band from issue #43 (default ❌ / 0.05 ❌ /
+     0.065 ✓ / 0.22 ✓ with a pinned 2.5M full pool); our 0.3 has now passed idle, churn,
+     interleave and 242K-scale chat checks, but if a future multi-session 1M-class
+     workload shows cross-session eviction, 0.065 is the documented fallback (costs
+     ~43% of the reported pool — which is the `full` sub-pool only, itself an under-count
+     of real retention by ~2–3.5×).
 
 ### 2026-10-26 — knapcio stack bring-up receipt (first boot on the swap)
 - **Deployed:** `dsv41-4x-spark:canary-roce-knapcio` (image sha256 `af425a32…`) built on

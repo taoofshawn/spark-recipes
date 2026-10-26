@@ -187,6 +187,13 @@ packed shards, profiler-estimate off.
   `#cached-token` on turn N>1), the swap is a retention win end to end.
 - Churn throughput observed: ~44K-token unique prefill in 7–8 s (~5.5–6K tok/s); the
   396K cold prefill took 69 s (~5.7K tok/s) — healthy prefill on this stack.
+- **Live-traffic probe (same 396K prefix re-sent after two real agent sessions ran,
+  ~40 min later): `cached=214,784 / 396,011 (54%)`** — the oldest 181K evicted LRU under
+  the agents' ~280K of real traffic, the newest 215K retained. Graceful degradation, NOT
+  the miaai pathological signature (B-after-churn = 0 = whole branch unmatchable). With
+  retention working, `full_token_usage` now legitimately ACCUMULATES (0.39 at snapshot)
+  — the watch item is the ceiling (~1.0 → retraction/queue pressure with
+  MAX_RUNNING_REQUESTS=16), not the climb; the cap-mode 2–4 s idle wipe is gone.
 
 ### 2026-10-26 — knapcio stack bring-up receipt (first boot on the swap)
 - **Deployed:** `dsv41-4x-spark:canary-roce-knapcio` (image sha256 `af425a32…`) built on

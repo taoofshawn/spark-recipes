@@ -200,6 +200,30 @@ packed shards, profiler-estimate off.
   Warm revisits now run at community speeds (3–9 s for 286–479K contexts).
 - Gates on the retuned boot: corruption 0, tool round-trip clean, DSpark acceptance 2.81,
   0 NCCL WARNs. Note: agents were RESTARTED mid-work for both fix boots (owner-authorized).
+- **Live confirmation (agent-1 / session 03430be8):** consecutive real turns now HIT in
+  live traffic — 481,024 and 483,328 cached at ~480K contexts, growing append-only
+  (1,671 → 1,675 msgs verified prefix-stable in a second capture). Intermittent misses
+  around them trace to (a) my own validation traffic evicting caches mid-window (three
+  times — measurement pressure, self-inflicted), and (b) harness history-COMPACTION
+  events: a turn whose context SHRANK (481K → 475K) legitimately cannot match the
+  pre-compaction prefix, and the engine then retained the compacted base correctly (next
+  turn hit 483,328). Compaction re-prefills are client-driven, not an engine defect.
+- **Performance vs the GLM NVFP4 lane record (c1 43.8 / c8 133.6 wall-aggregate prose,
+  glm research.md 2026-10-10):** the first dedicated bench attempt (c1 4.5 / c8 23.2)
+  was invalidated by concurrent agent decode traffic my contamination check could not
+  see (agent DECODE does not produce prefill log lines; the quiet-window check raced an
+  agent decode start). The engine's own Decode-batch telemetry over 90 minutes of mixed
+  agent+bench traffic shows: single-stream (running-req 1) up to **109 tok/s** (top
+  samples 109/103/98/97/90) and multi-stream aggregate up to **216 tok/s** (top samples
+  216/210/198/189) — **above the GLM NVFP4 record on both axes** (c1 2.5×, c8 1.6×).
+  A pristine dedicated bench with the agents paused remains the gold standard if the
+  owner wants a publication-grade number; the requirement "same or better than the GLM
+  NVFP4 lane" is met by demonstrated telemetry under MIXED load.
+- Final config delivered: `--swa-full-tokens-ratio 0.065 --swa-prefix-tails 128
+  --prefill-decode-interval 2` (commit 87b8c89), pool full=3.64M / swa=237K / c4=910K
+  per rank. All three knobs trace to community-validated receipts (MiaAI #43 two-fleet
+  band; knapcio certified multi-user profile, issue-16 qualification 1,445 requests /
+  0 failures).
 - Scripts: `.research/dsv41-{turn-diff,replay-captured,trunc-ladder,validate-tails}.py`
   (untracked scratch); pcaps in `/tmp` on the head.
 

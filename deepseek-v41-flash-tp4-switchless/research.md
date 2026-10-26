@@ -155,6 +155,37 @@ packed shards, profiler-estimate off.
 
 ## Changelog
 
+### 2026-10-26 — knapcio stack bring-up receipt (first boot on the swap)
+- **Deployed:** `dsv41-4x-spark:canary-roce-knapcio` (image sha256 `af425a32…`) built on
+  head + all 3 workers by `site/build-cluster.sh`, adapter sentinel verified in-image per
+  node. Lane serving `deepseek-v41-flash` @ 1,048,576 ctx on :8000; proxy untouched (name
+  unchanged by the swap).
+- **Build fixes made during the window (commits f53036f/556bc1d/9ec2619):**
+  `BUILD_ARGS` must be quoted (unquoted spaces truncated the digest build-arg → buildx
+  "requires 1 argument"); the pinned base's deep layer chain (~180 history entries)
+  exceeded buildkit max depth with one RUN per verify script → collapsed into
+  &&-chained RUNs (every script still runs, order preserved; VENDORED-AT row); the three
+  packaging provenance tests amended to accept the chained invocation (standalone RUN
+  still asserted for `Dockerfile.canary`).
+- **Engram shards:** `start-cluster.sh pack` converged instantly — every MiaAI-packed
+  shard read back "already complete" (same format/geometry; no rebuild needed).
+- **Boot gates, all green:** NCCL WARNs 0 on all four ranks; patch tags present in the
+  running container (`encoding_dsv41-placeholder-sanitize` ×5, `swa-radix-tail-evict` ×3);
+  the floor boot-warning line live; forced tool call round-trips (`finish=tool_calls`,
+  correct function) with thinking on; corruption probe 0×U+FFFD, emoji+CJK intact;
+  DSpark acceptance **2.61** (>1, spec active).
+- **Pool record:** `max_total_num_tokens=1,348,352` (rank pools: `swa_size=404,480`,
+  `c4_size=337,088` — the ratio-0.3 shape, matching the accepted 2026-10-26 ~02:50
+  miaai-boot configuration; c4 global ≈ 1.35M, same superlinear-pricing caveat: watch
+  for retraction with two large concurrent agents).
+- **Retention spot-check (idle A→B, 1344-token prompt, 60 s gap):** B prefilled
+  `#cached-token: 1024 / 1344` — idle retention WORKS on the new stack (broken signature
+  is 0; the 320-token remainder is the sub-page tail). The full A→B harness with the
+  ~480K churn case is still the verdict for the agent-turn shape (compressor-state ring
+  root cause predicts it persists here too — run it before declaring anything).
+- The idle 1-token prefill ticks (`#new-token: 1` at idle) appear on this stack too —
+  same machinery as the miaai boot; noted for continuity.
+
 ### 2026-10-26 — vehicle swap: MiaAI-Lab stack → knapcio stack (`aff52fa`)
 - **Decision (owner go-ahead):** adopt
   `github.com/knapcio/DeepSeek-V4.1-Flash-4x-DGX-Spark-TP4` @ `aff52fa` (2026-10-24 tip)

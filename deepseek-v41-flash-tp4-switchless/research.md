@@ -136,6 +136,22 @@ packed shards, profiler-estimate off.
    profile parity on their stack (their default is k=3; k=5 was the benched ring
    profile), thinking-default parity with the GLM lanes, model-name proxy already
    serves `deepseek-v41-flash` so clients never change.
+8. **Re-pin the sglang tree onto a release line (planned maintenance, 2026-10-26
+   decision): move the canary from the 2026-09-16 snapshot (`f80c91a4`) to a release
+   carrying #40313 — v0.5.21 (2026-10-02) or v0.5.22 (2026-10-19) — or a fresh main
+   snapshot.** v0.5.22 verified to contain the whole DSV4.1 stack the canary needs
+   (`encoding_dsv41`, `deepseek_v4_dspark`, `kv_canary`, dsv4 backend,
+   `UnifiedRadixCache` replacing the deleted `SWARadixCache`) plus #43502's merged
+   prefix-tails pricing. NOT a retention fix: the unified `swa.py` walk at v0.5.22 has
+   the same branch-tail eviction blind spot (verified at the tag), and the follow-up
+   retention work (#46008) is still open. Migration driver is drift, not this bug:
+   the site patch anchors (sanitize, tail-eviction, floor) will keep eroding against
+   the pinned tree. Migration cost: the ~20 site adapters monkey-patch branch
+   internals (`wo_a_w8`, `hc_fused`, `moe_b12x_next`, `fast_load`, engram, …) —
+   each needs re-verification; receipts re-established on GB10 (upstream CI covers
+   GB300 only). When it happens, port the #35515 tail-deprioritization into the
+   unified `swa.py` walk (cursor-recovery semantics required, per the #35515 author)
+   and consider upstreaming it as the follow-up that PR offered.
 
 ## Changelog
 

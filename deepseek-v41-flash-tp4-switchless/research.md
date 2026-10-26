@@ -155,6 +155,39 @@ packed shards, profiler-estimate off.
 
 ## Changelog
 
+### 2026-10-26 — churn retention harness on the knapcio stack: the miaai churn-case failure does NOT reproduce
+- **Harness** (synthetic, `/generate` `meta_info.cached_tokens` instrument — the API
+  `usage` field does not carry it; run while all agent traffic was paused; scripts in
+  `.research/dsv41-churn-harness{,2,3}.py`, untracked): A fills the radix cache with a
+  long prefix → B identical after 60 s idle → N × ~44K-token UNIQUE churn documents →
+  B again → tiny unrelated request → B again → B with an EXTENDED prefix (A + new
+  suffix = the agent-turn shape).
+- **Results — every case the miaai stack failed now passes at live-agent scale:**
+
+  | case | prompt | cached | verdict |
+  |---|---|---|---|
+  | B after 60 s idle (116K prefix) | 116,611 | 116,480 (99%) | idle retention OK |
+  | B after 352K unique churn | 116,611 | 116,480 (99%), 0 s | **churn case fixed** (read 0 on miaai) |
+  | B after cumulative >480K churn (5×44K more) | 116,611 | 116,480 (99%) | holds past the investigation's churn magnitude |
+  | B EXTENDED prefix after churn (agent-turn shape) | 116,626 | 116,480 (99%) — only the 15-token extension prefilled | **agent-turn shape fixed at 116K** |
+  | B after tiny unrelated request | 116,611 | 116,480 (99%) | the miaai "one page then 0" collapse does not appear |
+  | SCALE: 396K prefix (the live-agent 130–755K band), 60 s idle | 396,011 | 395,776 (99%) | idle OK at scale |
+  | SCALE: identical after 528K unique churn | 396,011 | 395,776 (99%), 3 s | churn OK at scale |
+  | SCALE: extended prefix after churn | 396,026 | 395,776 (99%) — only the extension prefilled | **agent-turn shape fixed at 396K** |
+- **Interpretation + honest caveat:** the 2026-10-26 root-cause analysis predicted the
+  DSV4 compressor-state ring is clobbered by ANY later forward, so reuse should survive
+  only pure idle — yet reuse here survived ~1M tokens of intervening unique prefills,
+  including the extended-prefix turn shape, at 400K scale. Either one of knapcio's ~24
+  additional backports fixes the state-clobber path (candidates: the #45804/#45762
+  thinking-parity pair, the #45586/#45699 idle-SWA-store handling, or another), or this
+  synthetic shape (raw `/generate`, thinking OFF, no tool calls) does not trip the ring
+  the way real agent turns do. **The live agent's own next turns are the final
+  confirmation** — its requests carry exactly the shape that failed; if its first turns
+  after this boot report large `cached_tokens` (or the prefill logs show high
+  `#cached-token` on turn N>1), the swap is a retention win end to end.
+- Churn throughput observed: ~44K-token unique prefill in 7–8 s (~5.5–6K tok/s); the
+  396K cold prefill took 69 s (~5.7K tok/s) — healthy prefill on this stack.
+
 ### 2026-10-26 — knapcio stack bring-up receipt (first boot on the swap)
 - **Deployed:** `dsv41-4x-spark:canary-roce-knapcio` (image sha256 `af425a32…`) built on
   head + all 3 workers by `site/build-cluster.sh`, adapter sentinel verified in-image per

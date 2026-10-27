@@ -17,7 +17,7 @@ costs more (measured 2026-10-10: c1 latency-bound at ~45–55% of the switched f
 recovered at concurrency — research.md changelog, "PHASE E COMPLETE"). If the result is
 too slow, the fallback lane is the lossless8 conversion (see research.md §2 decision 5).
 
-**Endpoint (after bring-up):** `http://10.69.42.170:8000/v1` — model name
+**Endpoint (after bring-up):** `http://10.69.43.170:8000/v1` — model name
 `glm-5.3-flash`, 1,048,576-token context, ~3.25M-token fp8 KV pool (20 GiB/rank pin →
 ~3.1× full-1M concurrency). No auth/TLS — trusted LAN only. GPU contention rule: the
 FP8 E29 stack must be down (`tp4ctl down` in the glm-v53-flash-fp8-tp4-switchless recipe)
@@ -27,10 +27,10 @@ before this lane goes up.
 
 | rank | node | mgmt IP | role |
 |---|---|---|---|
-| 0 | `spark-0f0b` | 10.69.42.170 | leader — API server (`:8000`), `start.sh` runs here |
-| 1 | `spark-6d14` | 10.69.42.171 | worker |
-| 2 | `spark-6d90` | 10.69.42.172 | worker |
-| 3 | `spark-6d24` | 10.69.42.173 | worker |
+| 0 | `spark-0f0b` | 10.69.43.170 (wlP9s9) | leader — API server (`:8000`), `start.sh` runs here |
+| 1 | `spark-6d14` | 10.69.43.171 (wlP9s9) | worker |
+| 2 | `spark-6d90` | 10.69.43.172 (wlP9s9) | worker |
+| 3 | `spark-6d24` | 10.69.43.173 (wlP9s9) | worker |
 
 Ring fabric: 10.10.1.x–10.10.4.x links, MTU 9000, odd links LEFT QSFP (f0), even RIGHT
 (f1). SSH from the workstation via `*.shawndo.intra`; rank 0 has a passwordless SSH mesh

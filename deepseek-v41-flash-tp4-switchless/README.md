@@ -16,8 +16,9 @@ same HCA list and env flags as both GLM lanes. One `verify-fabric-p2.sh` preflig
 all three lanes. The launcher overlays the host NCCL onto the container's pip NCCL
 (`NCCL_OVERLAY_PIP=1`, ring-mode default) and refuses a stock library.
 
-**Endpoint (after bring-up):** `http://10.69.43.170:8000/v1` (the head's client
-network, `wlP9s9`; the 10.69.42.x mgmt fabric serves SSH only and refuses :8000) — model name
+**Endpoint (after bring-up):** `http://10.69.43.170:8000/v1` (the head's mgmt address
+on the wireless `wlP9s9`, 10.69.43.0/16 — the wired `enP7s7` / 10.69.42.x fabric is
+GONE since the 2026-10-19 site move) — model name
 `deepseek-v41-flash`, 1,048,576-token context. No auth/TLS — trusted LAN only.
 Thinking **ON by default** (`SGLANG_DEFAULT_THINKING=true` in the site env's
 `EXTRA_CONTAINER_ENV`; upstream's default is off — this is the GLM-lanes parity
@@ -46,10 +47,10 @@ sending `spark-llm`; at switch time set `BACKEND_MODEL=deepseek-v41-flash` and a
 
 | rank | node | mgmt IP | role |
 |---|---|---|---|
-| 0 | `spark-0f0b` | 10.69.42.170 | leader — API server (`:8000`), `start-cluster.sh` runs here |
-| 1 | `spark-6d14` | 10.69.42.171 | worker |
-| 2 | `spark-6d90` | 10.69.42.172 | worker |
-| 3 | `spark-6d24` | 10.69.42.173 | worker |
+| 0 | `spark-0f0b` | 10.69.43.170 | leader — API server (`:8000`), `start-cluster.sh` runs here |
+| 1 | `spark-6d14` | 10.69.43.171 | worker |
+| 2 | `spark-6d90` | 10.69.43.172 | worker |
+| 3 | `spark-6d24` | 10.69.43.173 | worker |
 
 Ring fabric: the shared four-PF netplan (10.10.1.x–10.10.4.x + P2 views), MTU 9000.
 GPU contention rule: only ONE lane serves at a time — the active GLM lane must be torn

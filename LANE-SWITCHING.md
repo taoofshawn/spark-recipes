@@ -121,7 +121,8 @@ cd ~/code/spark-recipes/deepseek-v41-flash-tp4-switchless/site && ./start-cluste
 
 ## Verify after any switch
 
-1. `/health` 200 on `http://10.69.42.170:8000`; `/v1/models` shows the active lane's
+1. `/health` 200 on `http://10.69.43.170:8000` (wireless mgmt `wlP9s9`; the retired
+   10.69.42.x wired fabric is gone); `/v1/models` shows the active lane's
    name (`glm-5.3-flash` NVFP4/FP8; `deepseek-v41-flash` for the DeepSeek lane) and
    `max_model_len` (NVFP4/DeepSeek: 1,048,576; FP8: 262,144).
 2. Boot log per rank: `Connected all rings` and RouteFinal lines showing **all four

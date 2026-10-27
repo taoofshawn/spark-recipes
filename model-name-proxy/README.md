@@ -16,7 +16,7 @@ flowchart LR
 ## Why this exists
 
 1. **Model-name churn.** Every recipe serves a different model name
-   (`deepseek-v4-flash`, `glm-5.3-flash`, ...). Pointing clients directly at
+   (`deepseek-v41-flash`, `glm-5.3-flash`, ...). Pointing clients directly at
    vLLM means updating every client whenever the backend recipe changes. With
    the proxy, `spark-llm` never changes.
 2. **Transparent metrics.** The earlier SparkRun proxy hid URLs (spec-decode
@@ -39,6 +39,15 @@ Request normalization is always on; response spoofing depends on
 | response | `/v1/chat/completions` (incl. SSE deltas) | real served name → `SPOOF_MODEL` — mode B only; mode A leaves them untouched |
 | both | everything else | **no transformation** — byte-for-byte proxy |
 
+The request rewrite re-encodes the whole JSON body, so it must be **lossless**.
+`cjson` collapses `[]` and `{}` into the same empty Lua table by default, which
+turned a tool schema's `"required": []` into `"required": {}`; vLLM ignored the
+corrupted schema but sglang validates it and answers
+`400 Tool N function has invalid 'parameters' schema: {} is not of type 'array'`,
+failing every tool-calling client. `access.lua` enables
+`cjson.decode_array_with_array_mt` to keep arrays as arrays — do not remove it,
+and re-check a tool-calling request after touching that file.
+
 ## Two modes: can I tell which model is active?
 
 `SPOOF_RESPONSES` in `.env` (default `0` = mode A) controls completion-response
@@ -47,7 +56,7 @@ advertising the stable generic name); request normalization is also always on.
 
 | mode | `SPOOF_RESPONSES` | `/v1/models` says | chat/completions responses say | use |
 |---|---|---|---|---|
-| A — real name in completions | `0` | `spark-llm` | real backend name (`deepseek-v4-flash`, …) | default; model list generic, completion responses reveal the active model |
+| A — real name in completions | `0` | `spark-llm` | real backend name (`deepseek-v41-flash`, …) | default; model list generic, completion responses reveal the active model |
 | B — full spoof | `1` | `spark-llm` | `spark-llm` | real name must never leak anywhere |
 
 Request normalization (client sends `spark-llm` → backend hears its real
@@ -117,7 +126,7 @@ curl -s http://spark.shawndo.intra:4000/metrics | grep spec_decode     # raw pas
 | var | default | meaning |
 |---|---|---|
 | `SPOOF_MODEL` | `spark-llm` | the name clients see |
-| `BACKEND_MODEL` | `deepseek-v4-flash` | the ACTIVE recipe's real served name; request rewrites target it |
+| `BACKEND_MODEL` | `deepseek-v41-flash` | the ACTIVE recipe's real served name; request rewrites target it |
 | `SPOOF_FROM` | all known recipe names | real names rewritten in responses |
 | `SPOOF_RESPONSES` | `0` | response spoofing toggle: `0` = mode A (real names visible), `1` = mode B (everything says `spark-llm`) |
 | `UPSTREAM` | `127.0.0.1:8000` | vLLM backend address |

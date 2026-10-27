@@ -1,0 +1,51 @@
+# Local configuration and secrets (copy .env.example to .env)
+.env
+.env.tp4
+.env.tp4-switchless
+state-tp4-switchless/
+logs-tp4-switchless/
+.env.tp8
+state/
+state-tp4/
+state-tp8/
+*.pem
+*.key
+
+# Runtime output (engine logs, profiler traces, benchmark results)
+logs/
+logs-tp4/
+logs-tp8/
+*.log
+*.trace.json.gz
+
+# Model weights and Engram shards never live in the repo
+models/
+engram/
+*.safetensors
+*.bin
+
+# Build artefacts (librow_store.so is compiled inside the image)
+__pycache__/
+*.py[cod]
+*.so
+*.o
+*.tar
+
+# Editor and OS noise
+*.bak
+*.bak-*
+*.orig
+*.swp
+*~
+.DS_Store
+.idea/
+.vscode/
+
+# Per-run environment dumps (host/user/path details): keep local
+docs/results/*/envs/
+docs/results/*/env-*.txt
+docs/results/*/dot-env.snapshot
+docs/results/*/mounts-*.json
+
+# host-side output of scripts/fetch_runtime.sh (the image builds fetch their own copy)
+runtime/fetched/

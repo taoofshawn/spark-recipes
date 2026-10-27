@@ -1,0 +1,40 @@
+# Local configuration and secrets (copy .env.example to .env)
+.env
+.env.tp4
+state/
+state-tp4/
+*.pem
+*.key
+
+# Runtime output (engine logs, profiler traces, benchmark results)
+logs/
+logs-tp4/
+*.log
+*.trace.json.gz
+
+# Model weights and Engram shards never live in the repo
+models/
+engram/
+*.safetensors
+*.bin
+
+# Build artefacts (librow_store.so is compiled inside the image)
+__pycache__/
+*.py[cod]
+*.so
+*.o
+*.tar
+
+# Editor and OS noise
+*.bak
+*.bak-*
+*.orig
+*.swp
+*~
+.DS_Store
+.idea/
+.vscode/
+
+# staged by scripts/fetch-sglang-canary.sh (pinned, never tracked -- the script also
+# writes REF and src.tgz, and any of them left out here shows up as untracked noise)
+runtime/sglang-canary/

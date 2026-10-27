@@ -35,10 +35,10 @@ services:
       SPOOF_MODEL: "${SPOOF_MODEL:-spark-llm}"
       # Real served names the proxy recognizes in responses (comma-separated).
       # Extend when a new recipe lands with a new served name.
-      SPOOF_FROM: "${SPOOF_FROM:-deepseek-v4-flash,glm-5.3-flash,mimo-v25-dflash,deepseek-v4-flash-dspark,GLM-5.3-Flash-EXL3}"
+      SPOOF_FROM: "${SPOOF_FROM:-deepseek-v41-flash,glm-5.3-flash}"
       # The ACTIVE backend's real served name. Requests with model=spark-llm
       # are rewritten to this before hitting vLLM.
-      BACKEND_MODEL: "${BACKEND_MODEL:-deepseek-v4-flash}"
+      BACKEND_MODEL: "${BACKEND_MODEL:-deepseek-v41-flash}"
       # vLLM API address (host network -> loopback of the leader).
       UPSTREAM: "${UPSTREAM:-127.0.0.1:8000}"
     healthcheck:

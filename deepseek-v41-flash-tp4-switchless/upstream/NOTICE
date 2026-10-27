@@ -1,0 +1,36 @@
+DeepSeek-V4.1-Flash on 3x NVIDIA DGX Spark
+Copyright (C) 2026 zurih
+
+This repository (start.sh, stop.sh, boot.py changes, adapter/, scripts/, files/,
+runtime glue, documentation) is free software: you can redistribute it and/or
+modify it under the terms of the GNU Affero General Public License as published
+by the Free Software Foundation, either version 3 of the License, or (at your
+option) any later version. See LICENSE. It is distributed WITHOUT ANY WARRANTY;
+see the License for details.
+
+Third-party components and their licences:
+
+- The recipe skeleton (boot.py, benchmarks/, tests/, the Engram row-store idea and
+  the Docker layout) originates from 0xSero/deepseek-v4.1-flash-4x-rtx-pro-6000,
+  MIT License, Copyright (c) 2026 0xSero. The MIT notice is retained in
+  LICENSE.upstream-MIT as that licence requires; the combined work is offered
+  under the AGPL-3.0-or-later.
+- runtime/flash_mla_sm120.py is derived from SGLang and remains under the Apache
+  License 2.0 (LICENSE.sglang); the page-split changes are distributed under the
+  same terms.
+- runtime/sglang/deepseekv41_detector.py is sgl-project/sglang
+  python/sglang/srt/function_call/deepseekv41_detector.py at commit 464fffbec8d0
+  (SGLang #39665), unmodified, Apache License 2.0 (LICENSE.sglang). The default
+  image installs it through runtime/patch_v41_tool_constraint.py.
+- patches/nccl-2393-aarch64-cts-fence.patch is Stanislav Bardyuk's change from
+  NVIDIA/nccl PR #2393 (commit b85c5d9c4aa5), backported to NCCL v2.30.7-1;
+  Apache License 2.0 (LICENSE.sglang contains the same Apache-2.0 text).
+- runtime/b12x/b12x/comm/roce_ring is the path-aware RoCEnante package of
+  FujitsuPolycom/sparkring (commit f16b5f4), itself derived from local-inference-lab/b12x
+  (RoCEnante, PR 295); Apache License 2.0 (runtime/b12x/LICENSE). Origin and local
+  changes: runtime/b12x/roce_ring-provenance.json. scripts/ring_mesh/plan.py drives
+  sparkring's fabric planner and the units run sparkring's RDMA-TX marker; neither is
+  vendored here (both come from a sparkring checkout, Apache License 2.0).
+- SGLang, FlashInfer, DeepGEMM, PyTorch, NVIDIA components and the DeepSeek model
+  retain their respective upstream licences. This repository does not
+  redistribute model weights.

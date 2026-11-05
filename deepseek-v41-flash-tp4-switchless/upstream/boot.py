@@ -357,7 +357,7 @@ def serve():
         '--max-running-requests', max_req,
         '--cuda-graph-max-bs-decode', graph_bs,
         '--random-seed', '0',
-        '--enable-decoder-swa-bounded-replay',
+        '--disable-chunked-prefix-cache',
         '--tool-call-parser', os.environ.get('TOOL_CALL_PARSER', 'deepseekv41'),
         '--reasoning-parser', os.environ.get('REASONING_PARSER', 'deepseek-v41'),
         '--host', os.environ.get('HOST', '0.0.0.0'),

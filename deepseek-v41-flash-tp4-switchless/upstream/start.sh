@@ -664,9 +664,10 @@ cmd_build() {
     remote_on "$h" "mkdir -p $(printf '%q' "$WORKER_DIR")"
     # Anchored on purpose: an unanchored `models` also matches .../sglang/srt/models,
     # and an excluded directory is never transferred, so the worker's copy goes stale.
-    rsync -aH --delete --exclude '.env' --exclude '.env.tp4' \
-      --exclude '/state' --exclude '/state-tp4' \
-      --exclude '/logs' --exclude '/logs-tp4' --exclude '/models' \
+    rsync -aH --delete --exclude '.env' --exclude '.env.tp4' --exclude '.env.tp4-switchless' \
+      --exclude '/state' --exclude '/state-tp4' --exclude '/state-tp4-switchless' \
+      --exclude '/logs' --exclude '/logs-tp4' --exclude '/logs-tp4-switchless' \
+      --exclude '/models' \
       --exclude '/engram' \
       -e "$(ssh_rsync_e)" \
       "$ROOT/" "${WORKER_USER:+${WORKER_USER}@}${h}:${WORKER_DIR}/"

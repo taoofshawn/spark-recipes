@@ -1051,6 +1051,43 @@ packed shards, profiler-estimate off.
   (5) per-rank `docker logs` must run on the rank's own host.
 - Owner request: align default thinking with the GLM lanes — see pre-bring-up entry.
 
+### 2026-11-05 — miaai boot crash: MoE gate tripped by truncated EXTRA_CONTAINER_ENV (fossil env file)
+- **Symptom:** first miaai-image boot on spark-0f0b (`dsv41-4x-spark:canary-roce-miaai`,
+  ID `5b215714c933`) — weights doctor passed (48/48 shards) but the engine died at model
+  init: `Mxfp4FlashinferCutlassMoEMethod requires hidden_size (5120) and
+  intermediate_size_per_partition (576) to be multiples of 128` (sglang
+  `mxfp4_flashinfer_cutlass_moe.py` assert). TP4 gives every rank a 576-wide slice of all
+  384 experts — legal ONLY via the b12x_next adapter, whose sitecustomize hook lifts the
+  gate to n % 64 (requires `EP_SIZE=1`, satisfied).
+- **Root cause (A/B 2 vs A/B 1):** the boot ran from the stale Oct-21 node site copy
+  `/home/sdrew/ds41f-miaai-site/` (not the repo checkout). Its rendered
+  `stack/.env.tp4-switchless` carries a TRUNCATED `EXTRA_CONTAINER_ENV` (5 NCCL/indexer
+  flags only — the production tail incl. `DSV41_MOE_B12X_NEXT=1` +
+  `DSV41_MOE_B12X_NEXT_DETERMINISTIC=1` is missing) and the MoE flags stranded as plain
+  env-file lines. Containers receive env ONLY via the `-e` whitelist + the wholesale
+  `EXTRA_CONTAINER_ENV` string (start.sh :375-378, ungated) — plain lines never reach the
+  container (confirmed via `docker inspect` of the crashed container: no MoE flags). Hook
+  inert → stock CUTLASS gate rejected 576. The miaai image build is NOT at fault —
+  `IMAGE=canary-roce-miaai` is already correct in the fossil and the node site copy.
+- **Why A/B 1 (knapcio) served:** knapcio's boot had the full `EXTRA_CONTAINER_ENV`, so
+  the adapter armed ungated (same style as the deployed miaai stack — no `DSV41_LAUNCHER`).
+  Drift is purely env-file content, not image or code.
+- **Second casualty:** the fossil also lacks `SERVED_MODEL_NAME=deepseek-v41-flash` —
+  start.sh falls back to `deepseek-v4.1-flash`, breaking model-name-proxy's
+  `BACKEND_MODEL`/`SPOOF_FROM` contract (proxy unhealthy ~39h). Re-render restores it.
+- **Repo fixes staged (topic branch):** `site/env.switchless` IMAGE knapcio → miaai
+  (template drift, the A/B 2 build's intended tag); `upstream/boot.py` serve args swap
+  `--enable-decoder-swa-bounded-replay` → `--disable-chunked-prefix-cache`;
+  `upstream/start.sh` cmd_build worker rsync gains `--exclude` entries for
+  `.env.tp4-switchless` / `/state-tp4-switchless` / `/logs-tp4-switchless` — hardens the
+  DESTRUCTIVE `--delete` rsync path (2026-10-23 incident class).
+- **Fix path:** never hand-edit node files — merge topic branch → `git pull` on the head
+  repo checkout → re-render via repo `site/start-cluster.sh` (supersedes both the fossil
+  and the Oct-21 node copy; envsubst expands `$HOME` identically) → worker-first boot
+  (3,2,1 → rank 0) → verify `docker inspect` shows both MoE flags → doctor 48/48 →
+  `/health` 200. If the boot fails: capture `docker logs` BEFORE any `docker rm -f`
+  (site `stop` skips EXITED containers — rm per rank first).
+
 ### 2026-10-18 — pre-bring-up: thinking default aligned with GLM lanes
 - Owner request: confirm default thinking/effort/temperature match the GLM switchless
   lanes before first boot. Temperature: no server-side default in any lane (match).

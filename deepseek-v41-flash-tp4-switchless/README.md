@@ -6,9 +6,9 @@ DeepSeek-V4.1-Flash **1017 release**
 (dsv4.1 canary branch) TP4/EP1, DSpark speculative decoding (draft layers are INSIDE the
 checkpoint — no separate drafter), 1M-token context, Engram n-gram tables on NVMe.
 Vendored from [knapcio's 4x-DGX-Spark TP4 stack](https://github.com/knapcio/DeepSeek-V4.1-Flash-4x-DGX-Spark-TP4)
-@ `aff52fa` (vendored at [upstream/VENDORED-AT.md](upstream/VENDORED-AT.md); the MiaAI-Lab
-stack it replaces is archived at `upstream-miaai-archive/` — swap rationale in
-research.md 2026-10-26).
+@ `540bf07` (release **v2.6.4**; vendored at [upstream/VENDORED-AT.md](upstream/VENDORED-AT.md);
+the MiaAI-Lab stack it replaces is archived at `upstream-miaai-archive/` — swap rationale
+research.md 2026-10-26, the v2.6.4 refresh research.md 2026-11-06).
 
 **Transport:** the site's shared four-PF switchless NCCL contract — same lib
 (`~/.local/lib/nccl-patched-4pf`, SHA `8de68def…`), same netplan (all four PCIe views),
@@ -86,8 +86,11 @@ Base image `lmsysorg/sglang:dev-dsv41` pinned to digest
 SGLang dsv4.1 canary tree (staged, not tracked), the sglang-kernel 0.4.7 /
 sgl-deep-gemm 0.2.0 wheels, the b12x/b12x_next MoE line, the SM120 flash-MLA
 override, and the build-time patches: knapcio's image-placeholder sanitize plus the
-site's SWA tail-eviction backport (#35515). Site mods and lineage:
-[upstream/VENDORED-AT.md](upstream/VENDORED-AT.md).
+FlashInfer modules (v2.6.2 prefill-native-extra, v2.6.3 #7676 fence, v2.6.4 swan decode).
+The site's former SWA tail-eviction backport (#35515) was **removed 2026-11-06**: it patched
+`SWARadixCache`, a class this tree never instantiates (the lane runs `UnifiedRadixCache`);
+retention is now upstream's `DSV41_SWA_THIN` / `DSV41_SWA_CONE_REPLAY`. Site mods and
+lineage: [upstream/VENDORED-AT.md](upstream/VENDORED-AT.md).
 
 Build LOCALLY via `site/build-cluster.sh [commit-ish]` FROM THE HEAD NODE (builds the
 head + every worker and verifies each image carries the commit's
@@ -116,12 +119,15 @@ The launcher's `serve` auto-triggers it only when an image is missing — build 
    - Coherent response + forced tool call (round-trip through the dsv4.1 parser).
    - Corruption probe: emoji/CJK generation, count U+FFFD — must be 0.
    - Boot log per rank: 0 NCCL WARNs, `SWITCHLESS_RING_ONLY` marker present in the
-     container's NCCL, the patch tags `# [encoding_dsv41-placeholder-sanitize]` and
-     `# [swa-radix-tail-evict]` present in the container's patched sources, and the
-     adapter's boot warning line `…requests that explicitly enable thinking below 16384
-     tokens are raised to it…`.
+     container's NCCL, the patch tag `# [encoding_dsv41-placeholder-sanitize]` present in
+     the container's patched sources, and the adapter's boot warning line `…requests that
+     explicitly enable thinking below 16384 tokens are raised to it…`.
+   - Cache adapters armed (v2.6.4): `DSV41_SWA_THIN receipt: mode=…`, `DSV41_SWA_CONE`
+     (N 8192), the swan module tag `00505fe850b7` with no fallback, and `decode yield
+     (share 33)`; a `_thin`/`_cone` *not installed* line means an engine pin drifted.
    - `SpecDecoding`/DSpark acceptance > 1 (speculative decoding active).
-   - Record the actual `max_total_num_tokens` line (pool sized from free memory).
+   - Record the actual `max_total_num_tokens` line AND the `DSV4 pool sizes:` line
+     (`full=` / `swa=` / `c4=`) — the tails 384 change moves the SWA/full split.
    - Retention (the swap's reason): after two agent-style turns with an idle gap, a
      follow-up request must report `cached_tokens ≈ full prompt` — the A→B harness in
      research.md 2026-10-26. If the cap-mode 2–4 s GPU wipe or the churn-case 0-hit

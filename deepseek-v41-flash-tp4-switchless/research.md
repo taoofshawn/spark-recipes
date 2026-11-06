@@ -142,18 +142,100 @@ packed shards, profiler-estimate off.
    snapshot.** v0.5.22 verified to contain the whole DSV4.1 stack the canary needs
    (`encoding_dsv41`, `deepseek_v4_dspark`, `kv_canary`, dsv4 backend,
    `UnifiedRadixCache` replacing the deleted `SWARadixCache`) plus #43502's merged
-   prefix-tails pricing. NOT a retention fix: the unified `swa.py` walk at v0.5.22 has
-   the same branch-tail eviction blind spot (verified at the tag), and the follow-up
-   retention work (#46008) is still open. Migration driver is drift, not this bug:
-   the site patch anchors (sanitize, tail-eviction, floor) will keep eroding against
-   the pinned tree. Migration cost: the ~20 site adapters monkey-patch branch
-   internals (`wo_a_w8`, `hc_fused`, `moe_b12x_next`, `fast_load`, engram, …) —
-   each needs re-verification; receipts re-established on GB10 (upstream CI covers
-   GB300 only). When it happens, port the #35515 tail-deprioritization into the
-   unified `swa.py` walk (cursor-recovery semantics required, per the #35515 author)
-   and consider upstreaming it as the follow-up that PR offered.
+   prefix-tails pricing. Migration driver is drift, not the retention bug:
+   the site patch anchors (sanitize, floor) will keep eroding against the pinned tree.
+   Migration cost: the ~20 site adapters monkey-patch branch internals (`wo_a_w8`,
+   `hc_fused`, `moe_b12x_next`, `fast_load`, engram, …) — each needs re-verification;
+   receipts re-established on GB10 (upstream CI covers GB300 only).
+   **CORRECTED 2026-11-06:** the premise that this tree's hybrid SWA still runs
+   `SWARadixCache` was WRONG — `mem_cache/registry.py:146` routes this lane to
+   `UnifiedRadixCache` with components `[FULL, SWA]`, and the pinned tree already ships
+   `mem_cache/unified_cache/`. Consequences: (a) the site's #35515 backport was patching a
+   dead class and is now REMOVED; (b) v2.6.4's `DSV41_SWA_THIN` / `DSV41_SWA_CONE_REPLAY`
+   are the unified-cache retention fix and needed **no re-pin** (their engine pins match
+   this tree exactly — verified in the deployed image); (c) the "unified `swa.py` walk has
+   the same blind spot, so port #35515 there" follow-up is superseded by upstream's own
+   `swa_thin`, which demotes superseded checkpoints instead of protecting branch tails.
+   This item is now a pure drift/maintenance item.
 
 ## Changelog
+
+### 2026-11-06 — v2.6.4 re-vendor: SWA resume-point retention fixed at the eviction layer
+
+- **What was open.** Since 2026-10-26 the lane has had the ratio-0.065 + tails-128 config
+  that made agent-turn retention work in the *measured* cases, but with no mechanism-level
+  fix and no safety net: a session whose SWA resume point was lost re-prefilled its whole
+  context, and the 2026-10-26 entry's "compressor-state ring" conclusion explained the
+  symptom without offering a lever.
+- **Upstream survey (2026-11-06).** MiaAI-Lab: tip `64b02de` = our archive pin, **zero new
+  commits**; only issue #43 gained field reports. knapcio: **43 commits** ahead of our
+  `aff52fa` (v2.6, v2.6.1, v2.6.2, v2.6.3, v2.6.4, #68). **v2.6.4 (2026-11-05) is the fix
+  for exactly this lane's open issue.**
+- **The mechanism (corrects the 2026-10-26 attribution).** `adapter/swa_thin.py`': a cached
+  prefix is reusable only at a node whose **last 128 tokens still hold SWA slots**; every
+  8192-token prefill chunk leaves a 512-slot checkpoint and every agent turn ~512 more, so
+  in stock LRU order an idle session loses its resume point after ~70–100K slots of other
+  traffic and re-prefills from token 0 while its full KV is still resident. This matches our
+  measured signature — "B after a 60 s quiet gap = **256** (one page)" is a match stopping
+  at the last node with a resident window — better than the compressor-ring reading, and it
+  is the same lever the ratio-0.065 fix pushed from the capacity side.
+- **The dead-patch finding (this lane's own bug).** The site's #35515 backport
+  (`runtime/patch_swa_tail_eviction.py`) patched `SWARadixCache.evict()` — a class this
+  pinned tree **never instantiates**: `mem_cache/registry.py:146` routes to
+  `_create_unified_radix_cache` and builds components `[FULL, SWA]`. So the patch compiled,
+  anchored 3/3, shipped, and could never run; that — not the compressor state — is why
+  `2026-10-26` concluded "the backport does not close it". **Removed** (patch + its two
+  Dockerfile lines). `DSV41_SWA_THIN` hooks the live class.
+- **Engine pins verified in the deployed image before adoption** (not just at build):
+  `swa_thin`'s three pins (`UnifiedRadixCache.cache_unfinished_req` `d64c72cf…`,
+  `UnifiedLRUList._add_node_after` `7b84b699…`, `_remove_node` `e0101fd3…`) and all nine of
+  `swa_cone`'s pins matched the running `canary-roce-miaai` image exactly. The canary ref
+  `f80c91a4b` did **not** move `aff52fa`→`540bf07`, so no SGLang re-pin was needed — watch
+  item 8's premise ("unified cache requires a v0.5.22 re-pin") is retired on this evidence.
+- **The silent regression this session found.** `2dc894c` (2026-11-05) swapped the serve
+  args `--enable-decoder-swa-bounded-replay` → `--disable-chunked-prefix-cache` inside an
+  unrelated "env parity" commit, with no recorded rationale or measurement. Consequences:
+  (a) `swa_cone.py:251` **refuses to arm without** `cache.decoder_swa_bounded_replay`, so
+  the cone replay would have been a silent no-op; (b) #41303's "keep a full SWA window for
+  short bounded-replay extends" — which our own patch set adds — keys on that flag.
+  **Reverted** to `--enable-decoder-swa-bounded-replay` (knapcio's boot.py value).
+- **Adopted (steps 1–6 of the review's plan):**
+  1. `--enable-decoder-swa-bounded-replay` restored (`upstream/boot.py`).
+  2. `DSV41_SWA_THIN=1`, `DSV41_SWA_CONE_REPLAY=1`, `DSV41_SWA_CONE_TOKENS=8192`,
+     `DSV41_SWA_NATIVE_DECODE=1`, `DSV41_DECODE_YIELD=33` in `EXTRA_CONTAINER_ENV`.
+  3. `--swa-prefix-tails 128 → 384` (v2.6.4's certified multi-user profile).
+  4. Upstream refresh `aff52fa → 540bf07` (the vehicle carrying 2 and 3).
+  5. #35515 patch removed (dead class).
+  6. `CHUNKED_PREFILL_SIZE 4096 → 8192`.
+- **Why `swa_thin` + 384 tails + cone replay are one package.** `swa_thin` keeps superseded
+  checkpoints from evicting older resume points (measured upstream: whole-session
+  re-prefills 2/2 → **0**; resumed 300–330K sessions **61–64 s → 3.9–6.5 s**); 384 tails give
+  those resume points somewhere to live (cost: SWA pool 84,480 → 182,784 slots, ~+2.2 GiB,
+  full pool 5.0–5.16M → ~3.44–3.75M); the cone replay is the fallback when a resume point is
+  lost anyway (**1.6–2.1 s** one-chunk replay vs 22–68 s whole-context re-prefill).
+- **Caveats carried into the gate.** Most v2.6.x receipts were measured on the *abliterated*
+  1017 checkpoint (`517efab`) with the GPU clock capped at 2200 MHz; this lane serves the
+  stock checkpoint. Upstream also documents two known limits: a request that forks from an
+  older turn boundary (edit/rewind, 2–4 % of their production requests) falls back further
+  under SWA pressure, and a cone-replay invariant violation raises (all ranks stop) instead
+  of falling back.
+- **Site-mod re-apply gotchas (both cost a build):** (1) mirroring the upstream tree over
+  `upstream/` overwrote every site-modded file — restore `encoding_compat.py`, `start.sh`,
+  both `.env.example`s, `test_max_new_tokens.py` and re-collapse the Dockerfile, then verify
+  `grep -c DEFAULT_MAX_NEW_TOKENS_FLOOR` > 0 before building; (2) three upstream packaging
+  tests assert a **standalone** `RUN python3 …verify_sglang_*.py` line, which the site's RUN
+  collapsing breaks — the acceptance-of-chained-form mod must be re-applied
+  (`.research/fix-chained-run-tests.py`), and the site `.env` examples must be re-based on
+  upstream's or `test_decode_yield.py` fails on the missing profile blocks.
+- **Pre-build verification:** local suites `test_max_new_tokens` 20/20, `test_thinking_alias`
+  6/6, `test_loop_abort` 15/15, `test_history_repair` 6/6, `test_autotune_keep` ok, and the
+  SGLang packaging tests 6/6 + 6/6 + 9/9 after the fix. Two local-only "failures"
+  (`test_sglang_dsv41_plain_text_patch`, `test_sglang_parallel_prompt_encode_patch`) are the
+  Windows CRLF checkout defeating an LF sha256 pin — the same bytes match after
+  normalisation, and the Linux build passes them.
+- Deploy/validation receipts: the entry below.
+
+## Changelog (continued)
 
 ### 2026-10-26 — agent-turn retention FIXED: `--swa-prefix-tails 128` + ratio 0.065 (knapcio certified profile + MiaAI #43 band)
 - **The real failure, finally instrumented.** tcpdump on the head (:4000 client→nginx

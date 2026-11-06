@@ -15,8 +15,11 @@ q_i = the distribution the draft token was actually sampled from.
 Measured offline on engine-exact p and q (capture schema v4, coding-with-thinking traffic):
 2.927 -> 2.999 tokens per step (+2.5 %).
 
-Random draws come from torch's device generator in the same order on every TP rank, exactly like
-the stock sampler's torch.rand calls, so all ranks take the same decision.
+Random draws come from torch's device generator; this function consumes the same shapes in the same
+order as before. Equal draw consumption does not make rank-local values equal: the TP ranks agree on
+the published decision because SGLang synchronizes the eager sampled accept (DSPARK_ACCEPT_SAMPLE;
+spec_sync_free only skips graph-accept sites). Greedy rows: an all-greedy batch never calls this; in a
+mixed batch it runs on every row and SelectMixedAccept keeps the greedy rows' own AcceptGreedy result.
 """
 import os
 
@@ -50,7 +53,11 @@ def block_accept_probs(X, target_probs, draft_probs, eta=None, gumbel=None, live
     h = torch.empty(bs, g, device=dev)
     if g > 1:
         s = (w[:, :g - 1, None] * target_probs[:, 1:g].float() - draft_probs[:, 1:g].float()).clamp_min(0).sum(-1)
-        h[:, :g - 1] = s / (s + 1 - w[:, :g - 1]).clamp_min(1e-30)
+        # (1 - w) first: exact in FP32 for w in [0.5, 1] (Sterbenz), so S's digits below an ULP of 1
+        # survive the sum. (s + 1) - w rounded S against 1: the effective (clipped) threshold moved by up
+        # to ~0.5 on the rows tested; the raw value was unbounded (w = 1, S < 2^-24 rounds the denominator
+        # to 0 and the 1e-30 floor). Positive S below 1e-30 still meets that inherited floor.
+        h[:, :g - 1] = s / (s + (1 - w[:, :g - 1])).clamp_min(1e-30)
     h[:, g - 1] = w[:, g - 1]
     if eta is None:
         eta = torch.rand(bs, g, device=dev)
@@ -73,6 +80,47 @@ def block_accept_probs(X, target_probs, draft_probs, eta=None, gumbel=None, live
         gumbel = torch.empty_like(res).exponential_()
     corr = (res / gumbel).argmax(dim=-1)
     return tau, corr
+
+
+try:  # DSV41_BLOCK_VERIFY_FOLD (adapter/block_verify_fold.py): the same rule in 4 Triton launches
+    import block_verify_fold as _fold_mod
+    _fold = _fold_mod if _fold_mod.ENABLED else None
+except ImportError:  # pragma: no cover
+    _fold_mod = _fold = None
+try:  # DSV41_AB_VARIANTS in-boot A/B (test only): the fold is eager, so it switches per call
+    import ab_variant as _ab
+except ImportError:  # pragma: no cover
+    _ab = None
+_FOLD_CPU = os.environ.get("DSV41_BLOCK_VERIFY_FOLD_CPU", "0") == "1"   # tests only (Triton interpreter)
+
+
+def _fold_mode():
+    """None (torch path), "on" or "check" for this call."""
+    if _fold_mod is not None and _ab is not None and getattr(_ab, "ACTIVE", False):
+        v = _ab._fold_value(_ab.env("DSV41_BLOCK_VERIFY_FOLD", "0"))     # the value configure() validated
+        return None if v == "off" else v
+    if _fold is None:
+        return None
+    return "check" if _fold.CHECK else "on"
+
+
+def _folded(candidates, target_probs, draft_probs, bs, gamma, stride, cutoff_verify_lens, check=False):
+    """block_accept_probs through the fold kernels. The random draws are the ones block_accept_probs makes, in
+    its order and shapes (eta [bs, gamma] uniform, then [bs, V] fp32 exponential), so the stream is unchanged."""
+    tp = target_probs.view(bs, stride, -1)
+    dp = draft_probs.view(bs, gamma, -1)
+    dev = candidates.device
+    eta = torch.rand(bs, gamma, device=dev)
+    gumbel = torch.empty((bs, tp.shape[-1]), dtype=torch.float32, device=dev).exponential_()
+    X = candidates.view(bs, stride)[:, 1:gamma + 1]
+    cut = None if cutoff_verify_lens is None else cutoff_verify_lens[:bs]
+    got = _fold_mod.fold(X, tp, dp, eta, gumbel, live=cut, live_sub=1)
+    if not check:
+        return got
+    live = None if cut is None else cut.to(torch.int64) - 1
+    ref = block_accept_probs(X.long(), tp, dp, eta=eta, gumbel=gumbel, live=live)
+    _fold_mod.check_counts(got, ref)
+    return ref
 
 
 def install(accept_module):
@@ -107,6 +155,14 @@ def install(accept_module):
                 next_token_logits=target_logits, sampling_info=sampling_info,
                 draft_token_num=verify_num_draft_tokens, bs=bs, max_top_k=draft_input.max_top_k,
                 uniform_top_k_value=draft_input.uniform_top_k_value)
+        mode = _fold_mode()
+        if mode is not None and (candidates.is_cuda or _FOLD_CPU):
+            tau, corr = _folded(candidates, target_probs, draft_probs, bs, gamma, verify_num_draft_tokens,
+                                cutoff_verify_lens, check=mode == "check")
+            _fold_mod.receipt("check" if mode == "check" else "fold", bs)
+            return tau.to(torch.int32), corr, torch.zeros(bs, dtype=torch.int32, device=candidates.device)
+        if _fold_mod is not None:
+            _fold_mod.receipt("torch", bs)
         X = candidates.view(bs, verify_num_draft_tokens)[:, 1:gamma + 1].long()
         live = None if cutoff_verify_lens is None else (cutoff_verify_lens[:bs].to(torch.int64) - 1)
         tau, corr = block_accept_probs(X, target_probs.view(bs, verify_num_draft_tokens, -1),
@@ -115,4 +171,5 @@ def install(accept_module):
 
     cls._dsv41_orig_execute = cls.execute
     cls.execute = staticmethod(execute)
-    print("[block_verify] armed: block verification for sampled DSpark rows", flush=True)
+    fold_note = "" if _fold is None else f", fold {'check' if _fold.CHECK else 'on'} (DSV41_BLOCK_VERIFY_FOLD)"
+    print(f"[block_verify] armed: block verification for sampled DSpark rows{fold_note}", flush=True)

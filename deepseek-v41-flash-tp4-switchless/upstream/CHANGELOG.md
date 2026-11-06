@@ -2,6 +2,567 @@
 
 ## Unreleased
 
+A loop-aborted request now ends as a named error instead of a normal stop, and a request whose history holds a
+broken tool call is no longer rejected with HTTP 400 ([#66](https://github.com/knapcio/DeepSeek-V4.1-Flash-4x-DGX-Spark-TP4/issues/66)).
+Ported from upstream: [MiaAI-Lab/DeepSeek-v4.1-Flash-DGX-Sparks#55](https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-DGX-Sparks/pull/55)
+(upstream commit `bdf657c`, issue [#54](https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-DGX-Sparks/issues/54)).
+Requests the loop detector does not stop are unchanged, token for token; the detector's thresholds and what it keeps
+are unchanged.
+
+- **Fix: named exit for the loop abort** (`adapter/loop_abort.py`, `DSV41_LOOP_NAMED_EXIT`, default 1). The detector
+  used to finish a looping request with `finish_reason=stop` / `matched_stop=repetition`, which a client cannot tell
+  from a finished answer: an agent client (OpenCode) took a reasoning-only step that ended this way as the end of its
+  turn and sat idle, and a tool call cut mid-arguments looked like a complete one. A hit now finishes the request with
+  SGLang's `FINISH_ABORT` (HTTP 500 status, error type `loop_abort`) and a message that names the cause, e.g.
+  `loop_abort: DSV41 repetition (art=ngram, period=32, output_tokens=1102, kept=823)`. Streaming clients get an error
+  event after the tokens already sent; non-streaming clients get HTTP 500 with that message. On the Anthropic
+  Messages endpoint the stream ends with an `api_error` event carrying the message; a non-streaming Messages request
+  gets HTTP 500 with SGLang's generic 5xx text. The log line gains `art=`, `period=` and `exit=`.
+  `DSV41_LOOP_NAMED_EXIT=0` restores the stop exit. The old exit had one more defect that goes away with it: SGLang's
+  detokenizer trims a string `matched_stop` at its first occurrence in the finished output, so an aborted answer that
+  contained the word "repetition" was also cut there.
+- **Fix: broken tool calls in the request history** (`adapter/history_repair.py`, `DSV41_HISTORY_REPAIR`, default 1).
+  An agent client keeps a truncated tool call in its history next to its own "invalid JSON, try again" tool result;
+  SGLang's `parse_tool_call_arguments` rejected that history with HTTP 400, which agent clients do not retry. Tool-call
+  arguments that are not a JSON object are now passed to the template as `{"_unparseable_arguments": <raw text>}`
+  and logged as `DSV41 history repair: len=... reason=json|not_object`, so the model sees its own broken call. Valid
+  arguments go through SGLang's parser unchanged. `DSV41_HISTORY_REPAIR=0` restores the 400.
+- `start.sh` passes both switches to every container (head and workers), like the other `DSV41_LOOP_*` keys, so a
+  value set in `.env.tp4` takes effect; both are documented in `.env.tp4.example` / `.env.example`.
+- `scripts/ds_gate.py tscan` and `scripts/prefix_scan.py` count the named exit (an HTTP error whose message starts
+  with `loop_abort:`) as a loop / degenerate output, as they counted `matched_stop=repetition`, instead of as a
+  request error.
+- **Tests:** upstream's `tests/test_loop_abort.py` (15, three new) and `tests/test_history_repair.py` (6), in the
+  build of all three images. New `tests/test_loop_exit_passthrough.py` (`Dockerfile.canary-roce` build, against the
+  image's own SGLang tree): the detector decides hit / no hit and the kept length exactly as v2.6.3's on a fuzz
+  corpus; a decode loop with speculative accept lengths, EOS and the length cap gives identical tokens, finish step,
+  finish reason and `finished_len` with no hook, the named exit, `DSV41_LOOP_NAMED_EXIT=0` and `DSV41_LOOP_ABORT=0`
+  for every request the detector does not stop; for stopped requests the two exits keep the same tokens; valid tool
+  histories encode to byte-identical prompts through the pinned `encoding_dsv41` with and without the repair; and
+  the serving layer still has the `FINISH_ABORT` signature, the streaming error branch for an `HTTPStatus` abort and
+  the non-streaming HTTP 500 that the named exit relies on.
+- **Credits:** Alexander Busse ([GanyX19](https://github.com/GanyX19)) found the problem on a TP4 agent workload and
+  wrote the fix (MiaAI-Lab#54, #55, merged upstream by MiaAI-Lab as `bdf657c`); `adapter/history_repair.py`,
+  `tests/test_history_repair.py` and the `loop_abort.py` / `test_loop_abort.py` changes are his, unchanged.
+  [slidonnici](https://github.com/slidonnici) reported the stall on this repository with OpenCode (#66).
+
+## 2026-11-05 v2.6.4
+
+Four switches added to the production profile in `.env.tp4.example`. `DSV41_SWA_NATIVE_DECODE=1` ("swan"): the
+decode attention reads the sliding-window (SWA) cache in place instead of copying it into smaller pages first. Outputs
+are bit-identical; greedy c1 decode +1.4 / +1.9 % in two in-boot A/Bs on the four Sparks. `DSV41_DECODE_YIELD=33`:
+while one prompt prefills in chunks, the other running streams keep about 40 % of their decode rate instead of 8 %
+(measured on the four Sparks), and that prompt's first token comes x1.47 later. `DSV41_SWA_THIN=1` with
+`--swa-prefix-tails 384` (was 128): idle agent sessions keep their prefix-cache resume points (resumed 300-330K
+sessions 3.9-6.5 s instead of 61-64 s on the four Sparks), for a full KV pool of 3.44-3.75M instead of 5.0-5.16M
+tokens.
+`DSV41_SWA_CONE_REPLAY=1` with `DSV41_SWA_CONE_TOKENS=8192`: a resume point that is evicted anyway costs a
+one-chunk replay (1.6-2.1 s) instead of a whole-context re-prefill (22-68 s at 130-400K tokens). Unset all four
+(and set `--swa-prefix-tails 128`) to return to v2.6.3; each can be unset alone. All the new keys are volatile for
+`DSV41_AUTOTUNE_KEEP` (toggling them reuses the tuned MoE tactics, see below); the tails change is a launch argument,
+so the first boot after it re-tunes once.
+
+- **KV pool: ~5.1M -> ~3.4-3.75M tokens** (`--swa-prefix-tails 384`). The SWA pool is a fixed cost subtracted from the
+  KV budget before the full pool is sized, so 98,304 more SWA slots (~23.9 KB each per rank, +2.2 GiB) cost ~1.4M
+  full-pool tokens: measured 5.06-5.16M -> 3.60-3.75M on the four Sparks, and 4,997,632 / 5,101,824 -> 3,444,224
+  in the release gate (below; no KV pin, each boot sized its own pool). The static pool and the head's
+  MemAvailable are unchanged (low-water 12.69 / 12.50 GiB with it vs 12.71 / 12.64 without). Three 1M-token
+  contexts still fit, four no longer do; the production peak in flight over a full day was 1.91M. **Rollback is
+  config only:** unset `DSV41_SWA_THIN` and set `--swa-prefix-tails 128` (256 is the middle step, ~4.4M tokens).
+- **New in the production profile: SWA pages read in place by the decode** (`DSV41_SWA_NATIVE_DECODE=1`). Every
+  decode attention call (<= 64 query rows: the DSpark verify and draft forwards up to c4) used to copy each touched
+  256-token SWA page into four 64-token pages first (`_split_kv_pages_to_64` in `runtime/flash_mla_sm120.canary.py`:
+  mask fill + page mark + page split, 43 times per c1 step), because FlashInfer's decode-dsv4 kernel is instantiated
+  for 64-token pages only. Its address math is generic in the page size, so the same kernel instantiated at 256-token
+  pages (`runtime/flashinfer_v41c/csrc/swan_decode_dsv4.cu`, FlashInfer's launcher and stock kernel body) reads the
+  SWA pool in place and loads exactly the bytes the split copy held: same shared-memory rows, same tactic (the stock
+  call's AutoTuner entry), same output bits. Calls it does not serve (other head counts / top-k, > 64 rows, AutoTuner
+  tuning mode) keep the split, counted and logged once per reason; the module's own default stays off, the profile
+  turns it on. The module (`runtime/flashinfer_v41c`, module tag `00505fe850b7`) is built at image build next to the
+  K8 module (`dsv41_v41c build` / `verify`, .so sha256 recorded and checked at load); it also compiles the V4.1 FP4
+  readers of the same directory, which have no caller in this tree (about 25 s of nvcc in total). Offline:
+  `tests/test_swa_native_decode.py` (load rule on the native view == on the canary's own Triton split, launcher text,
+  routing, canary block, the profile line and the autotune key), `tests/v41n_nvcc_check.sh` (sm_121a: the 64-token
+  twin of the swan kernel has the stock kernel's SASS; the 256-token kernel differs only in the page constant).
+  - **One GB10** (2026-11-02, 38 per-layer SWA pools, CUDA graphs): output bits equal to the split path in every
+    cell (short / 64K / 256K windows, c1 / c4, 16 and 64 heads, top-k 128 / 192, after replay and in-place
+    mutation); per 38-layer step -164 to -276 us, 8 of 8 rounds faster in every cell.
+  - **Four Sparks, TP4** (v2.6.3 image + this module, production profile, abliterated 1017 `517efab`, KV pool pinned
+    at 4,194,304; one boot with both variants' CUDA graphs captured and the switch toggled between speedbench full
+    runs in A B B A A B order): two A/Bs on 2026-11-02 / 11-03. Greedy c1 prose + code +1.36 % and +1.86 % (A's own
+    run-to-run spread 1.36 % / 1.59 %; in the second, means of three runs: prose 65.5 -> 66.9, code 112.1 -> 114.0
+    tok/s), greedy c4 -0.06 % and +0.85 %, sampled c1 -1.95 % and +0.79 % (the sampled cells' spread between A runs
+    is up to 3 %). T = 0 outputs: 76 of 77 prompts (qeval 75 + 16K + 300K cold) gave the same text in both A runs,
+    and swan's text equals A's on all 76.
+- **New in the production profile (share 33): running streams keep a decode share while a long prompt prefills**
+  (`DSV41_DECODE_YIELD=33`, `adapter/decode_yield.py`; the module is off when the variable is unset).
+  - **Before.** Between two 8192-token chunks of a long prompt (~1.35-1.7 s each) the engine runs only the
+    `--prefill-decode-interval` decode steps (2 in the production profile, ~0.06-0.18 s). In the 2026-11-03/04
+    production log every long prefill with streams running shows 20 chunks per 40-step `Decode batch` line, and the
+    other agents' gen throughput falls from 100-160 to 3-28 tok/s for 0.5-2 minutes.
+  - **Now.** After a non-final chunk beside running streams, the next prefill is deferred until the streams have had
+    decode time worth `pct / (100 - pct)` of that chunk's time (50: as much decode as chunk time). Both times come from
+    an integer cost model fitted to the production log (8192-token chunk 1.3545 s + 0.487 us per prefix token; decode
+    step 26.3 ms + 15.2 ms per running request), never a clock. The deferral is the engine's own
+    `_should_defer_prefill` path that `--prefill-decode-interval` already uses between chunks in production. The yield
+    ends at once when no stream is left or the chunked prompt is gone, is never shorter than the configured interval
+    and never longer than 128 steps. Nothing is armed after a final chunk, a solo short pass, a chunk with no stream
+    running (a lone long prompt prefills exactly as before), or under DP attention / dLLM.
+  - **Four Sparks, TP4 (measured 2026-11-05, run `run-20261105-064842-138505`, verdict PASS on every pre-registered
+    rule):** fresh boots A / X / A' on the v2.6.2 image plus this adapter, production profile, abliterated 1017
+    `517efab`; X at share 50 with the test-only rid arms, so one boot measured shares 0, 33 and 50 (the loop guard
+    `DSV41_LOOP_ABORT=0` in all three boots: the workload's random-token streams would otherwise trip it). Two streams
+    decoding on 300K contexts (T 0) while a cold 500K prompt prefilled: the streams' decode rate during the prefill,
+    relative to their rate in the 20 s before it, **0.080 stock -> 0.393 at share 33** (0.524 at 50); the 500K
+    prompt's time to first token **x1.47 at 33** (x1.94 at 50). Switch off (A, A') = stock scheduling. Speedbench
+    full with X (share 50) vs the mean of A and A': c1 prose +0.99 %, c1 code +0.76 %, c4 prose +0.72 %, c4 code
+    +0.81 % (no cost outside long prefills). The T 0 identity rule (16K, 300K cold) and the long prompt's
+    first-output-ids rule passed. Share 33 is the production compromise between the streams' rate and the long prompt's first token.
+  - **Trade-off (model, 2 streams beside a 500K cold prompt):** share 50 gives the streams ~7x their decode steps during
+    the prefill (0.51 instead of 0.07 of the time) and makes that prompt's first token ~1.87x later; share 33: ~4.7x
+    and ~1.40x. Streams that finish sooner hand the time back.
+  - **Exactness / rank invariance:** only when the next chunk runs changes; chunk boundaries, chunk batches and decode
+    batches are the engine's own. Every input is replicated scheduler state (the scheduled batch, the running batch
+    size, the chunk position, the request id) and integer constants, so all TP ranks take the same decision.
+    `DSV41_DECODE_YIELD_RID_ARMS=1` (test only) lets a long prompt's request id (`dyield-s<NN>-...`) pick the share,
+    for in-boot A/B; never set it in serving.
+  - **Tests:** `tests/test_decode_yield.py` drives the pinned `get_next_batch_to_run`, `_should_defer_prefill` and
+    `_arm_prefill_decode_interval` (lifted from the staged SGLang source) through a simulated event loop: off and
+    share 0 are the stock trace round for round, the long prompt's chunks are unchanged, the share is reached, a lone
+    prompt / final chunk / solo pass arm nothing, a yield ends when the streams finish or the prompt is aborted, four
+    simulated ranks with different clocks and environments produce one trace, pins, drift refusal, env parsing; the
+    v2.6.4 profile (`Profile`: share 33 last on the production line and only there, volatile keys, module default off,
+    both canary Dockerfiles run the test on the image's own scheduler source).
+  - **Evaluated and not used:** a smaller chunk while streams run (each chunk carries a ~0.33 s fixed cost, derived from
+    v2.4's 4096 -> 8192 change, and other chunk boundaries change the long prompt's numerics); `--enable-mixed-chunk`
+    (with DSpark the running rows degrade to a 1-token plain decode through the extend path, eager, while the decode
+    CUDA graphs and speculative steps are what make them fast); a fixed larger `--prefill-decode-interval` (also
+    delays every short prompt queued behind any prefill, and gives a share that varies 2x with the batch size).
+  - **Credits:** the deferral mechanism is SGLang's `--prefill-decode-interval`, with **Shangming Cai**'s #44001 gate
+    already backported. **Christopher Owen**'s prefill yield (spark-ds41f, vLLM 0545: a long prompt's chunk step goes
+    to short prompts and held first tokens) was the starting point of the comparison; it addresses short prompts,
+    which our solo short pass covers, rather than the cadence of running streams.
+- **New in the production profile: superseded SWA checkpoints are evicted first** (`DSV41_SWA_THIN`, `adapter/swa_thin.py`; off when
+  unset). A cached prefix is reusable only at a node whose last sliding window (128 tokens) still holds SWA slots, and
+  the SWA pool is small (cap mode: request cap 35,328 + `--swa-prefix-tails` x 384 slots). Every 8192-token prefill
+  chunk leaves a 512-slot checkpoint and every agent turn ~512 more, so in stock LRU order an idle session loses its
+  resume point after ~70-100K slots of other traffic, and its next turn re-prefills the whole context although its
+  full KV is still cached (production 2026-11-04: 8 re-prefills of 170-680K tokens in 6 h, 32-129 s each).
+  `1`: a checkpoint its own request has moved past goes to the evict-first end of the SWA LRU: chunk boundaries a
+  chunked prefill has passed (a 950K prefill no longer evicts every other document's resume point: the issue16 soak
+  lost the 200K and 400K documents after every cold phase, 33 / 67 s each), and the prefix-match node of a request
+  that needed no chunked step (an agent turn's previous resume point, now replaced by the turn's own prompt-end and
+  output checkpoints). `chunk`: chunk boundaries only. Locked nodes, branch points and a prompt's last chunk boundary
+  keep their place; a match on a demoted checkpoint refreshes it as before. Only the LRU order changes: kernels, pool
+  sizes and outputs are untouched. Engine source sha256-pinned (refuses to install on drift); no-op with radix
+  sessions, HiCache or Mamba. Receipt `DSV41_SWA_THIN receipt: mode= chunk_steps= prompt_steps= demoted= errors=` on
+  the first hooked insert and every 1024th. `tests/test_swa_thin.py` (real `UnifiedRadixCache` on CPU, also run in
+  the canary-roce image build): stock loses the two older documents under SWA pressure and the switch keeps both; in
+  an agent-session pattern the idle session's resume point survives 264 evicted SWA tokens instead of 96; without
+  pressure every match and both allocators equal stock.
+  - **In the production profile since v2.6.4, with `--swa-prefix-tails 384`.** Four Sparks, TP4, v2.6.2 image +
+    this adapter, production profile, abliterated 1017 `517efab`, fresh boots A / X / A' (X = `DSV41_SWA_THIN=1` +
+    tails 384). Window 1 (`run-20261105-005746-3350673`), the owner's pattern (two long sessions of 330K / 300K
+    tokens idle for 3-14 minutes, a sub-agent turn every second, two new 500K sessions): whole-session re-prefills
+    A 2 / A' 2 / X 0; the resumed sessions' first token 62.3 / 64.1 s (A), 61.2 / 63.0 s (A') -> 3.9 / 6.5 s (X),
+    cached 338,944 / 326,912 tokens; the other agents' sub-agent turns peaked at 64.4 / 62.2 s during the controls'
+    re-prefills and never in X; median sub-agent turn 3.62 / 3.66 -> 3.03 s; uncached prefill 1.44M -> 0.77M tokens.
+    Window 2 (`run-20261105-040948-3893907`, six boots, three speedbench runs per cell): mean(X, X') vs mean(A, A')
+    c1 prose +0.17 %, c1 code +0.22 %, c4 prose +0.36 %, c4 code +0.78 %; every X run inside the controls' range.
+    Neither window passed its pre-registered rules to the letter: window 1 read a c4 code KILL from one run per cell
+    (a step-time shift only in X's last ~45 s, coinciding with head timer jobs; not reproduced in six later X runs),
+    window 2 is INVALID because its two controls sat 3.2 % apart on c4 prose (head apt / clock-cap jobs during A').
+    The review (2026-11-05) judged the whole evidence: ship. T 0 outputs: no candidate-specific difference (the
+    controls already disagree with each other on the cold items); head memory unchanged; no guard, Xid or engine
+    events. Model of the owner's pattern: whole-session misses 1.41-4.11/h stock -> 0.00-0.01/h.
+  - **Known limit:** a request that forks a session from an older turn boundary (an edit or rewind, 2-4 % of
+    production requests) falls back further under SWA pressure than stock, since superseded checkpoints go first.
+- **New in the production profile: a lost SWA resume point costs a replay of one chunk instead of a whole-context re-prefill**
+  (`DSV41_SWA_CONE_REPLAY`, `adapter/swa_cone.py`; off when unset). When a request's prefix match stops early only
+  because the last sliding window at its resume point F was evicted while the full KV (ratio-1/2 latents and index
+  keys) is still resident, it matches on full KV at s = F - N instead (N = `DSV41_SWA_CONE_TOKENS`, default 8192,
+  minimum 3072) and prefills [s, L): the replay rows get the resident latents / index keys copied into their fresh
+  pages before the forward, their own latent / index-key writes go to the padding slot, and their window is floored
+  at s. Rows from F on depend only on resident KV and on rows >= F - 127 x 20, so they compute what a prefix hit at
+  F computes (same class as any hit off a chunk boundary: other chunk shape, top-k order noise). The first pass must
+  be a chunk that covers the replay and ends before the prompt end, else the stock match is kept (a whole-prompt
+  pass could finish at its first token and insert the replay rows' approximate SWA); the first insert re-points the
+  request to the tree's resident pages, and no SWA from inside the replay reaches the tree. Replays only when it
+  saves >= `DSV41_SWA_CONE_MIN_SAVE` (8192) rows. Each replay logs one `DSV41_SWA_CONE plan` and one `copy` line;
+  `DSV41_SWA_CONE_TEST=1` is test only. `tests/test_swa_cone.py`: the length rule on a toy model of the same
+  dependency structure (exact at 127 x 20 rows, not one row fewer, not without the write mask), and on the real
+  `UnifiedRadixCache` (CPU, also in the canary-roce image build) the whole turn: plan, page copy, write mask, floor,
+  dedup, no slot leaks, resume, the finish-at-prefill path the chunked-pass rule closes, and the import hook next to
+  `DSV41_SWA_THIN`, the prefill bypass and the decode yield.
+  - **In the production profile since v2.6.4 (`DSV41_SWA_CONE_TOKENS=8192`).** Four Sparks, TP4, v2.6.2 image + this
+    adapter at N = 8192 with the test switch (forced eviction before the match, a stock re-prefill reference by
+    request id), one boot. Window `run-20261105-082118-415058`: 16 chat prompts of 130-400K tokens, per prompt a
+    cold run, three stock re-prefills (ref), two plain prefix hits (warm) and three cone replays, 64 tokens each.
+    Cone vs re-prefill distance relative to warm vs re-prefill: G = 1.013 (90 % CI 0.76-1.34, bound 2.0), 0
+    confident token flips; geometric-mean symmetric KL of the top-20 lists: cone-warm 0.040 < warm-ref 0.052 <
+    cone-ref 0.060 (ref-ref 0.010); a cone arm reproduced a warm arm token for token on 6 prompts. Path: 48 plan
+    and 48 copy lines, 0 reverts, after every cone arm the tree held exactly 768 evictable SWA tokens (no replay-row
+    SWA adopted). First token: cone 1.63-2.07 s, re-prefill 21.8-68.3 s, plain hit 0.31-0.50 s. The window is
+    INVALID by the letter of one rule (median positions compared: the re-prefill references themselves diverge
+    after a median of 17 tokens); the first window (`run-20261105-033337-3800238`, raw-text prompts that mostly
+    ended at token 0) was INVALID on its A/A ceiling, with 20 plans, 20 copies, 0 reverts. The review (2026-11-05)
+    judged the whole evidence: the cone is in the exactness class of a prefix hit; ship on by default with
+    N = 8192. Its fleet windows ran without `DSV41_SWA_THIN` and with tails 128; the release gate ran them
+    together (below: one forced evicted resume, replayed on every node).
+  - **Residual risks (availability, not exactness):** an invariant violation raises (all ranks stop) instead of
+    falling back; next to a co-batched prefill, or with a chunk smaller than N, the replay reverts to the stock
+    re-prefill; an engine pin drift makes it a logged no-op.
+- **`adapter/autotune_keep.py`: `DSV41_SWA_NATIVE_DECODE` is volatile.** Swan never tunes (tuning mode takes the
+  stock split) and runs the tactic the stock call resolves for the same shape, so the tuned shapes and kernels are
+  the same with it on or off; without this, switching it on would change the launch fingerprint and re-draw every
+  fused-MoE tactic on the next boot. **`DSV41_DECODE_YIELD` and `DSV41_DECODE_YIELD_RID_ARMS` are volatile** too:
+  the yield only decides when the next prefill chunk runs, in the scheduler, after boot; no GEMM shape, kernel or
+  tuning pass depends on it. **`DSV41_SWA_THIN`, `DSV41_SWA_CONE_REPLAY`, `DSV41_SWA_CONE_TOKENS`,
+  `DSV41_SWA_CONE_MIN_SAVE` and `DSV41_SWA_CONE_TEST` are volatile:** they act on the prefix-cache tree and on replays
+  of a cached prefix after boot; the autotune pass has no cached prefix, so no replay runs while tuning.
+- Credits (SWA thin, cone replay): built on SGLang's unified radix cache (SWA LRU, tombstones) and the `dsv4.1`
+  branch's decoder bounded replay, whose `swa_replay_start` window floor the replay reuses; the eviction rule, the
+  replay, the page copy and the write mask are ours.
+- Credits (swan): FlashInfer's SM120 sparse-MLA decode kernel (Gabriel Wu and the contributors of flashinfer-ai/flashinfer
+  #3395 and later), whose page-size-generic address math is what lets the stock kernel body read 256-token pages; the
+  256-token instantiation, its routing and the tests are ours.
+
+Release gate: PASS (run `run-20261105-170445-1455369`, 2026-11-05, 274 min including the restore of production; 0
+KILL, 0 INVALID). v2.6.3 / v2.6.4 / v2.6.3, three fresh boots in that order, production profile, abliterated 1017
+`517efab`; the v2.6.4 boot ran the v2.6.3 gate image with this release's files overlaid and the swan module built in
+the image, launched with `--swa-prefix-tails 384`. No KV pin (earlier gates pinned 4,194,304): each boot sized its own
+pool, so the v2.6.4 boot ran with the pool it ships with. Speedbench 0.3 full, median of two runs: greedy c1
+all-prompt geomean 89.34 / 89.09 / 88.73 and prose 65.62 / 65.95 / 65.34 tok/s, c4 131.75 / 132.62 / 131.76
+aggregate tok/s; sampled (T 0.7, top-p 0.95, one run per cell) c1 87.30 / 85.72 / 86.01 and prose 62.76 / 61.65 /
+62.52 tok/s, c4 129.03 / 129.53 / 129.37 aggregate tok/s; speedbench load c16 215.47 / 216.16 / 216.65 aggregate
+tok/s (the full c16 run was not repeated). Cold 64K prefill 6147 / 6137 / 6166 tok/s (median of three flushed
+prompts); a cold 388K-token prompt's first token 64.0 / 63.6 / 63.4 s (median of three); a short request beside a
+131,072-token prefill 0.43 / 0.42 / 0.47 s. qeval 71 / 71 / 71; at T = 0 the v2.6.4 outputs equal the controls' on
+all 74 of the 75 prompts on which the two controls agree. KLD long 0.00677 and short 0.0045 (PASS); T = 1
+distribution check PASS (12,000 samples); 1M needle (969,071 tokens) found in 195 s. Idle RDMA proxy CPU summed over
+the four nodes 1.75 / 1.63 / 2.68 % of a core; median first token after 60 s idle 189.8 / 190.7 / 192.9 ms. Every
+rank of the v2.6.4 boot logged the swan module (`00505fe850b7`, no fallback), SWA thin (mode all, 0 errors), the cone
+replay (N 8192) and the decode yield (share 33) as installed; the controls logged none of them. The FlashInfer #7676
+fence was present on every rank of all three boots.
+- **KV pool:** 4,997,632 / 3,444,224 / 5,101,824 tokens. The 384 prefix tails reserve 182,784 SWA slots instead of
+  84,480 (a fixed 4.08 instead of 1.88 GB in the head's pool sizing), so the full pool is 1,605,504 tokens below the
+  controls' mean: the price of keeping idle sessions' resume points. Rollback is config only: unset `DSV41_SWA_THIN`
+  and set `--swa-prefix-tails 128`.
+- **Evicted resume point** (v2.6.4 boot): a 300,000-token document (prefill 49.7 s), then 800 distinct 1K-token
+  prompts that pushed its SWA window out (800 of 800 OK, 150.5 s), then the document plus 2,048 tokens. Every node
+  planned and copied one cone replay of 8,192 rows from token 291,328, with 0 reverts; first token 2.07 s with
+  291,328 of 302,048 prompt tokens cached, 0 errors.
+- **Soak** (issue #16 reproduction, seeded document order, plus a c2 companion load, 12 timed minutes): 256 / 318 /
+  263 requests with 0 failures, companion 39.07 / 48.96 / 39.11 tok/s (v2.6.4 keeps the soak's documents cached where
+  the controls re-prefill them, so its soak does less prefill), head MemAvailable low-water 9.55 / 8.37 / 8.73 GiB.
+
+## 2026-11-02 v2.6.3
+
+Two switches added to the production profile in `.env.tp4.example`: `DSV41_BLOCK_VERIFY_FOLD=1` (sampled
+requests decode a little faster: speedbench sampled c1 +0.8 / +1.4 % and c4 +0.5 / +0.7 % against the two v2.6.2
+boots of the release gate; the accepted tokens are bit-identical to the torch path for the same random draws) and
+`DSV41_ROCE_IDLE_PARK=1` (the RDMA proxy threads stop spinning while the engine is idle: idle proxy CPU 9.6 % ->
+1.75 % of a core over the four nodes). Unset both to return to v2.6.2. Greedy outputs are unchanged by either. The
+`canary-roce` image also carries one correctness fix with no switch: FlashInfer PR #7676's proxy fence in the b12x
+dense MXFP8 GEMM. The tokenizer heap trim (`DSV41_TOKENIZER_HEAP=trim`) of the first v2.6.3 candidate is not in this
+release: in a production soak it cut long-prompt (200K-950K tokens) throughput by 17 % (it holds glibc's arena locks
+while the tokenizer works); an idle-gated version is deferred to v2.6.4.
+
+- **Fix (correctness): a proxy fence in the b12x SM120/SM121 dense MXFP8 GEMM**, the kernel every MXFP8 dense linear
+  runs (`adapter/mxfp8_b12x.py`). The kernel refills a pipeline stage with TMA as soon as `producer_acquire` returns,
+  with nothing ordering the MMA warps' `ldmatrix` reads of that stage before the TMA write; under concurrent GPU work a
+  tile can be computed from the next pipeline lap's data. Found and fixed upstream by Thireus
+  ([flashinfer#7675](https://github.com/flashinfer-ai/flashinfer/issues/7675),
+  [flashinfer#7676](https://github.com/flashinfer-ai/flashinfer/pull/7676), commit `c1d1214`): on an RTX 5090,
+  1,537 of 17,920 CUDA-graph replays on DeepSeek-V4.1 shapes were wrong with a second stream busy, 0 with the fence.
+  Our decode graphs run dense GEMMs beside other work by design (the shared expert on SGLang's `alt_stream` next to
+  the routed MoE, the attention multi-stream overlap, the L2-prefetch branch). The image applies PR #7676's line to
+  FlashInfer 0.6.18's file at build time (`runtime/flashinfer_fi7676/apply_fi7676.py`: sha256 pinned before and after,
+  any other file fails the build; provenance in `runtime/flashinfer_fi7676/PROVENANCE.json`), and every rank logs
+  `DSV41 b12x dense GEMM fence (FlashInfer #7676): present|ABSENT ...` at boot. Outputs of an undisturbed GEMM are
+  unchanged (the fence orders memory, not arithmetic). Tests: `tests/test_fi7676_fence.py` (also in the image build).
+  - **GB10** (2026-11-02, one DGX Spark, FlashInfer 0.6.18 of the v2.6.2 image, production's pinned tactic, nine
+    TP4 dense shapes at decode M 6-96 and prefill M 128 / 2048, every replay compared byte for byte with the quiet
+    production call): the race reproduces on GB10. Stock kernel: 26 of 2,304 eager prefill calls and 2 of 23,040
+    graph replays with a second stream busy were wrong; with the fence, 0 wrong in every mode, and quiet outputs
+    byte-identical to stock. Quiet speed with the fence x1.0005 of stock. The routed MoE (b12x_next W4A8, which
+    fills shared memory without TMA) under the same noise: 0 wrong replays.
+- **New in the production profile: block verification for sampled rows in three kernels**
+  (`DSV41_BLOCK_VERIFY_FOLD=1`, `adapter/block_verify_fold.py`). Sampled requests run their acceptance after the
+  verify CUDA graph, eagerly; `block_accept_probs` (block verification, since 2026-09-23) issued about 55 small torch launches
+  per step for it. The fold computes the per-element and per-request values in three Triton kernels, with torch's
+  FP32 operation order, IEEE division and no FMA contraction, and leaves the three vocabulary-wide reductions (the
+  acceptance sums S, the residual mass and the correction argmax) to the same torch operations on the same tensors.
+  The accepted length and the correction token are therefore bit-identical to the torch path for the same random
+  draws, and the draws are unchanged. Greedy requests never take this path. `DSV41_BLOCK_VERIFY_FOLD=check` runs
+  both and counts mismatches on device; every mode logs per-path call receipts every
+  `DSV41_BLOCK_VERIFY_FOLD_LOG_EVERY` calls (default 2000) and a terminal receipt (with the check counters) at each
+  busy -> idle transition of the scheduler, so no call goes unreported (`tests/test_block_verify_fold_receipts.py`).
+  - **Tests:** `tests/test_block_verify_fold.py` (Triton interpreter, also in the image build): 75 checks against
+    the torch path, including the intermediate S, h, mass, residual and keys, eta exactly at the threshold and one
+    ulp either side, ties, NaN / inf keys, a zero residual mass and the full 129,280-token vocabulary.
+    `tests/gpu_test_block_verify_fold.py`: the same cases on the GPU, 12,000 random production-shaped rows and
+    CUDA-graph replays.
+  - **Fleet** (2026-10-29, abliterated 1017): GPU unit test 0 differences, 103 vs 328 us at bs 1; in-boot A/B on
+    sampled traffic (T 0.7, top_p 0.95, thinking on) with the fold off / on / check: check mode 0 mismatches,
+    T > 0 distribution check PASS, c1 decode step -0.52 % (95 % CI -0.90..-0.11), c4 -0.8 % (CI includes 0).
+  - **Credits:** block verification is Sun et al. (ICLR 2025), in this profile since 2026-09-23
+    (`adapter/block_verify.py`); the three-kernel fold is our own.
+- **New in the production profile: idle parking for the RoCE proxy threads** (`DSV41_ROCE_IDLE_PARK=1`). Each TP rank's
+  RDMA proxy thread spins `ROCE_IDLE_SPINS` polls after its last doorbell and then polls once per
+  `nanosleep(20 us)` for as long as the engine is idle, about 10^4 wakeups a second per rank. With the
+  gate on it blocks on a futex instead, and only while the scheduler itself is idle:
+  `Scheduler.on_idle` marks idle (before `--sleep-on-idle`'s poll), `process_input_requests` with
+  requests and `run_batch` (before every forward, so before its first collective) wake it with one
+  futex wake. The proxy parks after `DSV41_ROCE_IDLE_PARK_MS` (default 1000) of marked idle with no
+  doorbell and never with RDMA writes in flight; a decode never parks (`run_batch` clears the mark,
+  and `on_idle` runs only without a batch). A parked proxy re-checks its doorbell every
+  `DSV41_ROCE_IDLE_PARK_POLL_MS` (default 20), so a missed wake costs at most that, never
+  correctness: the existing doorbell catch-up posts every pending op in order. Rank-safe: every
+  rank wakes its own proxy before its own kernels, and a collective needs every rank's kernel.
+  Needs the v2.6 transport (`DSV41_ROCE_TWOSHOT=1`); with `b12x.comm.roce` or `roce_ring` the
+  engine refuses to start. Gate unset: nothing is imported, and the proxy builds with the v2.6
+  command and cache name; the additions are seven `#if ROCE_IDLE_PARK` blocks plus the new
+  `_roce_idle_park.h`, and without the define the compiled `.text`/`.rodata`/`.data`/`.dynsym` are
+  identical to v2.6.1's. Receipts: `DSV41_ROCE_IDLE_PARK: armed`, `DSV41_ROCE_IDLE_PARK rank=R
+  proxy_tid=T`, and per idle period `DSV41_ROCE_IDLE_PARK_STATS` (parks, wakes, backstop polls,
+  late doorbells, wake latency, wake-to-first-collective lead). Tests: `tests/test_roce_idle_park.py`
+  (gate-off identity, adapter and scheduler hooks, SGLang's event loops), with
+  `tests/roce_idle_park/park_unit.c` (the state machine, a lost-wakeup race of 20,000 rounds) and
+  `park_stress.c` (four real proxy loops over an in-process fake RDMA, ranks waking in random order,
+  wakes skipped on one rank).
+  Credits: idea: idle RDMA proxy parking (uchkw), independent implementation.
+  Fleet A / X / A' (2026-10-29, official 1017, KV pinned at 4,194,304): idle proxy CPU summed over the four
+  ranks 9.5 / 1.6 / 9.6 % of a core (6x lower), parks 20 and late doorbells 0 on every rank; speedbench load
+  c1 / c4 / c16 x0.998 / x1.002 / x1.020; first token after 60 s idle 190.2 / 193.5 / 192.4 ms; qeval 71 / 71 / 71,
+  KLD within noise, head memory and NVRM unchanged.
+- **Docs: NVIDIA's NVFP4 checkpoints described correctly**
+  ([#64](https://github.com/knapcio/DeepSeek-V4.1-Flash-4x-DGX-Spark-TP4/issues/64)). The README and
+  `docs/history.md` said they change the routed experts only. Their routed experts are the official MXFP4 values
+  re-encoded losslessly with twice the scale bytes (+15.8 GiB in the file, about +4 GiB per rank on the GPU); the
+  smaller file (-76 GiB for `nvidia/DeepSeek-V4.1-Flash-1017-NVFP4`) comes from the two Engram tables re-quantized
+  from FP8 to FP4, which is lossy, and this engine serves Engram rows from NVMe, so it saves no GPU memory. Not used.
+
+Release gate (v2.6.2 vs v2.6.3 vs v2.6.2, fresh boots in that order, production profile, abliterated 1017 `517efab`,
+KV pinned at 4,194,304, 2026-11-02; the v2.6.3 boot ran the v2.6.2 image with this release's files overlaid and the
+fence applied by the release's own `apply_fi7676.py`): speedbench full, median of two runs, greedy c1 all-prompt
+geomean 89.73 / 89.77 / 89.94 and prose 65.94 / 65.93 / 65.88 tok/s, c4 132.58 / 132.87 / 132.38 and c16
+211.77 / 211.81 / 210.85 aggregate tok/s; sampled (T 0.7, top-p 0.95, seed 1) c1 86.31 / 87.03 / 85.87 and prose
+63.26 / 63.84 / 62.10 tok/s, c4 129.50 / 130.18 / 129.28 aggregate tok/s; cold prefill 1M 5287 / 5299 / 5307 tok/s;
+idle RDMA proxy CPU summed over the four nodes 9.6 % of a core on v2.6.2, 1.75 % on v2.6.3; qeval 71 / 71 / 71, KLD
+within the controls' noise, 1M needle found in all three; the fence logged as present on every rank of the v2.6.3
+boot.
+Long-session soak (separate window, 2026-11-02, five fresh boots v2.6.2 / v2.6.3 / v2.6.3 with the idle park off /
+v2.6.3 / v2.6.2; issue #16 reproduction for 30 min plus a c2 speedbench load, the same seeded document order on every
+boot): issue #16 requests 868 / 883 / 885 / 883 / 881 with 0 failures, companion 46.84 / 45.88 / 46.45 / 46.12 / 46.21
+tok/s, head MemAvailable low-water 10.28 / 10.49 / 10.62 / 10.53 / 10.53 GiB. The release gate's own soak could not
+judge memory (its two v2.6.2 boots differed by 2.9 GiB): its document order was drawn from the clock, so each boot
+re-prefilled a different set of evicted documents; the soak window above fixes the order.
+
+## 2026-10-28 v2.6.2
+
+A correctness fix in the routed-MoE kernel, a memory fix in prefill attention and a latency fix for short requests
+that arrive during a long prefill. The production profile in `.env.tp4.example` adds
+`DSV41_PREFILL_NATIVE_EXTRA=1` and `DSV41_PREFILL_BYPASS_SOLO=1`; nothing else in it changes.
+
+- **Fixed: a CTA shared-memory race in the routed-MoE dynamic kernel** (`runtime/b12x_next`,
+  `moe/_shared/kernels/dynamic.py`, the producer loop). The CTA leader stores each batch claim in one shared word
+  (`ctrl[7]`). A barrier orders that store before every thread reads it, but nothing ordered those reads before the
+  next iteration's store, and the loop's back edge has no barrier. A warp that reads its claim late can therefore see
+  the next batch's claim, and tokens are then skipped or routed twice, or the loop stops early.
+  - **The fix** is a backport of **Martin Vit**'s b12x commit `d7937d7f` (2026-10-06, after our pinned `a7d7d29b`),
+    applied verbatim: one CTA barrier right after the claim read (`scripts/b12x_next-claim-barrier.patch`). b12x is now
+    developed in flashinfer-ai/flashinfer under `flashinfer/experimental/b12x`. We found the race independently in an
+    offline racecheck and SASS analysis before finding the upstream commit.
+  - **Not carried:** the same commit also fixes the deterministic shared-activation gathers of the monolithic in-kernel
+    FC1 path, which our specializations do not compile (their external phase-1 kernel already divides by top-k).
+  - **Code generation** at sm_121a: registers, spills and the FC1 / FC2 kernels are unchanged; the dynamic kernel gains
+    one `BAR.SYNC` per producer iteration.
+  - **Tests:** `tests/test_b12x_next_claim_barrier.py` holds an exhaustive interleaving model (the stock loop has a
+    counterexample with two warps; the barrier closes it) and pins the source. `SOURCE_PATCH` changes from
+    da662ccc7e2372b5 to 5555496ebd40f308.
+  - **Fleet A / X / A'** (2026-10-27): every T = 0 output of 75 qeval prompts (top-20 logprobs and greedy, c1, three
+    passes per boot) equals a v2.6 output, and load c1 / c4 / c16 run at 0.999 / 1.002 / 1.011 of the slower v2.6 boot.
+- **New in the production profile: prefill reads the extra cache's native pages** (`DSV41_PREFILL_NATIVE_EXTRA=1`;
+  `runtime/flashinfer_pce/`, read by `runtime/flash_mla_sm120.canary.py`).
+  - **Before.** Stock FlashInfer instantiates the SM120 sparse-MLA dual-cache prefill only for extra pages of 64 / 2
+    tokens. The adapter therefore copied the whole compressed extra pool into a persistent 64-token split buffer, about
+    3 GB per rank at the v2.6 pool, allocated after the KV pool is sized, and ran a page-mark and split pass on every
+    prefill call.
+  - **Now.** A separate module reads SGLang's own 128 / 256-token pages in place. FlashInfer's `prefill_kernel.cuh` is
+    generic in the page size, so the kernels are the stock templates; only the dispatch is opened to 128 / 256 and the
+    symbols are renamed. The module is generated at image build from the image's own `sparse_mla_sm120` sources: the
+    build refuses unless the whole source closure equals `APPROVED_CLOSURE.json` (FlashInfer 0.6.18, git 69ff11fc,
+    23 files). It is then compiled for sm_121a in the build and served with its sha256 pinned (no JIT at boot). The SWA
+    source is still split, and 64 / 2-token extra pages keep the stock module.
+  - **Tests:** `tests/test_prefill_native_extra.py` (CPU), `tests/pce_nvcc_check.sh` (20 kernels, registers and spills
+    equal to the stock 64-token twins) and `tests/gpu_test_prefill_native_extra.py` (OFF vs ON bit-identical on
+    42 eager and edge cases and 30 CUDA-graph replays of the wide-verify route).
+  - **Fleet A / X / A'** (2026-10-28; the coordinator's ruling over two kit faults in the receipt):
+    - every T = 0 output (lp-c1 and greedy-c1) equals a v2.6 output, and the module served the 128- and 256-token
+      pages;
+    - **persistent memory allocated after pool sizing drops by 2.45-2.76 GiB per node**;
+    - **cold 1M prefill takes 194.4 s against 205.3 / 201.7 s on v2.6** (-5.2 % against the first boot); 64k and 388K
+      are within noise;
+    - c16 load is 1.007 x the slower v2.6 boot;
+    - no NVRM `NV_ERR_NO_MEMORY` line.
+  - **Credits:** the SM120 sparse-MLA kernels are FlashInfer's: **Gabriel Wu** (flashinfer-ai/flashinfer #3395 and the
+    later refactors), with fixes from **Ka-Hyun Nam** (#4732, issue #3700) and the other contributors to
+    `sparse_mla_sm120`. Origin and changes are in `runtime/flashinfer_pce/PROVENANCE.json` and NOTICE.
+
+- **New in the production profile: a short request that arrives during a long prefill runs in a pass of its own**
+  (`DSV41_PREFILL_BYPASS_SOLO=1`, on top of the existing `DSV41_PREFILL_BYPASS=256`; `adapter/prefill_bypass.py`).
+  - **Before.** The bypass admitted a short request next to the long prompt's in-flight 8192-token chunk, so the short
+    request's first token waited for that whole chunk pass: about 1.9 s at 93K-128K.
+  - **Now.** The short request runs in a prefill pass of its own (one per pass, a batch-size-1 extend as on an idle
+    server; a second one takes the next solo pass). The long prompt is parked for that pass (the engine's parked-chunk
+    state: empty extend range, nothing stashed, no in-flight chunk counted, the batch built without it) and resumes
+    alone in the next pass with the same chunk, so its chunks, boundaries and numerics are those of an idle run. Solo
+    and chunk passes alternate, so the long prompt is never starved. A final chunk is parked like any other, with the
+    bypass admission contract kept beside it (the cumulative fresh-token debit, no partial admission: a short request
+    that would need chunking is skipped). The interval cadence is unchanged.
+  - **Rank-invariant:** every decision reads replicated scheduler state only (the parked flag lives on the request), so
+    all ranks build the same batch. Each solo pass and each resume logs one `DSV41_SOLO_RECEIPT` JSON line (long rid,
+    prefix / total, the batch's rids and ranges), the same on every rank. Same pinned `_get_new_batch_prefill_raw` /
+    `PrefillAdder` sources and sha pins as the bypass; with the flag unset or 0 the patched function is v2.6.1's byte
+    for byte.
+  - **Tests:** `tests/test_prefill_bypass_solo.py` (run in both canary image builds): a pass simulator over the lifted
+    pinned scheduler (long prompt plus short arrivals, final chunk, continuous arrivals, rank invariance, page-256
+    final-chunk admission regressions, receipts), the off path against a v2.6.1 fixture, and refusal on anchor drift.
+  - **Fleet A / X / A'** (2026-10-28, v2.6 / v2.6 + solo / v2.6, fresh boots, KV pool pinned, abliterated checkpoint
+    on all three):
+    - **time to first token of a short request sent 1 s into a cold prefill: 0.42 s against 1.89-1.92 s** (93K and
+      128K, median of three each);
+    - on every judged run the long prompt's output tokens and the short reply equal their idle runs, and every T = 0
+      qeval output (top-20 logprobs and greedy, c1) equals one of the two v2.6 boots';
+    - cold prefill alone is unchanged (93K: 14.54 s against 14.65 / 14.57 s; 388K: 65.03 s against 64.93 /
+      64.81 s); the short request's total time, the long prompt's time and the decode gaps of a stream running beside
+      them stayed within 1.10 x, 1.03 x + 0.5 s and 1.25 x of the slower v2.6 boot;
+    - the receipts are the same sequence on all four ranks; no NVRM `NV_ERR_NO_MEMORY` line.
+  - **Credits:** our own design on top of our bypass. The idea draws on **Christopher Owen**'s late-admission and
+    prefill-interleaving work in [spark-ds41f](https://github.com/christopherowen/spark-ds41f), and the measurement
+    follows the `mixed_probe` shape of **James Meadlock**'s J-M Recipes (a short streaming chat sent 1 s after a cold
+    long prompt).
+
+<!-- v2.6.2 release gate: filled in from the receipts before the PR (diagnostics RUNBOOK). -->
+Release gate (v2.6 vs v2.6.2 vs v2.6, fresh boots, production profile, official 1017, KV pinned at 4,194,304, 2026-10-29): speedbench full c1 88.53 / 88.38 / 88.37, c4 131.17 / 130.72 / 130.12, c16 207.67 / 207.62 / 206.03 tok/s; cold prefill 64K 6029 / 6054 / 6033 and 1M 4932 / 5310 / 4940 tok/s (+7.7 %); short-reply TTFT during a 93K / 128K prefill 1.90 / 0.43 / 1.90 s and 1.90 / 0.42 / 1.89 s; 388K prefill 65.3 / 63.3 / 64.9 s; qeval 71 / 71 / 71 with no answer outside the controls, KLD within noise, 1M needle found in all three; lowest head MemAvailable 4.2 / 9.7 / 7.0 GiB and NVRM out-of-memory log lines 155 / 1 / 133 over the boot.
+
+## 2026-10-27 v2.6.1
+
+- Fixed: building `Dockerfile.canary-roce` failed in the image test battery at
+  `tests/test_roce_ring.py` (`ImageOverlay.test_overlay_selects_package`). The test still asserted
+  v2.5's two-way package selection in `pynccl.py`, which `runtime/roce_twoshot_adapt.py` turns into a
+  three-way one in v2.6. The test now asserts the v2.6 selection and the refusal of
+  `DSV41_ROCE_RING=1` together with `DSV41_ROCE_TWOSHOT=1`. No runtime change. Reported with the fix by
+  **Saolence** in #59.
+
+## 2026-10-27 v2.6
+
+Production profile = v2.5 plus the two-shot all-reduce for wide steps and two prefill host-overhead
+cuts, on an image that also carries the block-verification threshold fix. `.env.tp4.example`'s
+"Production profile" line adds `DSV41_ROCE_TWOSHOT=1 DSV41_ROCE_TWOSHOT_ROWS=18
+B12X_ROCE_PIPE_BLOCKS=4 B12X_ROCE_PIPE_CHUNK_BYTES=65536 DSV41_MOE_LAUNCH_PREPARED=plan
+DSV41_INDEXER_NOSYNC=1`; every other setting is unchanged.
+
+Fleet A / B / A' on 2026-10-26: four fresh boots in order (production, the two-shot switches only,
+the full set, production again), host memory compacted before each, abliterated 1017 `517efab`,
+GPU clock cap 2200 MHz, speedbench 0.3 (`6733653`), thinking off, first run after each boot
+discarded. A difference counts only beyond both production boots by more than their own
+difference (floor 0.5 %).
+
+| metric | production (2 boots) | two-shot only | full set |
+|---|---:|---:|---:|
+| c1 all-prompt geomean tok/s (2 full runs per boot) | 88.91 / 88.93 | 88.97 | 88.56 (noise) |
+| c1 prose geomean tok/s | 65.34 / 65.59 | 65.33 | 65.27 (noise) |
+| c4 block tok/s | 131.56 / 131.30 | 131.64 | 131.74 (noise) |
+| c16 block tok/s | 201.33 / 201.20 | 208.66 (+3.7 %) | 211.02 (+4.9 %) |
+| cold prefill 4k tok/s | 4,555 / 4,586 | 4,613 | 5,309 (+16.2 %) |
+| cold prefill 64k tok/s | 5,779 / 5,773 | 5,803 | 5,970 (+3.4 %) |
+| TTFT, c1 full median | 213.7 / 215.6 ms | 216.3 ms | 206.4 ms (-3.9 %) |
+| TTFT, load c1 median | 215.5 / 217.5 ms | 218.9 ms | 206.7 ms (-4.5 %) |
+| TTFT, load c16 median | 564.1 / 561.8 ms | 547.6 ms (-2.7 %) | 539.3 ms (-4.2 %) |
+
+Exactness: 75 qeval prompts at T = 0 with top-20 logprobs and cold (salted) prefills on every
+boot; both new arms byte-identical to production on all 75, and the two production boots identical
+to each other.
+
+Release gate on the full set (one more fresh boot, same weights and protocol): speedbench full c1
+all-prompt geomean 88.84 and 89.80 (prose 65.04 / 66.14, code 111.57 / 112.84), median TTFT 206 /
+208 ms, 0 of 73 failed; `scripts/qeval.py` 71 / 75 (code 24/25, format 7/7, json 6/8, math 13/14,
+prose 5/5, reason 16/16), the same score and split as v2.5; T > 0 scan 0 / 35; needles PASS at
+124k (19.8 s) and 388k tokens (66.6 s); cold 388K prefill 65.2 s (5,770 tok/s; 69.0 s on v2.5);
+`/v1/messages` with the image placeholder token in text and with thinking enabled without a
+budget both answered; issue #16 accelerated reproducer 15 minutes, 410 requests, 0 failures. A
+T > 0 distribution check (production boot, 12,000 samples, 3 tokens, T 1.0): the second token's
+counts match the verify row's own probabilities (chi-square p 0.61).
+
+- Two-shot RoCE all-reduce for wide steps (`DSV41_ROCE_TWOSHOT=1`, `DSV41_ROCE_TWOSHOT_ROWS=18`,
+  `B12X_ROCE_PIPE_BLOCKS=4`, `B12X_ROCE_PIPE_CHUNK_BYTES=65536`; unset = one-shot only, as
+  before). At c16 the TP all-reduce moves 983 KB and the one-shot sends three full copies per rank
+  (163-175 us per call, ~14 ms per step on the wire). The pipelined two-shot of Luke Alonso's
+  flashinfer#6915 sends each rank's quarter to its owner, which sums the four partials in FP32 in
+  rank order exactly as the one-shot does, then gathers the reduced rows back: half the bytes,
+  bit-identical output. All-reduces of 18 rows or more take it; smaller ones stay one-shot. Ported
+  as a separate package `runtime/b12x/b12x/comm/roce_twoshot` (the `roce` package is byte for byte
+  untouched; `runtime/roce_twoshot_adapt.py` selects the copy in pynccl.py when the switch is set),
+  routed per call by row count through `adapter/roce_twoshot.py` (an in-boot A/B key). A two-shot
+  op after the 32-bit sequence wrap fails closed, and every kernel of the copy poisons the runtime
+  at sequence 0 instead of touching a flag or payload. Tests: `tests/test_roce_twoshot.py`
+  (protocol model bit-identical to the one-shot, ctrl/ABI agreement, the unchanged production
+  hashes, the sequence-wrap guard); the proxy builds with `-Werror` and every kernel compiles for
+  sm_121a without spills. Fleet: c16 +3.7 % alone, c1 / c4 within noise, T = 0 byte-identical.
+  Not with `DSV41_ROCE_RING=1`. Credits: Luke Alonso (flashinfer-ai/flashinfer#6915, the two-shot
+  all-reduce), on rhys101's RoCEnante path and local-inference-lab/b12x's RoCEnante transport.
+
+- Prepared eager MoE launch (`DSV41_MOE_LAUNCH_PREPARED=plan`, `adapter/moe_launch_prepared.py`).
+  Eager (prefill) calls of b12x_next's `tp_moe_dynamic_launch` repeated the host-side
+  quant/routing/materialization/tile decisions and the kernel lookup on every call: 1.45-1.77 ms of
+  host time per call on a c1 trace, 40 calls in a host-paced ~200 ms short prefill. `plan` makes
+  those decisions once per launch contract (every scalar argument, scratch size, device,
+  pre-quantized state, the programmatic overrides) and mirrors b12x main's `_launch_dynamic_flat`
+  (`a7d7d29`, source sha256-pinned; refuses to arm on drift). The barrier fill, route planner,
+  tensor pointers and current stream stay per call; a plan is dropped on any `B12X_NEXT_*`
+  environment write and whenever the kernel cache no longer maps it to the same compiled kernel.
+  Same kernels, same arguments, same order. Decode runs in CUDA graphs and is untouched. Test:
+  `tests/test_moe_launch_prepared.py` (stock and prepared bodies against recording stubs of every
+  side effect over 262 production contracts). `plan,direct` (skip the PyTorch dispatcher) and the
+  `DSV41_MOE_LAUNCH_TIMING` hooks stay test only. Credits: local-inference-lab/b12x (the launch
+  path it mirrors).
+
+- Prefill indexer slot ids without host syncs (`DSV41_INDEXER_NOSYNC=1`, with
+  `DSV41_INDEXER_CHUNKED=1`, `adapter/indexer_chunked_v3.py`). The eager prefill indexer of the
+  eight index-source layers indexed `req_to_token` with a 0-dim CUDA tensor per request (an
+  `.item()`: one stream sync per request and layer) and copied the request starts from pageable
+  memory (another sync). It now builds the compressed-slot ids with one device gather and pinned
+  non-blocking copies. Integer ops on the same elements in the same order: bit-identical. GPU check
+  (`tests/gpu_test_indexer_nosync.py`): 300 random batches equal to the stock loop, PyTorch's sync
+  detector raises nothing (it catches the stock loop), host time behind a queued 2 ms kernel 2.3 ms
+  -> 0.08 ms, 2-4 MiB extra device memory; top-level syncs per c1 extend on every rank >= 10 -> <= 2.
+  CPU test: `tests/test_indexer_nosync.py`. Credits: kpham-sgl (sglang#39187, the chunked indexer
+  backport this edits).
+
+- Block verification threshold arithmetic (`adapter/block_verify.py`, sampled rows only, always on). The
+  acceptance threshold h_i = S_i / (S_i + 1 - w_i) was evaluated as `(S + 1) - w` in FP32, which
+  rounds S against 1: with w = 1 - 2^-24 and S = 3e-8 it gave 0.503 for 0.335, with a clipped
+  w = 1 and S = 1.4 * 2^-24 it gave 0.70 for 1.0, and in general it moved h by up to
+  2^-24 / (S + 1 - w) relative. It is now `S + (1 - w)`; `1 - w` is exact in FP32 for w >= 0.5.
+  New `tests/test_block_verify_numerics.py` checks every threshold against an FP64 oracle on the
+  same FP32 probabilities (straddling draws, a grid of 1 - w and S, V = 129280 production-shaped
+  rows with margins 2-30, ties, -inf, one-hot drafts, p == q, truncated blocks, bf16 inputs) and
+  fails on the previous arithmetic. The old association moved the effective (clipped) threshold by
+  up to ~0.5 on those rows; its raw value was unbounded. Greedy selection is protected structurally:
+  an all-greedy batch never calls this code, and in a mixed batch it runs on every row while
+  SelectMixedAccept keeps the greedy rows' own AcceptGreedy result (greedy includes top_k <= 1, also
+  at temperature > 0). The draws consumed per call are unchanged. Affected: sampled rows of
+  sampled requests, at a verification step whose draw lands between the old and the new threshold.
+  On synthetic production-shaped rows (fixed drafts, offline) that was at most 7.4e-8 total
+  variation of the accepted length, and at most 9.7e-8 accepted-length mismatch under the
+  implementation's shared-uniform coupling, per step; these are synthetic observations, not a
+  bound over production histories. This is a correctness fix, not
+  a speed change, and it does not touch the FP32 rounding of the probabilities themselves
+  (SoftmaxTemp), which dominates the remaining error for confident tokens. Credit: Barron,
+  Gnanapragasam and Tschannen's softmax fix as applied in Christopher Owen's spark-ds41f #584.
+
 - `stop.sh`: the shared NFS exporter it keeps (`dsv41-nfs`, or a reused `vllm-fn-nfs`/`glm53-nfs`) is no longer
   reported as "still running", the `kept:` line names the exporter it found, and the banner counts the head plus the
   configured workers instead of a fixed 3x. Report only; cleanup unchanged. Tests in `tests/test_stop_nfs_filter.py`;
@@ -13,6 +574,8 @@
   `grep -q` exited no longer died of SIGPIPE and re-added an existing rule ("Filter already exists", mesh-up aborted).
   Test `tests/test_ring_mesh_pipefail.py` (stub `tc`/`ip`, output larger than a pipe buffer), now in CI. Credits:
   joeym82956 ([#54](https://github.com/knapcio/DeepSeek-V4.1-Flash-4x-DGX-Spark-TP4/pull/54)).
+
+## 2026-10-23
 
 - Engram NVMe keepalive (`adapter/row_store.cpp`, `DSV41_ENGRAM_KEEPALIVE_MS`, default 25, 0 = off).
   Under Linux APST the GB10's Samsung drive enters a low-power state after ~100 ms without commands

@@ -31,6 +31,51 @@ Third-party components and their licences:
   changes: runtime/b12x/roce_ring-provenance.json. scripts/ring_mesh/plan.py drives
   sparkring's fabric planner and the units run sparkring's RDMA-TX marker; neither is
   vendored here (both come from a sparkring checkout, Apache License 2.0).
+- runtime/b12x_next is local-inference-lab/b12x (Luke Alonso and Jason / original-el8)
+  at commit a7d7d29b2ef8869086e0ceaa787321f17544e3c9, renamed b12x -> b12x_next by
+  scripts/build_b12x_next.sh so it can sit beside runtime/b12x; Apache License 2.0
+  (runtime/b12x_next/LICENSE). Local changes are the patches that script applies, in
+  order (scripts/b12x_next-*.patch; their combined sha256 prefix is
+  runtime/b12x_next/b12x_next/SOURCE_PATCH): compact-n64-m64, prequant-input,
+  barrier-zero, det-triton-planner and claim-barrier. claim-barrier is a backport
+  of b12x commit d7937d7fc2e5511a0b61eb3572cd149f563f9b4f by Martin Vit (a CTA
+  barrier after the dynamic kernel's producer-loop batch-claim read, closing a
+  shared-memory reuse race on ctrl[7]); b12x development continues in
+  flashinfer-ai/flashinfer (flashinfer/experimental/b12x, Apache License 2.0).
+  The changes are distributed under the same licence.
+- runtime/b12x/b12x/comm/roce_twoshot is a copy of runtime/b12x/b12x/comm/roce with the
+  pipelined two-shot all-reduce of flashinfer-ai/flashinfer PR 6915 by Luke Alonso (head
+  effeb496, flashinfer/experimental/b12x/comm/roce, itself local-inference-lab/b12x's
+  RoCEnante) ported in; Apache License 2.0 (runtime/b12x/LICENSE). FlashInfer: Copyright
+  2025-2026 NVIDIA; Copyright 2023-2026 FlashInfer community (https://flashinfer.ai/).
+  Origin and local changes: runtime/b12x/twoshot-provenance.json. It is opt-in
+  (DSV41_ROCE_TWOSHOT=1); runtime/b12x/b12x/comm/roce is unchanged.
+- runtime/flashinfer_pce/base is an unmodified copy of FlashInfer's SM120 sparse-MLA sources
+  (flashinfer 0.6.18, git 69ff11fc, as installed in the DS v2.6 image; NVIDIA, BSD-3-Clause,
+  headers retained), kept for
+  the offline tests and the approved source closure of runtime/flashinfer_pce/gen_pce_sources.py
+  (csrc/tvm_ffi_utils.h and include/flashinfer/layout.cuh are FlashInfer's, Apache License 2.0).
+  That generator derives the opt-in DSV41_PREFILL_NATIVE_EXTRA module from the image's own
+  FlashInfer sources at build time
+  (dual-cache prefill dispatch opened to 128/256-token extra pages, symbols renamed); origin and
+  changes: runtime/flashinfer_pce/PROVENANCE.json.
+- runtime/flashinfer_fi7676/apply_fi7676.py applies, at image build time, the one-line fix of
+  flashinfer-ai/flashinfer PR 7676 by Thireus (issue 7675, commit c1d1214: a proxy fence after
+  producer_acquire in the b12x SM120/SM121 dense block-scaled GEMM) to the image's FlashInfer 0.6.18
+  (git 69ff11fc) file flashinfer/gemm/kernels/dense_blockscaled_gemm_sm120_b12x.py; Apache License 2.0.
+  FlashInfer: Copyright 2025-2026 NVIDIA; Copyright 2023-2026 FlashInfer community (https://flashinfer.ai/).
+  Origin and pins: runtime/flashinfer_fi7676/PROVENANCE.json.
+- runtime/flashinfer_v41c contains NVIDIA FlashInfer sparse_mla_sm120 sources (flashinfer 0.6.18,
+  BSD-3-Clause, headers retained) with local changes listed in runtime/flashinfer_v41c/PROVENANCE.json.
+  The DSV41_SWA_NATIVE_DECODE path (production profile since v2.6.4) uses csrc/swan_decode_dsv4.cu:
+  FlashInfer's decode-dsv4 launcher and its stock kernel body instantiated for 256-token pages. The other sources of that
+  directory (the V4.1 FP4 readers of the v41c / v41n work) are compiled into the same module but have
+  no caller in this tree.
+- adapter/history_repair.py, tests/test_history_repair.py and the named loop-abort exit in
+  adapter/loop_abort.py / tests/test_loop_abort.py are MiaAI-Lab/DeepSeek-v4.1-Flash-DGX-Sparks
+  PR 55 by Alexander Busse (GanyX19), upstream commit bdf657c (issue 54), contributed there under
+  the AGPL-3.0 and ported here unchanged under the same licence. The stall it fixes on this
+  repository was reported by slidonnici (issue 66).
 - SGLang, FlashInfer, DeepGEMM, PyTorch, NVIDIA components and the DeepSeek model
   retain their respective upstream licences. This repository does not
   redistribute model weights.

@@ -1051,6 +1051,32 @@ packed shards, profiler-estimate off.
   (5) per-rank `docker logs` must run on the rank's own host.
 - Owner request: align default thinking with the GLM lanes — see pre-bring-up entry.
 
+### 2026-11-05 — RESOLVED: env-parity fix validated live (branch miaai-env-fix-20261105)
+- Booted from the head repo checkout `/home/sdrew/code/spark-recipes` (branch
+  `miaai-env-fix-20261105` @ `a583d52`) via `bash site/start-cluster.sh serve` — the re-render
+  produced the full production `EXTRA_CONTAINER_ENV` (both MoE flags + `SERVED_MODEL_NAME`),
+  superseding the fossil node site copy. Boot completed ~23:00 ET (engine healthy ~04:01 UTC
+  Nov 6) with zero intervention: doctor ready (48/48 shards, 476G; all four HCAs active;
+  RoCEv2 GID index 3 on all ranks) → NCCL ring preflight OK → workers 3→2→1 → head cid
+  `0e323546ad23`.
+- Adapter armed exactly as in A/B 1: `[replicated_split] armed for ['wqkv_a', 'engram.wkv']`,
+  `DSV41 MXFP8 dense linears routed to FlashInfer backend 'b12x'`, `DSV41_L2_PREFETCH: MXFP8
+  linears recorded (budget 6.0 MB/window)`, `DSV41 padded-shard block-scale repair installed`
+  → the b12x_next hook is live and the 576 CUTLASS gate is bypassed. Known benign warnings
+  recurred (IB_HCA 4-dev/2-GID publication cap; extended-IPv4-GIDs note) — boot unaffected.
+- Post-boot verification (fresh, this session): `docker inspect dsv41-head` env shows
+  `DSV41_MOE_B12X_NEXT=1`, `DSV41_MOE_B12X_NEXT_DETERMINISTIC=1`,
+  `SERVED_MODEL_NAME=deepseek-v41-flash` (rank1 worker container env identical);
+  `curl /health` → 200; `dsv41-head Up (healthy)`; `model-name-proxy Up 2 days (healthy)` —
+  the ~39h unhealthy proxy is fixed by the restored `SERVED_MODEL_NAME` (fossil-missing-flag
+  hypothesis confirmed). Engine healthy → warm-up done in 9s (4 prompt sizes + batch of 16
+  returned Latin prose) → `Ready: API on port 8000 (rank 0), no API key`.
+- Deployed head stack matches branch expectations (boot.py `61fda421…`, start.sh `eb2bc8d4…`,
+  sitecustomize `efceffb7…`, moe_b12x_next `2cb7a736…`). Crash-log tails kept for the record:
+  `/tmp/dsv41-head-crash-20261105.log` (head) and `/tmp/dsv41-worker-crash-20261105.log`
+  (each worker, on the rank's own host). Branch awaits owner merge into `main`; node deploy
+  after merge is the usual repo → head `git pull` → re-render flow.
+
 ### 2026-11-05 — miaai boot crash: MoE gate tripped by truncated EXTRA_CONTAINER_ENV (fossil env file)
 - **Symptom:** first miaai-image boot on spark-0f0b (`dsv41-4x-spark:canary-roce-miaai`,
   ID `5b215714c933`) — weights doctor passed (48/48 shards) but the engine died at model

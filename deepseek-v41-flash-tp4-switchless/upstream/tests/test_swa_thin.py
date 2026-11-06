@@ -285,9 +285,15 @@ class Engine(unittest.TestCase):
 
         cls = self.urc.UnifiedRadixCache
         saved = cls.cache_unfinished_req
+        saved_active = T.STATS.active
+        saved_prompt_end = T.STATS.prompt_end
         try:
             if mode:
                 self.assertTrue(T.install(self.urc, env={T.ENV: mode}))
+                # install() does not switch modes once marked: set it here.
+                T.STATS.prompt_end = mode != "chunk"
+            else:
+                T.STATS.active = False
             cache, alloc, pool = self._build(swa_size=512)
             hist = {n: list(range(1000 * (k + 1), 1000 * (k + 1) + 24)) for k, n in enumerate("SOPQ")}
             reuse, rid, resume = [], [0], {}
@@ -322,6 +328,8 @@ class Engine(unittest.TestCase):
             return evicted, reuse, sizes
         finally:
             cls.cache_unfinished_req = saved
+            T.STATS.active = saved_active
+            T.STATS.prompt_end = saved_prompt_end
 
     def test_prompt_end_demotion_keeps_idle_session(self):
         # Turn traffic of other sessions: stock keeps every superseded turn checkpoint in LRU order, so the
@@ -354,9 +362,16 @@ class Engine(unittest.TestCase):
 
         cls = self.urc.UnifiedRadixCache
         saved = cls.cache_unfinished_req
+        saved_active = T.STATS.active
+        saved_prompt_end = T.STATS.prompt_end
         try:
             if flag:
                 self.assertTrue(T.install(self.urc, env={T.ENV: "1"}))
+                T.STATS.prompt_end = True
+            else:
+                # sitecustomize may already have installed the hook from the env;
+                # the stock control must run without it.
+                T.STATS.active = False
             cache, alloc, pool = self._build(swa_size=256)
             docs = {
                 "A": list(range(1000, 1052)),   # 52 tokens: chunk boundaries 16, 32, 48
@@ -383,6 +398,8 @@ class Engine(unittest.TestCase):
             return reuse, swa, sizes
         finally:
             cls.cache_unfinished_req = saved
+            T.STATS.active = saved_active
+            T.STATS.prompt_end = saved_prompt_end
 
     def test_pins_match_engine(self):
         self.assertEqual(T.pin_drift(self.urc.UnifiedRadixCache, self.LRU), [])

@@ -33,11 +33,15 @@ class Layer20BackportPackagingTests(unittest.TestCase):
             "RUN python3 /opt/dsv41/scripts/verify_sglang_layer20_tail.py "
             "/sgl-workspace/sglang/python"
         )
+        # SITE MOD: Dockerfile.canary-roce chains the verify RUNs into one layer (the
+        # pinned base's layer chain exceeded buildkit max depth); accept either the
+        # standalone RUN or the &&-chained invocation.
+        chained = verifier.replace("RUN python3", "&& python3")
         test = "python3 /opt/dsv41/tests/test_sglang_layer20_tail_patch.py"
         for name in ("Dockerfile.canary", "Dockerfile.canary-roce"):
             with self.subTest(name=name):
                 source = (ROOT / name).read_text()
-                self.assertIn(verifier, source)
+                self.assertTrue(verifier in source or chained in source, verifier)
                 self.assertIn(test, source)
 
 

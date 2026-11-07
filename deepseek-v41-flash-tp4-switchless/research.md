@@ -235,6 +235,112 @@ packed shards, profiler-estimate off.
   normalisation, and the Linux build passes them.
 - Deploy/validation receipts: the entry below.
 
+### 2026-11-06 — v2.6.4 cache fixes: live validation on the four-node lane
+
+Deployed branch `dsv41-cache-fixes-20261106` (head `a58acc2`), image built per node from
+`540bf07` + the site layer. Lane healthy, all six steps active at boot.
+
+**Boot gate (all pass):** `enable_decoder_swa_bounded_replay: True` in the engine's parsed
+`server_args`; `DSV41_SWA_CONE installed` on the scheduler and on the backend (TP0);
+`DSV41_SWA_THIN installed: mode=all`; `DSV41_DECODE_YIELD armed: share=33%`;
+`DSV41_SWA_NATIVE_DECODE=1` (native 256-token page reads); `SWA_CONE inactive` count **0**;
+`chunked_prefill_size: 8192`.
+
+**Retention gate — 99% on every revisit, including after churn:**
+
+| phase | prompt | cached | hit | wall |
+|---|---|---|---|---|
+| A cold turn | 188,574 | 188,416 | 99% | 8.7 s |
+| B quiet revisit | 188,586 | 188,416 | 99% | 1.1 s |
+| C churned revisit (212K churn) | 188,598 | 188,416 | 99% | 1.1 s |
+| D second revisit | 188,610 | 188,416 | 99% | 1.0 s |
+
+**`DSV41_SWA_THIN` A/B — the adapter fires and is measured.** The hook's receipt line logs
+on the 1st insert and every `RECEIPT_EVERY = 1024` inserts after, so a single boot-time
+receipt is NOT evidence the hook is inert (it read `chunk_steps=0 prompt_steps=1
+demoted=0` at boot and was misread as "never fires" until 40 cold chunked prompts crossed
+the threshold). After crossing it:
+
+```
+DSV41_SWA_THIN receipt: mode=all chunk_steps=139 prompt_steps=885 demoted=274 errors=0
+```
+
+274 demotions = superseded SWA checkpoints moved to the evict-first end of the SWA LRU,
+which is the adapter's whole job.
+
+Controlled A/B on the same 96K-document workload (unique nonce per run, so A is a genuine
+cold prefill; lane restarted between runs with only `DSV41_SWA_THIN` changed):
+
+| run | cold | revisit median | after churn | B hit | C hit |
+|---|---|---|---|---|---|
+| `DSV41_SWA_THIN=1` | 41.2 s | 0.80 s | 0.96 s | 99.8% | 99.8% |
+| `DSV41_SWA_THIN=0` | 15.7 s | 0.54 s | 0.74 s | 99.8% | 99.8% |
+
+**Read honestly: thin did not change retention on this workload, and it did not improve
+revisit latency.** Both configurations hold 99.8% after 3 × 21K churn, and the thin-off
+revisits were *faster* (0.54 s vs 0.80 s median). Two caveats on the cold column: the
+thin-on run was the first boot after a restart and paid warmup/autotune cost (the same
+configuration measured 15.7–22.8 s cold in earlier runs), so 41.2 s vs 15.7 s is not a
+like-for-like comparison. The defensible conclusion is the one the earlier numbers
+support: **with `--swa-prefix-tails 384` present, this workload's retention is already
+saturated**, and thin's demotion work has no headroom to show up in a single-session
+96K test. Thin's upstream receipts are for *multi-session* pressure (resumed 300–330K
+sessions, 61–64 s → 3.9–6.5 s); this A/B did not reproduce that shape. Thin stays on
+(it costs nothing measurable and protects the multi-session case), but it is **not yet
+demonstrated as a win on this lane** — that needs a concurrent multi-session 300K+
+harness, still open.
+
+**Pool-size drift across boots (new, unexplained):** the same configuration produced
+`full` = 3,671,552 / 3,561,728 / 3,835,136 / 3,749,120 / 3,632,640 / **3,363,584** tokens
+across six boots — a ~12% spread with a downward trend on the last two. Free GPU memory
+read 10.55 GiB at the end of the session. Not diagnosed; candidate causes are
+fragmentation or a leak carried across restarts rather than anything the cache changes
+touch. Worth a clean-cluster boot before trusting any pool figure.
+
+**Compatibility limit introduced by restoring bounded replay:** `DSV41_REPLAY_GUARD`
+rejects prompt-logprob requests (`logprob_start_len < prompt length`) and full-hidden-state
+requests with HTTP 400. Output logprobs (`chat logprobs=true`, `logprob_start_len`
+None/-1) are unaffected; `/v1/chat/completions` agent traffic is unaffected. No harness in
+`.research/` uses the rejected shapes. This is upstream's own decoder-bounded-replay
+constraint, not a site regression — but it is a behaviour change for any caller that asks
+for prompt logprobs.
+
+**`DSV41_DECODE_YIELD=33` — measured, and the strongest receipt of the six.** A clean A/B on
+the shape the flag targets (a streaming decode beside a cold 300K multi-chunk prefill; lane
+restarted between runs with only this variable changed):
+
+| metric | yield ON (33) | yield OFF | delta |
+|---|---|---|---|
+| decode tokens produced during the prefill | 263 | 96 | **2.7×** |
+| steady decode rate beside the prefill | 8.57 tok/s | 2.08 tok/s | **4.1×** |
+| stalls > 1 s | 13 | 22 | **−41%** |
+| total stalled time | 19.2 s | 40.5 s | **−53%** |
+| p99 inter-token gap | 1.49 s | 3.78 s | **−61%** |
+
+Against an idle baseline of ~17 tok/s, yield-off runs the stream at **0.12** of idle and
+yield-on at **0.50** — better than upstream's 0.393 receipt. So this flag clears the
+adoption gate on its own measured evidence and is the one change of the six that is
+demonstrated to help a real workload.
+
+Method note that cost a false negative: `decode_yield.arm_after` only arms when the plan's
+batch is the *chunked request's* EXTEND batch while `plan.running_batch` still holds decode
+rows. Starting the long prefill first leaves no decode rows beside it, so the adapter looks
+inert (0 receipts) and the stream measures 0.014 of idle — worse than no mitigation. The
+test must start the decode stream first, wait ~2 s for it to reach steady state, then
+launch the prefill. Both the "does it fire" probe and the A/B above do that.
+
+- Validation scripts: `.research/thin-ab.py` (thin A/B), `.research/thin-receipt.py`
+  (receipt threshold), `.research/yield-ab.py` (decode-yield A/B),
+  `.research/decode-yield-ttft.py`, `.research/probe-decode-yield.py`,
+  `.research/probe-yield-stats.py`, `.research/thin-stats.py`,
+  `.research/probe-thin-install.sh`, `.research/probe-thin-path.sh`,
+  `.research/probe-module-path.sh`, `.research/probe-pool.sh`. Run-on-node copies in
+  `/tmp` on the head.
+- Test fix committed as `a58acc2`: `test_swa_thin.py` now isolates `STATS.active` /
+  `prompt_end` per scenario, because `sitecustomize` pre-installs the hook from
+  `DSV41_SWA_THIN=1` and the stock-control cases were running with it already armed.
+  15/15 pass in the image.
+
 ## Changelog (continued)
 
 ### 2026-10-26 — agent-turn retention FIXED: `--swa-prefix-tails 128` + ratio 0.065 (knapcio certified profile + MiaAI #43 band)

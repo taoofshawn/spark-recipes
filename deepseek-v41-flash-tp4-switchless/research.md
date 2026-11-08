@@ -160,6 +160,53 @@ packed shards, profiler-estimate off.
 
 ## Changelog
 
+### 2026-11-08 (latest) — repro round 2: client-shape variants (a)/(b)/(c) all CLEAN; optional gates sealed; lane self-restored
+
+Follow-up to the hour-02 verdict: three controlled variants testing whether any
+client-side request shape reproduces the production collapse. **None do** — collapse
+requires genuine page-content churn (client-side regeneration), confirming the verdict.
+
+- **Variant (a) — 10 parallel divergent-suffix inserts on a shared prefix. CLEAN.**
+  Driver `.research/dsv41-repro-fanout-suffix.py` (prefix 1,100 lines ≈ 29.6K tok; each
+  request a distinct ~672-tok tool-result suffix; suffix salt embedded in content).
+  Phase 2 (parallel): all 10 hit `cached_tokens: 29440` (97.2% — full shared prefix,
+  distinct suffixes NOT matched). Phase 3a (suffix-0 session continuation): `30208/38682`
+  = 78.1% — the suffix-0 branch itself fully matched on the next turn. Phase 3b (pure
+  shared-chain continuation): `29440/38010` = 77.5% — chain intact. **No collapse:
+  divergent-branch inserts never poison sibling-chain matching in clean-pool conditions.**
+- **Variant (b) — production client shape: streaming + tools schema + many-message
+  append-only list (`store:false`). CLEAN.** Driver `.research/dsv41-repro-multiturn-tools.py`,
+  5 turns over a 1,000-line base. Hits: turn 2 `24576/27224` (90.3% = page-rounded prior
+  chain), turns 3–5 `27136/27380` ≈ 99%. Streaming + tools + message-list re-rendering
+  produces NO page-1 or page-2+ divergence by itself.
+- **Variant (c) — time-separated turns under concurrent LRU churn. CLEAN.** Driver
+  `.research/dsv41-repro-churn-turns.py`: session turn every 30 s while a sequential pump
+  inserted ~448K-tok prompts (5 × 448K ≈ 2.24M total during the session). Hits: turn 2
+  `38400/38656` = 99.4%, turn 3 `47360/47616` = 99.5%, turn 4 `56576/56832` = 99.5%,
+  turn 5 `65536/65792` = 99.6%. Mechanism (matches the LRU model): every turn's full-chain
+  match refreshes the whole chain to the LRU-MRU end, so an ACTIVE session chain is
+  structurally protected; only IDLE chains get eaten tail-first under churn — which is
+  exactly the item-3 production event (prior run's ended session truncated by the
+  05:31:43–05:32:10 pump window) and was already reproduced in Stage-2.
+- **Optional gates sealed.** (1) `_get_swa_token_info()` (pool_stats_observer L290–337):
+  same protected-only arithmetic on the SWA side (`swa_num_used = swa_capacity −
+  (swa_available + swa_evictable)`) — `#swa token:` is also protected-only/in-flight.
+  (2) `/health` maps to `health_generate` (http_server.py L662–670): "sending a special
+  request to generate one token… if the server is not running anything, this request
+  will be run" — the 1-token-prefill = proxy-health-probe identification confirmed in
+  engine source, not just by log correlation.
+- **Lane hygiene + metric cross-validation.** Pre-run (a): `evicted=2.3158272e+07`,
+  `kv_evictable=3.637504e+06`, `running=0`, input=2.6162667e+07 / device_hit=1.6224512e+07.
+  Post-variant (c): `kv_evictable=3.647744e+06` (self-restored ≥ pre-run), `running=0`,
+  `evicted=2.5781504e+07` (Δ +2.62M = variant-(c) pump churn — expected), input=2.879815e+07
+  / device_hit=1.6892416e+07. The device_hit delta (+667,904) EXACTLY equals the sum of
+  measured `cached_tokens` across all variant requests (a 354,048 + b 105,984 + c 207,872)
+  — the hit-rate counter is precise to the token and the repro runs left no residue.
+
+Repro track CLOSED: no client request shape induces collapse; the engine is correct and
+the production loss is client-driven page-content churn. Remaining actions are client-side
+(cached-prefix stability), not lane-side.
+
 ### 2026-11-08 (later) — hour-02 production verdict: collapse was client page-1/page-2+ churn; gauge accounting corrected; SWA_THIN + eviction fully exonerated; all open items resolved
 
 Root-cause verdict for the 02:17–02:22 UTC Nov 7 production collapse, after the pool-stats

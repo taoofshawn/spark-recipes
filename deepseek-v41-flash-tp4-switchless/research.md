@@ -160,6 +160,64 @@ packed shards, profiler-estimate off.
 
 ## Changelog
 
+### 2026-11-08 (later) — hour-02 production verdict: collapse was client page-1/page-2+ churn; gauge accounting corrected; SWA_THIN + eviction fully exonerated; all open items resolved
+
+Root-cause verdict for the 02:17–02:22 UTC Nov 7 production collapse, after the pool-stats
+accounting semantics were code-verified (two misreadings formally withdrawn).
+
+- **Corrected `PoolStats` semantics (`pool_stats_observer.py` `_get_token_info()` L223).**
+  `num_used = max_total − (available + evictable)` and `full_num_used` counts ONLY
+  protected (in-flight/locked) tokens — evictable tree-resident tokens are subtracted out
+  and print as free. Consequences:
+  1. `full token usage: 0.00` on T7's chunks does **not** mean the tree is empty.
+  2. Decode `#full token: 52,480–55,040` during T8/T9 = in-flight allocation + non-evictable
+     residue, **not residency** — the earlier "decode-gauge chain-destruction proof" was
+     built on this misread and is **DROPPED**.
+  3. T3's `#full token: 28,416` (< its own prompt) = mid-prefill in-flight count.
+  `#full token:` / `full token usage:` therefore join the untrustworthy-gauge list;
+  authoritative signals remain `kv_evictable_tokens` deltas, `evicted_tokens_total` deltas,
+  and the `prefill_effective_tokens_total` input/device_hit pair.
+- **Root cause (client-side, engine correct).** Turn-chain arithmetic under the corrected
+  semantics: T1–T6 built 15,203→17,450→29,852→32,859→45,436→46,248-token chains
+  (ct=0/0/6,400/28,416/33,280/45,568; 98.5% free at 02:19:03). T7 VICTIM 02:19:23–30
+  (47,501 tokens) got **ct=0 on all six chunks** — its page-1 differed from T6's (client
+  regenerated the conversation head). T8/T9 retries (52,333 / 53,508 tokens) matched
+  **only page 1 (ct=256)** then ct=0 — page-1 stable between retries but page-2+ content
+  churns every turn (LLM-regenerated compaction/summary). Each divergent retry INSERTS a
+  new root branch; it does **not** destroy the old chain (no such mechanism exists), so
+  the hit-rate loss is fully explained by head/page churn alone.
+- **Eviction structurally impossible in the window:** pool at ~2% usage → no allocation
+  failure → `evict()` never invoked. Evicted-delta over the window is unverifiable
+  retroactively (Prometheus at 10.69.50.10:9090 unreachable from the head: empty range
+  query, empty label list, `/-/healthy` fails); would need a Grafana-side datasource.
+- **SWA_THIN exonerated (code-verified).** `demote_superseded` walks from the checkpoint
+  node toward root while `covered < span` and only `_move_to_lru_end`s nodes that are
+  unlocked, in-LRU, single-child SWA checkpoints — pure LRU reordering, never eviction or
+  teardown, at most one checkpoint per call. T7 diverged at token ~1 → `old == root` →
+  the ancestor-walk guard (must LAND ON `old`) returns 0 moved. The single
+  `DSV41_SWA_THIN receipt` at 02:19:40 is a lifetime-cumulative heartbeat
+  (`n % RECEIPT_EVERY == 0`, 1,024): the window's 697 chunk_steps + 327 prompt_steps
+  = 1,024 exactly, i.e. it fired on the window's 1,024th hooked insert mid-T8;
+  `demoted=1469/1,024` ≈ 1.4/insert is one-checkpoint-per-step housekeeping. Benign.
+- **Open item 4 CLOSED — 1-token prefills identified:** each of the 82 one-token prefills
+  in the hour-02 window co-occurs (same second) with a `GET /health` from `127.0.0.1`
+  (model-name-proxy health-checking the engine, ~15 s cadence). SGLang's `/health`
+  performs a dummy 1-token generation to verify the full pipeline, not just HTTP liveness.
+  Benign by design. The 3 detokenizer-heartbeat `Health check failed` lines
+  (01:55:16, 01:55:22, 02:09:32; last heartbeat 02:08:48 = a probe prefill) are
+  scheduler-busy heartbeat stalls with no crash/abort following — background noise.
+- **Open item 3 CLOSED — multiturn turn-1 68% (16,384/24,110) explained:** engine log at
+  05:34:50 UTC Nov 8 (`cached=16384, new=7726`) shows the match was exactly 64 pages —
+  a prior identical turn-1 chain (same salt → identical prompt) truncated **tail-first by
+  LRU eviction** during the 05:31:43–05:32:10 pump churn (`new=8192, cached=0` chunks),
+  leaving the shallow head alive. Page-aligned partial match, engine per spec; turn-2 then
+  matched the full 24,110-token chain (page-rounded 24,576).
+- **Open item 5 CLOSED — Stage-2c attempt-1 fleet window (07:05–07:15 UTC Nov 8)
+  reconciled:** running-req peaked at **5** (of the 10-fleet; remainder in
+  prefill/stream-finish phases), **zero aborts/retracts**, running-req reached 0 repeatedly
+  — no leaked locks, consistent with the post-crash curl finding.
+- No lane code/config changes made; monitoring/troubleshooting only.
+
 ### 2026-11-08 — A/B repro round 1: cone-cap retracted; collapse re-identified as idle-session loss under full-pool LRU pressure
 
 - **Setup.** Continued on the live 20:26 ET Nov 6 boot (healthy, no restart needed for the

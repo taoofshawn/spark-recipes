@@ -319,7 +319,12 @@ class ImageOverlay(unittest.TestCase):
     @unittest.skipUnless(PYNCCL.is_file(), "image only")
     def test_overlay_selects_package(self):
         src = self.PYNCCL.read_text()
-        self.assertIn('"b12x.comm.roce_ring" if os.environ.get("DSV41_ROCE_RING", "0") == "1" else "b12x.comm.roce"', src)
+        # roce_tp4_adapt.py's two-way selection, extended by roce_twoshot_adapt.py (v2.6) to a three-way one
+        self.assertIn('"b12x.comm.roce_ring" if os.environ.get("DSV41_ROCE_RING", "0") == "1" else '
+                      '("b12x.comm.roce_twoshot" if os.environ.get("DSV41_ROCE_TWOSHOT", "0") == "1" else '
+                      '"b12x.comm.roce")', src)
+        # the ring package has no two-shot path: both switches together refuse to start
+        self.assertIn('raise RuntimeError("DSV41_ROCE_TWOSHOT=1 needs the switched fabric', src)
         self.assertNotIn("from b12x.comm import roce\n", src)
 
 

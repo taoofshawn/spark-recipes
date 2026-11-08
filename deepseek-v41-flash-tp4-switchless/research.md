@@ -142,18 +142,595 @@ packed shards, profiler-estimate off.
    snapshot.** v0.5.22 verified to contain the whole DSV4.1 stack the canary needs
    (`encoding_dsv41`, `deepseek_v4_dspark`, `kv_canary`, dsv4 backend,
    `UnifiedRadixCache` replacing the deleted `SWARadixCache`) plus #43502's merged
-   prefix-tails pricing. NOT a retention fix: the unified `swa.py` walk at v0.5.22 has
-   the same branch-tail eviction blind spot (verified at the tag), and the follow-up
-   retention work (#46008) is still open. Migration driver is drift, not this bug:
-   the site patch anchors (sanitize, tail-eviction, floor) will keep eroding against
-   the pinned tree. Migration cost: the ~20 site adapters monkey-patch branch
-   internals (`wo_a_w8`, `hc_fused`, `moe_b12x_next`, `fast_load`, engram, …) —
-   each needs re-verification; receipts re-established on GB10 (upstream CI covers
-   GB300 only). When it happens, port the #35515 tail-deprioritization into the
-   unified `swa.py` walk (cursor-recovery semantics required, per the #35515 author)
-   and consider upstreaming it as the follow-up that PR offered.
+   prefix-tails pricing. Migration driver is drift, not the retention bug:
+   the site patch anchors (sanitize, floor) will keep eroding against the pinned tree.
+   Migration cost: the ~20 site adapters monkey-patch branch internals (`wo_a_w8`,
+   `hc_fused`, `moe_b12x_next`, `fast_load`, engram, …) — each needs re-verification;
+   receipts re-established on GB10 (upstream CI covers GB300 only).
+   **CORRECTED 2026-11-06:** the premise that this tree's hybrid SWA still runs
+   `SWARadixCache` was WRONG — `mem_cache/registry.py:146` routes this lane to
+   `UnifiedRadixCache` with components `[FULL, SWA]`, and the pinned tree already ships
+   `mem_cache/unified_cache/`. Consequences: (a) the site's #35515 backport was patching a
+   dead class and is now REMOVED; (b) v2.6.4's `DSV41_SWA_THIN` / `DSV41_SWA_CONE_REPLAY`
+   are the unified-cache retention fix and needed **no re-pin** (their engine pins match
+   this tree exactly — verified in the deployed image); (c) the "unified `swa.py` walk has
+   the same blind spot, so port #35515 there" follow-up is superseded by upstream's own
+   `swa_thin`, which demotes superseded checkpoints instead of protecting branch tails.
+   This item is now a pure drift/maintenance item.
 
 ## Changelog
+
+### 2026-11-08 (latest) — repro round 2: client-shape variants (a)/(b)/(c) all CLEAN; optional gates sealed; lane self-restored
+
+Follow-up to the hour-02 verdict: three controlled variants testing whether any
+client-side request shape reproduces the production collapse. **None do** — collapse
+requires genuine page-content churn (client-side regeneration), confirming the verdict.
+
+- **Variant (a) — 10 parallel divergent-suffix inserts on a shared prefix. CLEAN.**
+  Driver `.research/dsv41-repro-fanout-suffix.py` (prefix 1,100 lines ≈ 29.6K tok; each
+  request a distinct ~672-tok tool-result suffix; suffix salt embedded in content).
+  Phase 2 (parallel): all 10 hit `cached_tokens: 29440` (97.2% — full shared prefix,
+  distinct suffixes NOT matched). Phase 3a (suffix-0 session continuation): `30208/38682`
+  = 78.1% — the suffix-0 branch itself fully matched on the next turn. Phase 3b (pure
+  shared-chain continuation): `29440/38010` = 77.5% — chain intact. **No collapse:
+  divergent-branch inserts never poison sibling-chain matching in clean-pool conditions.**
+- **Variant (b) — production client shape: streaming + tools schema + many-message
+  append-only list (`store:false`). CLEAN.** Driver `.research/dsv41-repro-multiturn-tools.py`,
+  5 turns over a 1,000-line base. Hits: turn 2 `24576/27224` (90.3% = page-rounded prior
+  chain), turns 3–5 `27136/27380` ≈ 99%. Streaming + tools + message-list re-rendering
+  produces NO page-1 or page-2+ divergence by itself.
+- **Variant (c) — time-separated turns under concurrent LRU churn. CLEAN.** Driver
+  `.research/dsv41-repro-churn-turns.py`: session turn every 30 s while a sequential pump
+  inserted ~448K-tok prompts (5 × 448K ≈ 2.24M total during the session). Hits: turn 2
+  `38400/38656` = 99.4%, turn 3 `47360/47616` = 99.5%, turn 4 `56576/56832` = 99.5%,
+  turn 5 `65536/65792` = 99.6%. Mechanism (matches the LRU model): every turn's full-chain
+  match refreshes the whole chain to the LRU-MRU end, so an ACTIVE session chain is
+  structurally protected; only IDLE chains get eaten tail-first under churn — which is
+  exactly the item-3 production event (prior run's ended session truncated by the
+  05:31:43–05:32:10 pump window) and was already reproduced in Stage-2.
+- **Optional gates sealed.** (1) `_get_swa_token_info()` (pool_stats_observer L290–337):
+  same protected-only arithmetic on the SWA side (`swa_num_used = swa_capacity −
+  (swa_available + swa_evictable)`) — `#swa token:` is also protected-only/in-flight.
+  (2) `/health` maps to `health_generate` (http_server.py L662–670): "sending a special
+  request to generate one token… if the server is not running anything, this request
+  will be run" — the 1-token-prefill = proxy-health-probe identification confirmed in
+  engine source, not just by log correlation.
+- **Lane hygiene + metric cross-validation.** Pre-run (a): `evicted=2.3158272e+07`,
+  `kv_evictable=3.637504e+06`, `running=0`, input=2.6162667e+07 / device_hit=1.6224512e+07.
+  Post-variant (c): `kv_evictable=3.647744e+06` (self-restored ≥ pre-run), `running=0`,
+  `evicted=2.5781504e+07` (Δ +2.62M = variant-(c) pump churn — expected), input=2.879815e+07
+  / device_hit=1.6892416e+07. The device_hit delta (+667,904) EXACTLY equals the sum of
+  measured `cached_tokens` across all variant requests (a 354,048 + b 105,984 + c 207,872)
+  — the hit-rate counter is precise to the token and the repro runs left no residue.
+
+Repro track CLOSED: no client request shape induces collapse; the engine is correct and
+the production loss is client-driven page-content churn. Remaining actions are client-side
+(cached-prefix stability), not lane-side.
+
+### 2026-11-08 (later) — hour-02 production verdict: collapse was client page-1/page-2+ churn; gauge accounting corrected; SWA_THIN + eviction fully exonerated; all open items resolved
+
+Root-cause verdict for the 02:17–02:22 UTC Nov 7 production collapse, after the pool-stats
+accounting semantics were code-verified (two misreadings formally withdrawn).
+
+- **Corrected `PoolStats` semantics (`pool_stats_observer.py` `_get_token_info()` L223).**
+  `num_used = max_total − (available + evictable)` and `full_num_used` counts ONLY
+  protected (in-flight/locked) tokens — evictable tree-resident tokens are subtracted out
+  and print as free. Consequences:
+  1. `full token usage: 0.00` on T7's chunks does **not** mean the tree is empty.
+  2. Decode `#full token: 52,480–55,040` during T8/T9 = in-flight allocation + non-evictable
+     residue, **not residency** — the earlier "decode-gauge chain-destruction proof" was
+     built on this misread and is **DROPPED**.
+  3. T3's `#full token: 28,416` (< its own prompt) = mid-prefill in-flight count.
+  `#full token:` / `full token usage:` therefore join the untrustworthy-gauge list;
+  authoritative signals remain `kv_evictable_tokens` deltas, `evicted_tokens_total` deltas,
+  and the `prefill_effective_tokens_total` input/device_hit pair.
+- **Root cause (client-side, engine correct).** Turn-chain arithmetic under the corrected
+  semantics: T1–T6 built 15,203→17,450→29,852→32,859→45,436→46,248-token chains
+  (ct=0/0/6,400/28,416/33,280/45,568; 98.5% free at 02:19:03). T7 VICTIM 02:19:23–30
+  (47,501 tokens) got **ct=0 on all six chunks** — its page-1 differed from T6's (client
+  regenerated the conversation head). T8/T9 retries (52,333 / 53,508 tokens) matched
+  **only page 1 (ct=256)** then ct=0 — page-1 stable between retries but page-2+ content
+  churns every turn (LLM-regenerated compaction/summary). Each divergent retry INSERTS a
+  new root branch; it does **not** destroy the old chain (no such mechanism exists), so
+  the hit-rate loss is fully explained by head/page churn alone.
+- **Eviction structurally impossible in the window:** pool at ~2% usage → no allocation
+  failure → `evict()` never invoked. Evicted-delta over the window is unverifiable
+  retroactively (Prometheus at 10.69.50.10:9090 unreachable from the head: empty range
+  query, empty label list, `/-/healthy` fails); would need a Grafana-side datasource.
+- **SWA_THIN exonerated (code-verified).** `demote_superseded` walks from the checkpoint
+  node toward root while `covered < span` and only `_move_to_lru_end`s nodes that are
+  unlocked, in-LRU, single-child SWA checkpoints — pure LRU reordering, never eviction or
+  teardown, at most one checkpoint per call. T7 diverged at token ~1 → `old == root` →
+  the ancestor-walk guard (must LAND ON `old`) returns 0 moved. The single
+  `DSV41_SWA_THIN receipt` at 02:19:40 is a lifetime-cumulative heartbeat
+  (`n % RECEIPT_EVERY == 0`, 1,024): the window's 697 chunk_steps + 327 prompt_steps
+  = 1,024 exactly, i.e. it fired on the window's 1,024th hooked insert mid-T8;
+  `demoted=1469/1,024` ≈ 1.4/insert is one-checkpoint-per-step housekeeping. Benign.
+- **Open item 4 CLOSED — 1-token prefills identified:** each of the 82 one-token prefills
+  in the hour-02 window co-occurs (same second) with a `GET /health` from `127.0.0.1`
+  (model-name-proxy health-checking the engine, ~15 s cadence). SGLang's `/health`
+  performs a dummy 1-token generation to verify the full pipeline, not just HTTP liveness.
+  Benign by design. The 3 detokenizer-heartbeat `Health check failed` lines
+  (01:55:16, 01:55:22, 02:09:32; last heartbeat 02:08:48 = a probe prefill) are
+  scheduler-busy heartbeat stalls with no crash/abort following — background noise.
+- **Open item 3 CLOSED — multiturn turn-1 68% (16,384/24,110) explained:** engine log at
+  05:34:50 UTC Nov 8 (`cached=16384, new=7726`) shows the match was exactly 64 pages —
+  a prior identical turn-1 chain (same salt → identical prompt) truncated **tail-first by
+  LRU eviction** during the 05:31:43–05:32:10 pump churn (`new=8192, cached=0` chunks),
+  leaving the shallow head alive. Page-aligned partial match, engine per spec; turn-2 then
+  matched the full 24,110-token chain (page-rounded 24,576).
+- **Open item 5 CLOSED — Stage-2c attempt-1 fleet window (07:05–07:15 UTC Nov 8)
+  reconciled:** running-req peaked at **5** (of the 10-fleet; remainder in
+  prefill/stream-finish phases), **zero aborts/retracts**, running-req reached 0 repeatedly
+  — no leaked locks, consistent with the post-crash curl finding.
+- No lane code/config changes made; monitoring/troubleshooting only.
+
+### 2026-11-08 — A/B repro round 1: cone-cap retracted; collapse re-identified as idle-session loss under full-pool LRU pressure
+
+- **Setup.** Continued on the live 20:26 ET Nov 6 boot (healthy, no restart needed for the
+  repros; lane serves them alongside real traffic). Six synthetic repros run from the
+  workstation against `10.69.43.170:8000`, hit rates read from
+  `usage.prompt_tokens_details.cached_tokens` (request-authoritative).
+- **None of the six repros reproduced the collapse.**
+  1. *Prefix length* — `.research/dsv41-repro.py`: single-turn 334,809-token prompt, then the
+     same prompt + 16-token completion budget as turn 2: turn-1 prefill 98.0 s, turn-2
+     **99.92% hit**. Length alone is not the trigger.
+  2. *Append-only multi-turn growth* — `.research/dsv41-repro-multiturn.py`: one growing
+     session 25K→83K over 8 turns — **all turns ≥98.5%**.
+  3. *Fan-out N=8 identical prompts* @ 29.6K — `.research/dsv41-repro-fanout.py`: all 8 at
+     99.4%; follow-up turn 86%.
+  4. *Fan-out N=50 identical prompts* @ 29.6K — all 50 at 99.4% (wall 59.7 s); follow-up
+     **99.0%**. Identical-prompt fan-out does NOT damage the tree.
+  - **Retraction:** the 2026-11-07 entry's "cone-cap fingerprint" (hits ≤6144 ≤
+    `DSV41_SWA_CONE_TOKENS=8192`) does not hold as a cap — healthy turns report cached
+    ≈ 30K. The missing hits are genuinely *missing* (whole-prefix loss), not capped.
+- **Refined 02:00–02:29 UTC Nov 7 window** (`.research/dsv41-big-scan.py` over the full
+  hour-02 log): the 02:03–02:04 burst of ~50 requests at ctx 33,372 (all 99% hits) was ONE
+  session's fan-out; that session's NEXT turn (02:19:23, ctx 52,333 ≈ 33.4K prefix + ~19K
+  appended, chunked at 8192, `demoted=1469` over chunk_steps=697) hit **0.5%** (cached 0/256).
+  A *different* session at 02:19:03, ctx 46.2K, hit 99% (`#cached-token: 45568`) twenty
+  seconds earlier → the collapse is **session-specific**, not pool-wide; one abort in the
+  gap → not abort-induced.
+- **Two log-forensics corrections.** (a) The engine does NOT log individual evictions:
+  whole-log `grep -i evict` returns 5 lines, all install banners / server_args / fast-load
+  memory text. "No EVICT lines in hour 02" was never evidence; `evicted_tokens_total` is the
+  only eviction signal. (b) `DSV41_SWA_CONE` installed (scheduler `N=8192 min_save=8192`;
+  backend "replay rows floored and write-masked") but fired **zero times in the whole boot**.
+  Per the `swa_cone.py` docstring, a cone-replayed turn reports `#cached-token` = F (the
+  full-KV hit, thousands of tokens); the real miss turns reported cached ≤ 6144 ⇒ **the
+  full-layer KV was gone too**, not just the SWA checkpoints the cone exists to rescue.
+- **swa_thin mechanics (read in full, 233 lines).** `demote_superseded` only *reorders* the
+  SWA LRU — moves superseded single-child (`len(children)==1`) chunk-boundary checkpoints to
+  evict-first; never evicts directly; branch points are exempt. `demoted=1469` over a
+  697-chunk prefill is cumulative per-insert accounting, not damage.
+- **Hypothesis — idle sessions get LRU-evicted under full-pool pressure (FALSIFIED by the
+  controlled test below; eviction-ORDERING confirmed correct, see 2026-11-08 addendum).**
+  The pool is chronically full at rest (`kv_evictable_tokens`
+  3,643,648 of 3,648,512 between repros) and churns ~57K tokens/min (78-min watch: +4.45M
+  evicted). Eviction is LRU-oldest-first, so a session idle ~15 min while other traffic
+  prefills ~860K tokens loses its own 33K prefix entirely — from the old end first.
+  Frequently-turning sessions keep refreshing their prefixes and survive at 97–99% (the
+  small sessions all through the watch). Fits session-specificity, the 02:04→02:19 idle
+  gap, full-layer loss (no cone receipt), and why the N=50 fan-out — fresh, immediately
+  consumed — never collapses.
+- **Controlled test (one variable: idle + churn).** `.research/dsv41-repro-idle-pressure.py`:
+  establish a 30K session (PREFIX_LINES=1100 ≈ 29.6K tokens; turn-1 hit 99.4%) → 26 × ~35K
+  fresh salted prefills paced over ~12 min → append-only probe of the same session.
+- **Controlled-test RESULT: idle-LRU hypothesis FALSIFIED.** 26 × ~35K salted churn prompts
+  drove `evicted_tokens_total` +901,376 during the idle window (~1.4× the ~860K production
+  pressure estimate) — and the probe turn still hit **99.5%** (`prompt=32409 cached=32256`,
+  t=0.8 s), with evictable end-state 3,613,440 ≈ 99.1% of pool. A session's freshly matched
+  prefix survives real LRU pressure; idle+churn alone does NOT produce whole-prefix loss.
+  (Job's baseline `evicted=15398400` vs manual `1.5460096e7` is a label-series selection
+  difference; the DELTA +901,376 is the authoritative figure.)
+
+- **2026-11-08 addendum — source-level eviction reads + hour-02 measurement.** Key
+  findings, all from the running container (`dsv41-head`, runtime is SGLANG,
+  `mem_cache/unified_cache/…`), read this session:
+  - **Hour-02 decisive measurement** (353 TP0 prefill batches, 02:03–02:21 UTC Nov 7):
+    `#new-token` total 422,620 vs `#cached-token` total 5,722,112 → window hit ratio 93.1%.
+    The 02:03 fan-out (~50 reqs @ 33.4K, 99%) was followed by near-idle 02:04–02:17
+    (1-token probes every ~15–16 s reporting `#cached-token: 0` — separate low-priority
+    anomaly), then 02:18 = 70,876 / 02:19 = 100,258 / 02:20 = 40,963 / 02:21 = 178,207
+    new tokens. The 02:19:23 collapse (ctx 52,333, cached 0/256) happened with only
+    ~106K tokens inserted since that session's 02:03 match — naive "LRU pressure evicted
+    the MRU chain" is arithmetically impossible at face value.
+  - **Eviction is bottom-up leaf-by-leaf, never instant whole-chain.** Candidates come
+    ONLY from `evictable_device_leaves` / `evictable_host_leaves` (tree-core
+    L489–490); `_is_device_leaf` (L2060–2076) = not root, not evicted, no lock_ref>0,
+    no child with FULL device value (Full/base component mandatory; SWA/Mamba aux not
+    required). Deleting a D-leaf walks the tombstone cascade UP
+    (`_iteratively_delete_tombstone_ancestors`, L2004–2058), which STOPS at locked
+    nodes and at the first ancestor holding a FULL device value (it becomes the next
+    D-leaf and survives). A whole session chain therefore vanishes only through a
+    SEQUENCE of leaf evictions. FULL-component ordering (full.py L187–228) is a heap
+    keyed `(ref>0, ref, strategy.get_priority(node))` with parent re-push after each
+    pop.
+  - **Eviction ordering = plain LRU in this deployment.** `LRUStrategy.get_priority`
+    returns `node.last_access_time` (`mem_cache/evict_policy.py` L16–18). The
+    session-ref tiers of the heap key are inert: `/get_server_info` confirms
+    `enable_session_radix_cache: false`, so session refs are never registered and
+    every leaf sorts ref==0. Match-time recency refresh (tree-core `_match_post_processor`
+    L917→L930/L935 + insert-time refresh L1003/L1396) IS honored by the FULL eviction
+    heap. The "ordering bug" branch is CLOSED; match-freshness protects a chain
+    exactly as long as supply arithmetic allows.
+  - **Surviving theory — evictable-supply arithmetic (a).** FULL (base) pool budget ≈
+    `swa_full_tokens_ratio: 0.065` × 3,648,512 ≈ 222–237K tokens of FULL-layer cached
+    pages. In-flight requests lock their prompt paths (chunked prefill inserts +
+    `lock_ref` until finish), and decode allocations shrink the free pool outside the
+    tree. If, at 02:19:23, the unlocked evictable FULL supply was below the ~120K burst
+    demand of 02:18–02:19, eviction would consume every evictable chain — including the
+    freshest (the collapsed session's, refreshed 02:03) — while the 46.2K session
+    matching at 02:19:03 survived because its refresh preceded the remaining demand.
+    Prometheus history is unreachable from here, so the supply state at 02:19:23 cannot
+    be reconstructed → the decisive test is a controlled repro of the locked-pool state.
+  - **Decisive A/B (Stage 2 design; restarts authorized).** (1) Insert fresh chain A
+    (~30K salted prefix + turn, finish) while the pool is otherwise quiet → verify
+    turn-2 ~99%. (2) Load the pool to a mostly-locked state: N parallel long-generation
+    sessions with large unique salted prefixes (in-flight `lock_ref` + decode pages
+    hold most of the pool), sized so remaining free+evictable is < the pump volume,
+    leaving scheduler slots free (`max_running_requests: 16`). (3) Pump unmatched salted
+    churn exceeding the remaining evictable supply. (4) Append-only probe of A:
+    ~0% hit confirms supply arithmetic; ~99% falsifies it. Capture per-chunk
+    `#cached-token`, `evicted_tokens_total` deltas, and `kv_evictable_tokens`
+    before/after.
+
+- **2026-11-08 addendum 2 — Stage-2 A/B results (supply theory still unrefuted, but every
+  completed run so far was a survive-case; the decisive exhaustion probe kept failing for
+  driver-side reasons, now fixed).** All measurements request-authoritative
+  (`cached_tokens`) plus `/metrics` deltas; baselines differ by label-series selection —
+  only deltas are comparable.
+  - **Stage-2 (small fleet, N=4 × ~62K, committed run of `db3464f`).** Baseline
+    `evicted=16299776 evictable=3645696 running=0`. Session A: turn1 99.43% / turn2 99.53%.
+    Fleet B1 21.4 s / B2 48.7 s. Pump C (105,629 tokens, salted): `cached=0` 0.00%,
+    `evicted` delta **+110,336 ≈ 1:1 with new demand** — clean LRU-oldest-first consumption.
+    Decisive probe C2 (same salt as A): `prompt=38009 cached=35072` **91.61%** → A's chain
+    survived ~110K of fresh demand against an estimated ~237K FULL budget. LRU ordering
+    holds; no whole-prefix loss under this pressure.
+  - **Stage-2b (pool-scale fleet, N=10 × ~250K salted).** COMPROMISED survive-case: the
+    fleet sessions finished early and released their locks (post-fleet `running=2`, post-pump
+    `running=0`), so the intended mostly-locked pool never materialized; evictable stayed
+    ~3.05M. Fleet evicted delta +3,582,208. A turn1 0.00% (cold insert) / turn2 90.83%.
+    Pump C: `t=192.2s prompt=762329 cached=0` 0.00%, evicted delta **+763,392 ≈ 1:1** —
+    again the pump consumed exactly its own volume. Probe of A afterwards: 91.61% hit →
+    survived. Root cause of the early release (see below): the driver's fleet prompts
+    lacked an EOS-suppression instruction, so sessions emitted EOS after a short decode and
+    finished regardless of `max_tokens`; `max_tokens` caps, it cannot prevent EOS finish.
+  - **Stage-2c attempt 1 (unfinishable-fleet design, job killed after crash).** Baseline
+    `evicted=21010176 evictable=3641088 running=0`. Fleet 10/10 ready staggered 91.5–516 s
+    (~8.6 min). After-fleet snapshot (~3 s after last ready, transient):
+    `evicted=22661888` (delta +1,651,712), `evictable=2142464`, `running=5.0`. A turn1
+    81% (`cached=29440` — Stage-2 leftover content, see salt caveat) / turn2 99.52%. The
+    pump then raised `HTTP 400 Bad Request` before the decisive probe and the driver died.
+    **Crash cause:** `PUMP_LINES=33300` ≈ 1.10M tokens > `context_length: 1048576` — a
+    single pump request is hard-bounded by context length. **Post-crash self-restoration:**
+    while the job still showed `running`, a live curl read `evicted=2.2661888e+07` frozen,
+    `num_running_reqs=0`, `token_usage=0.0`, `kv_evictable_tokens=3.64416e+06` — every
+    fleet lock released with ZERO additional evictions; the pool fully healed itself
+    (closing streaming connections aborted the still-running requests cleanly). The lane
+    was left clean; the job kill was process hygiene only.
+  - **EOS early-termination confirmed in engine logs.** Decode-batch lines for the fleet
+    window show sessions finishing by generation end, not abort: `#running-req` decays
+    5→1 by 07:13 UTC with `#queue-req: 0`, and finishing sessions release locks
+    (`num_running_reqs` post-crash 0). With `ignore_eos` absent, the model ends the turn
+    itself; fleet `max_tokens=400000` never engages. Fix for the relaunch:
+    `"ignore_eos": true` in the fleet request bodies (SGLang-supported) — this also
+    reframes Stage-2b's "B_MAXTOK=24000 let sessions finish" explanation as incomplete;
+    the missing EOS suppression is the true mechanism.
+  - **Metric-budget correction (read from decode-batch logs, contradicts the earlier
+    assumption).** `#full token: 1,523,968, full token usage: 0.42` ⇒ FULL-layer budget
+    ≈ 3.63M ≈ the whole pool, and `#swa token: 3,840, swa token usage: 0.02` ⇒ SWA
+    budget ≈ ~190K. The SWA/FULL split is the INVERSE of the "FULL ≈ 237K" assumption
+    recorded above (`swa_full_tokens_ratio` bounds the sliding-window layer, not FULL).
+    The evictable-supply theory survives this correction (it now rests purely on
+    in-flight-locked demand shrinking the unlocked evictable supply), but any "FULL
+    component is small" reasoning is dead.
+  - **A-turn salt caveat (open).** Stage-2c attempt 1's A turn1 hit 81% despite A's salt
+    differing from Stage-2's — consistent with `base_text(salt)` only offsetting line
+    indices (near-identical content) rather than changing content. Must verify
+    `base_text` semantics before reading any turn-1 match as an independent event.
+  - **Stage-2c attempt 2 (relaunched).** Driver updated in place:
+    `PUMP_LINES` 33,300 → 30,000 (~996K tokens, fits context with margin; the 3-attempt
+    re-pump loop keeps cumulative demand > post-fleet evictable), `"ignore_eos": true` in
+    fleet `long_gen`, fleet `max_tokens` 400K → 80K (80K tokens ≈ 33 min of decode at the
+    observed ~40 tok/s — outlives the test phases without an over-long tail), and the
+    pump/probe `ask` now tolerates HTTP errors instead of dying before the probe.
+    Pre-registered interpretation unchanged: after cumulative re-pump demand (~3M)
+    exhausts post-fleet evictable (~2.1M), A probe ≈ 0% (or page-quantized partial)
+    CONFIRMS evictable-supply; ≈ 99% FALSIFIES it.
+  - **Stage-2c attempt 2 RESULT (07:20–07:31 UTC, driver
+    `.research/dsv41-repro-supply3.py`, job exit 0): evictable-supply theory CONFIRMED.**
+    Baseline `evicted=22661888 evictable=3644160 running=0` (clean lane). Fleet of 10
+    × ~250K `ignore_eos` sessions ready in ~10 s **flat** (attempt 1 staggered 91.5–516 s)
+    — see cross-run caveat below. After fleet: `evicted` delta +8,192,
+    `evictable=661248` (NOT ~2.1M — fleet inserts mostly MATCHED old resident chains),
+    `running=10`. A turn1 `t=2.3s prompt=29612 cached=29440` **99.42%**, turn2
+    `t=2.0s prompt=32412 cached=32256` **99.52%**; after A `evictable=628992`. Pump C#1
+    `t=535.2s prompt=990029 cached=606208` (61.23% matched at admission — again old
+    resident content), then **decisive A probe(C2): `t=10.8s prompt=35212 cached=0` —
+    0.00%**; loop broke after one pump (pre-registered confirm condition). End state
+    `evicted=23158272 evictable=3637504 running=0` (self-restored; total evicted delta
+    ≈ +496,384).
+  - **Engine-log verification of the fleet drop (07:24–07:30 UTC decode/prefill batches).**
+    `#running-req: 10` stable through 07:25:49 (pump queued, `#queue-req: 1`, full usage
+    0.83); **07:25:56 running 10→9, full token 3,034,112→2,732,288 (−302K ≈ one fleet
+    session's prompt+decode footprint)** — a scheduler retraction coincident with pump
+    admission; a second fleet drop follows (pump-end snapshot `running=8`). Pump first
+    prefill chunk 07:26:16 `#cached-token: 606208` (admission match), then 8,192-token
+    chunks `#cached-token: 0` while full usage climbs 0.83→0.94 (overcommit pressure);
+    A probe chunks 07:29:28–07:29:30 all `#cached-token: 0`; 07:29:31 `running=9` =
+    8 fleet + probe, full token 2,476,544 (0.68) after the pump released ~990K. The 2
+    retracted sessions sat in the queue (re-prefill pending) and were discarded by the
+    phase-D connection close. No `Abort` lines in this build's log; retraction is
+    inferred from the count/footprint deltas, not a log line.
+  - **Cross-run content match (resolves the A-turn salt caveat above — salt anomaly
+    CONFIRMED as benign).** `base_text(salt)` only offsets line indices; line content is
+    identical across runs. Chains from attempt 1 / Stage-2b were still resident as
+    evictables and re-matched instantly: fleet ready ~10 s with evicted delta only
+    +8,192; A turn1 99.42% on a "fresh" salt; pump C#1 matched 606,208 (61.23%). Ledger
+    consequence: post-fleet evictable was 661,248, not ~2.1M, so exhaustion armed on
+    pump #1 (629K evictable − 606K locked by the pump's own match ≈ 23K free vs 384K
+    unmatched new-token demand → old evictables, then A, then 2 fleet retractions).
+    Future repro fix: embed the salt into line content, not just the index offset.
+  - **Stage-2/2b "A survives the pump" anomaly RESOLVED — it was never an anomaly.**
+    Those pumps (105K / 762K unmatched) never exceeded evictable supply (~3.6M), so
+    plain LRU predicts A's MRU-fresh chain survives untouched. Whole-prefix collapse
+    requires demand > evictable supply; only Stage-2c attempt 2 (384K vs ~23K) crossed
+    that line. The remaining planned escalation into unread code paths
+    (`_remove_leaf_from_parent`, `_evict_host_leaf`, `UnifiedLRUList`, insert-path
+    recency) is NO LONGER NEEDED for this theory — Stage-2's survival is predicted
+    behavior, not a code puzzle.
+  - **Verdict (pre-registered reading):** (a) evictable-supply exhaustion reproduces the
+    exact production signature — a session whose chain matched at 99.4% minutes earlier
+    collapses to 0/256 whole-prefix when cumulative new-token demand exceeds evictable
+    supply, while in-flight-locked sessions keep their hits (production hour-02 pattern:
+    46.2K session hit 99% at 02:19:03, 52K victim hit 0/256 at 02:19:23). (b) This is
+    LRU behaving as designed under saturation, not a retention bug in the six fixes:
+    retention stayed 94.7–100% across the 78-min watch whenever supply was ample. Next
+    open item: quantify whether production hour-02 actually crossed the supply line
+    (reconstruct evictable trajectory from the 02:00–02:29 engine log) before drawing
+    any fix-direction conclusions; no fix work authorized until that reconciliation.
+
+### 2026-11-07 — 78-min live watch: radix retention intact; a NEW long-prefix (>130K) hit-rate collapse confirmed server-side
+
+- **Why.** Owner reported via Grafana that "the KV cache keeps emptying and usage never
+  grows" after the six v2.6.4 cache fixes went live. Ask: monitor the live session ≥1 h,
+  decide whether the Grafana view is a metrics artifact, and whether caching problems
+  remain. Diagnosis only — no changes (constraint since lifted; the A/B follow-up is the
+  next entry).
+- **Method.** Read-only sampler on spark-0f0b (`dsv41-cache-watch.ps1` →
+  `.research/dsv41-cache-watch.csv` + `-logs.txt`): 78 cycles × 60 s (04:04:37–05:21:49 ET
+  = 09:04–10:21 UTC) curling `http://10.69.43.170:8000/metrics` (regex over the raw text)
+  plus a rolling `docker logs dsv41-head --since 5m` cached-token capture every 5th cycle.
+  Request-level turn reconstruction from 8 h of engine logs via
+  `.research/dsv41-big-scan.py` (chain rule: within a request each chunk satisfies
+  `new + pending == previous pending`; single-chunk fast path — naive grouping is defeated
+  by the chunk-level `#cached-token: 0` artifact, see below). Client-side append-only proof
+  via passive 620 s tcpdump on :4000 turned through `.research/dsv41-turn-diff2.py`.
+- **The Grafana observation is a metrics artifact, in full.** The panels the owner watched
+  (`sglang:token_usage`, `full_token_usage`, `num_used_tokens`, `kv_used_tokens`) are
+  IN-FLIGHT allocation gauges: they read 0.00–0.05 of the pool, sawtooth per request, and
+  drop to 0.00 the moment traffic stops. They say nothing about retention. Retention is
+  instrumented by `sglang:kv_evictable_tokens` (this window: min 3,455,232 / max 3,647,232
+  / last 3,642,112 = **94.7–100.0% of the 3,648,512-token pool**, `kv_available` 256–7,680)
+  and the `prefill_device_hit_total` vs `prefill_input_total` counter pair. `cache_hit_rate`
+  reads 0 when idle — also not evidence of anything. No `flush_cache` or radix-reset events
+  in the logs at any point. **"Cache emptying" in Grafana: incorrect reading. The cache was
+  ~97–99% full for the entire hour.**
+- **Churn is LRU pressure, not a wipe.** `evicted_tokens_total` delta 4,450,304 ≈
+  `prefill_input_total` delta 4,455,316 — 1:1, ≈1.22 pool turnovers in 78 min, with EVICT
+  jumps of +208K–263K exactly during the busy cycles 04:08–04:28 ET. A full pool evicting
+  exactly what it admits is healthy LRU behaviour.
+- **But the hit-rate data shows a REAL defect — and it is shape-selective.** Over the same
+  window `prefill_device_hit_total` moved only +45,824 against +4,455,316 input =
+  **~1.0% device hit**, with no per-cycle hit jump >20K anywhere — while the engine was
+  serving (per the logs) two sessions with wildly different outcomes:
+  - The ~33K growing session caches at **97.2–99.0%** (`ctx=33981 cached=33024`,
+    `ctx=33372 cached=33024`, turns 01:57–02:04 UTC; good hits continue 02:18–02:19 UTC).
+  - The ~180–200K growing session **misses nearly everything**: consecutive turns
+    08:56–09:10 UTC hit 0.1–3.7% (`ctx=131818→170975`, cached 512/2304/3840/6144 at best).
+    Live through the busy window too: bursts of +60K to +263K input tokens per cycle
+    (04:05–04:29 ET) with zero per-cycle hit response.
+- **Client mutation refuted.** The pcap: 13 consecutive POST bodies from `sess-7fc2f309`
+  (OpenAI chat-completions, tools, `store:false`, append-only message list 98→128 msgs);
+  consecutive pairs byte-identical up to ~613–669 KB (≈153–167K tok), divergence exactly at
+  the message-append boundary. The client is append-only; the miss is server-side.
+- **Chunk-level log trap (cost a false lead).** First-chunk `#cached-token` = the
+  request-level prefix hit; later chunks print 0 by design. A rolling grep that catches only
+  later chunks reads as "17 chunks, all cached=0". Reconstruct per request with the chain
+  rule; the 09:07:25 UTC first chunk (`#cached-token: 3840` on `ctx=158081`) is the
+  request-level truth.
+- **Verdict.** (1) Grafana "emptying" = in-flight gauge artifact; watch
+  `kv_evictable_tokens` + the `prefill_device_hit_total`/`prefill_input_total` rate pair
+  instead. (2) The v2.6.4 fixes hold for normal agent sessions (33K: 97–99%). (3) NEW open
+  defect: **very-long-prefix (130K+) hit-rate collapse**, hits capped at small multiples of
+  256 and ≤6144 ≤ `DSV41_SWA_CONE_TOKENS=8192` — a cone-cap fingerprint. Suspects: the SWA
+  cone/bounded-replay match path capping match depth, radix insertion fragmentation on
+  100K+ trees, or `--swa-prefix-tails 384` evicting mid-tree nodes. Owner informed; A/B
+  testing authorized 2026-11-08 (next entry).
+
+### 2026-11-06 — v2.6.4 re-vendor: SWA resume-point retention fixed at the eviction layer
+
+- **What was open.** Since 2026-10-26 the lane has had the ratio-0.065 + tails-128 config
+  that made agent-turn retention work in the *measured* cases, but with no mechanism-level
+  fix and no safety net: a session whose SWA resume point was lost re-prefilled its whole
+  context, and the 2026-10-26 entry's "compressor-state ring" conclusion explained the
+  symptom without offering a lever.
+- **Upstream survey (2026-11-06).** MiaAI-Lab: tip `64b02de` = our archive pin, **zero new
+  commits**; only issue #43 gained field reports. knapcio: **43 commits** ahead of our
+  `aff52fa` (v2.6, v2.6.1, v2.6.2, v2.6.3, v2.6.4, #68). **v2.6.4 (2026-11-05) is the fix
+  for exactly this lane's open issue.**
+- **The mechanism (corrects the 2026-10-26 attribution).** `adapter/swa_thin.py`': a cached
+  prefix is reusable only at a node whose **last 128 tokens still hold SWA slots**; every
+  8192-token prefill chunk leaves a 512-slot checkpoint and every agent turn ~512 more, so
+  in stock LRU order an idle session loses its resume point after ~70–100K slots of other
+  traffic and re-prefills from token 0 while its full KV is still resident. This matches our
+  measured signature — "B after a 60 s quiet gap = **256** (one page)" is a match stopping
+  at the last node with a resident window — better than the compressor-ring reading, and it
+  is the same lever the ratio-0.065 fix pushed from the capacity side.
+- **The dead-patch finding (this lane's own bug).** The site's #35515 backport
+  (`runtime/patch_swa_tail_eviction.py`) patched `SWARadixCache.evict()` — a class this
+  pinned tree **never instantiates**: `mem_cache/registry.py:146` routes to
+  `_create_unified_radix_cache` and builds components `[FULL, SWA]`. So the patch compiled,
+  anchored 3/3, shipped, and could never run; that — not the compressor state — is why
+  `2026-10-26` concluded "the backport does not close it". **Removed** (patch + its two
+  Dockerfile lines). `DSV41_SWA_THIN` hooks the live class.
+- **Engine pins verified in the deployed image before adoption** (not just at build):
+  `swa_thin`'s three pins (`UnifiedRadixCache.cache_unfinished_req` `d64c72cf…`,
+  `UnifiedLRUList._add_node_after` `7b84b699…`, `_remove_node` `e0101fd3…`) and all nine of
+  `swa_cone`'s pins matched the running `canary-roce-miaai` image exactly. The canary ref
+  `f80c91a4b` did **not** move `aff52fa`→`540bf07`, so no SGLang re-pin was needed — watch
+  item 8's premise ("unified cache requires a v0.5.22 re-pin") is retired on this evidence.
+- **The silent regression this session found.** `2dc894c` (2026-11-05) swapped the serve
+  args `--enable-decoder-swa-bounded-replay` → `--disable-chunked-prefix-cache` inside an
+  unrelated "env parity" commit, with no recorded rationale or measurement. Consequences:
+  (a) `swa_cone.py:251` **refuses to arm without** `cache.decoder_swa_bounded_replay`, so
+  the cone replay would have been a silent no-op; (b) #41303's "keep a full SWA window for
+  short bounded-replay extends" — which our own patch set adds — keys on that flag.
+  **Reverted** to `--enable-decoder-swa-bounded-replay` (knapcio's boot.py value).
+- **Adopted (steps 1–6 of the review's plan):**
+  1. `--enable-decoder-swa-bounded-replay` restored (`upstream/boot.py`).
+  2. `DSV41_SWA_THIN=1`, `DSV41_SWA_CONE_REPLAY=1`, `DSV41_SWA_CONE_TOKENS=8192`,
+     `DSV41_SWA_NATIVE_DECODE=1`, `DSV41_DECODE_YIELD=33` in `EXTRA_CONTAINER_ENV`.
+  3. `--swa-prefix-tails 128 → 384` (v2.6.4's certified multi-user profile).
+  4. Upstream refresh `aff52fa → 540bf07` (the vehicle carrying 2 and 3).
+  5. #35515 patch removed (dead class).
+  6. `CHUNKED_PREFILL_SIZE 4096 → 8192`.
+- **Why `swa_thin` + 384 tails + cone replay are one package.** `swa_thin` keeps superseded
+  checkpoints from evicting older resume points (measured upstream: whole-session
+  re-prefills 2/2 → **0**; resumed 300–330K sessions **61–64 s → 3.9–6.5 s**); 384 tails give
+  those resume points somewhere to live (cost: SWA pool 84,480 → 182,784 slots, ~+2.2 GiB,
+  full pool 5.0–5.16M → ~3.44–3.75M); the cone replay is the fallback when a resume point is
+  lost anyway (**1.6–2.1 s** one-chunk replay vs 22–68 s whole-context re-prefill).
+- **Caveats carried into the gate.** Most v2.6.x receipts were measured on the *abliterated*
+  1017 checkpoint (`517efab`) with the GPU clock capped at 2200 MHz; this lane serves the
+  stock checkpoint. Upstream also documents two known limits: a request that forks from an
+  older turn boundary (edit/rewind, 2–4 % of their production requests) falls back further
+  under SWA pressure, and a cone-replay invariant violation raises (all ranks stop) instead
+  of falling back.
+- **Site-mod re-apply gotchas (both cost a build):** (1) mirroring the upstream tree over
+  `upstream/` overwrote every site-modded file — restore `encoding_compat.py`, `start.sh`,
+  both `.env.example`s, `test_max_new_tokens.py` and re-collapse the Dockerfile, then verify
+  `grep -c DEFAULT_MAX_NEW_TOKENS_FLOOR` > 0 before building; (2) three upstream packaging
+  tests assert a **standalone** `RUN python3 …verify_sglang_*.py` line, which the site's RUN
+  collapsing breaks — the acceptance-of-chained-form mod must be re-applied
+  (`.research/fix-chained-run-tests.py`), and the site `.env` examples must be re-based on
+  upstream's or `test_decode_yield.py` fails on the missing profile blocks.
+- **Pre-build verification:** local suites `test_max_new_tokens` 20/20, `test_thinking_alias`
+  6/6, `test_loop_abort` 15/15, `test_history_repair` 6/6, `test_autotune_keep` ok, and the
+  SGLang packaging tests 6/6 + 6/6 + 9/9 after the fix. Two local-only "failures"
+  (`test_sglang_dsv41_plain_text_patch`, `test_sglang_parallel_prompt_encode_patch`) are the
+  Windows CRLF checkout defeating an LF sha256 pin — the same bytes match after
+  normalisation, and the Linux build passes them.
+- Deploy/validation receipts: the entry below.
+
+### 2026-11-06 — v2.6.4 cache fixes: live validation on the four-node lane
+
+Deployed branch `dsv41-cache-fixes-20261106` (head `a58acc2`), image built per node from
+`540bf07` + the site layer. Lane healthy, all six steps active at boot.
+
+**Boot gate (all pass):** `enable_decoder_swa_bounded_replay: True` in the engine's parsed
+`server_args`; `DSV41_SWA_CONE installed` on the scheduler and on the backend (TP0);
+`DSV41_SWA_THIN installed: mode=all`; `DSV41_DECODE_YIELD armed: share=33%`;
+`DSV41_SWA_NATIVE_DECODE=1` (native 256-token page reads); `SWA_CONE inactive` count **0**;
+`chunked_prefill_size: 8192`.
+
+**Retention gate — 99% on every revisit, including after churn:**
+
+| phase | prompt | cached | hit | wall |
+|---|---|---|---|---|
+| A cold turn | 188,574 | 188,416 | 99% | 8.7 s |
+| B quiet revisit | 188,586 | 188,416 | 99% | 1.1 s |
+| C churned revisit (212K churn) | 188,598 | 188,416 | 99% | 1.1 s |
+| D second revisit | 188,610 | 188,416 | 99% | 1.0 s |
+
+**`DSV41_SWA_THIN` A/B — the adapter fires and is measured.** The hook's receipt line logs
+on the 1st insert and every `RECEIPT_EVERY = 1024` inserts after, so a single boot-time
+receipt is NOT evidence the hook is inert (it read `chunk_steps=0 prompt_steps=1
+demoted=0` at boot and was misread as "never fires" until 40 cold chunked prompts crossed
+the threshold). After crossing it:
+
+```
+DSV41_SWA_THIN receipt: mode=all chunk_steps=139 prompt_steps=885 demoted=274 errors=0
+```
+
+274 demotions = superseded SWA checkpoints moved to the evict-first end of the SWA LRU,
+which is the adapter's whole job.
+
+Controlled A/B on the same 96K-document workload (unique nonce per run, so A is a genuine
+cold prefill; lane restarted between runs with only `DSV41_SWA_THIN` changed):
+
+| run | cold | revisit median | after churn | B hit | C hit |
+|---|---|---|---|---|---|
+| `DSV41_SWA_THIN=1` | 41.2 s | 0.80 s | 0.96 s | 99.8% | 99.8% |
+| `DSV41_SWA_THIN=0` | 15.7 s | 0.54 s | 0.74 s | 99.8% | 99.8% |
+
+**Read honestly: thin did not change retention on this workload, and it did not improve
+revisit latency.** Both configurations hold 99.8% after 3 × 21K churn, and the thin-off
+revisits were *faster* (0.54 s vs 0.80 s median). Two caveats on the cold column: the
+thin-on run was the first boot after a restart and paid warmup/autotune cost (the same
+configuration measured 15.7–22.8 s cold in earlier runs), so 41.2 s vs 15.7 s is not a
+like-for-like comparison. The defensible conclusion is the one the earlier numbers
+support: **with `--swa-prefix-tails 384` present, this workload's retention is already
+saturated**, and thin's demotion work has no headroom to show up in a single-session
+96K test. Thin's upstream receipts are for *multi-session* pressure (resumed 300–330K
+sessions, 61–64 s → 3.9–6.5 s); this A/B did not reproduce that shape. Thin stays on
+(it costs nothing measurable and protects the multi-session case), but it is **not yet
+demonstrated as a win on this lane** — that needs a concurrent multi-session 300K+
+harness, still open.
+
+**Pool-size drift across boots (new, unexplained):** the same configuration produced
+`full` = 3,671,552 / 3,561,728 / 3,835,136 / 3,749,120 / 3,632,640 / **3,363,584** tokens
+across six boots — a ~12% spread with a downward trend on the last two. Free GPU memory
+read 10.55 GiB at the end of the session. Not diagnosed; candidate causes are
+fragmentation or a leak carried across restarts rather than anything the cache changes
+touch. Worth a clean-cluster boot before trusting any pool figure.
+
+**Compatibility limit introduced by restoring bounded replay:** `DSV41_REPLAY_GUARD`
+rejects prompt-logprob requests (`logprob_start_len < prompt length`) and full-hidden-state
+requests with HTTP 400. Output logprobs (`chat logprobs=true`, `logprob_start_len`
+None/-1) are unaffected; `/v1/chat/completions` agent traffic is unaffected. No harness in
+`.research/` uses the rejected shapes. This is upstream's own decoder-bounded-replay
+constraint, not a site regression — but it is a behaviour change for any caller that asks
+for prompt logprobs.
+
+**`DSV41_DECODE_YIELD=33` — measured, and the strongest receipt of the six.** A clean A/B on
+the shape the flag targets (a streaming decode beside a cold 300K multi-chunk prefill; lane
+restarted between runs with only this variable changed):
+
+| metric | yield ON (33) | yield OFF | delta |
+|---|---|---|---|
+| decode tokens produced during the prefill | 263 | 96 | **2.7×** |
+| steady decode rate beside the prefill | 8.57 tok/s | 2.08 tok/s | **4.1×** |
+| stalls > 1 s | 13 | 22 | **−41%** |
+| total stalled time | 19.2 s | 40.5 s | **−53%** |
+| p99 inter-token gap | 1.49 s | 3.78 s | **−61%** |
+
+Against an idle baseline of ~17 tok/s, yield-off runs the stream at **0.12** of idle and
+yield-on at **0.50** — better than upstream's 0.393 receipt. So this flag clears the
+adoption gate on its own measured evidence and is the one change of the six that is
+demonstrated to help a real workload.
+
+Method note that cost a false negative: `decode_yield.arm_after` only arms when the plan's
+batch is the *chunked request's* EXTEND batch while `plan.running_batch` still holds decode
+rows. Starting the long prefill first leaves no decode rows beside it, so the adapter looks
+inert (0 receipts) and the stream measures 0.014 of idle — worse than no mitigation. The
+test must start the decode stream first, wait ~2 s for it to reach steady state, then
+launch the prefill. Both the "does it fire" probe and the A/B above do that.
+
+- Validation scripts: `.research/thin-ab.py` (thin A/B), `.research/thin-receipt.py`
+  (receipt threshold), `.research/yield-ab.py` (decode-yield A/B),
+  `.research/decode-yield-ttft.py`, `.research/probe-decode-yield.py`,
+  `.research/probe-yield-stats.py`, `.research/thin-stats.py`,
+  `.research/probe-thin-install.sh`, `.research/probe-thin-path.sh`,
+  `.research/probe-module-path.sh`, `.research/probe-pool.sh`. Run-on-node copies in
+  `/tmp` on the head.
+- Test fix committed as `a58acc2`: `test_swa_thin.py` now isolates `STATS.active` /
+  `prompt_end` per scenario, because `sitecustomize` pre-installs the hook from
+  `DSV41_SWA_THIN=1` and the stock-control cases were running with it already armed.
+  15/15 pass in the image.
+
+## Changelog (continued)
 
 ### 2026-10-26 — agent-turn retention FIXED: `--swa-prefix-tails 128` + ratio 0.065 (knapcio certified profile + MiaAI #43 band)
 - **The real failure, finally instrumented.** tcpdump on the head (:4000 client→nginx

@@ -43,8 +43,8 @@ class BackportPackagingTests(unittest.TestCase):
         for name in ("Dockerfile.canary", "Dockerfile.canary-roce"):
             with self.subTest(name=name):
                 source = (ROOT / name).read_text()
-                self.assertTrue(command in source or chained in source, command)
                 self.assertIn("test_swa_bounded_replay_backport.py", source)
+                self.assertTrue(command in source or chained in source, command)
 
 
 class BackportVerifierTests(unittest.TestCase):

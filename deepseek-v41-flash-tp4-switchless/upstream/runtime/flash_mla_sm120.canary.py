@@ -247,6 +247,22 @@ def _flash_mla_sm120_prefill(
         if extra_indices is not None and extra_indices.dim() == 3
         else extra_indices
     )
+    # DSV41_PREFILL_NATIVE_EXTRA=1: the extra source's native 128/256-token
+    # pages go straight to a module instantiated for them (no extra split
+    # buffer). Default OFF: the stock path below, unchanged.
+    from .dsv41_pce import routes as _pce_routes
+
+    if _pce_routes(extra_kv_u8):
+        from .dsv41_pce import paged_attention as _pce_paged_attention
+
+        output = q2.new_empty((num_tokens, num_heads, head_dim_v), dtype=torch.bfloat16)
+        out_lse = torch.empty((num_tokens, num_heads), dtype=torch.float32, device=dev)
+        _pce_paged_attention(
+            q2, kv_64, idx, output, out_lse, softmax_scale,
+            topk_length=topk_length, attn_sink=attn_sink, extra_kv=extra_kv_u8,
+            extra_indices=extra_idx, extra_topk_length=extra_topk_length,
+        )
+        return (output.unsqueeze(1), None)
     # V4.1 ratio-1/2 sources use 256/128-token pages. The prefill
     # specialization needs 64-token pages for both sources, with independent
     # scratch buffers so converting the extra source cannot overwrite SWA.
@@ -626,6 +642,16 @@ def _flash_mla_flashinfer(
     # the persistent dst buffer is left untouched and never read).
     kv_u8 = k_cache.view(torch.uint8) if k_cache.dtype != torch.uint8 else k_cache
     src_pbs = k_cache.shape[1] if k_cache.ndim >= 3 else _PBS_SRC
+    # DSV41_SWA_NATIVE_DECODE=1 (opt-in, default off): the decode kernel reads the SWA pool's own 256-token pages, no
+    # per-call 64-token split (dsv41_v41c.swan_call); None = not served, the split below runs unchanged.
+    if src_pbs != _PBS_DST:
+        from .dsv41_v41c import swan_call as _swan_call
+
+        _swan_out = _swan_call(q, kv_u8, indices, topk_length, attn_sink, head_dim_v, softmax_scale, extra_k_cache,
+                               extra_indices, extra_topk_length)
+        if _swan_out is not None:
+            return _swan_out
+
     kv_64 = (
         _split_kv_pages_to_64(kv_u8, src_pbs, touched_indices=idx)
         if src_pbs != _PBS_DST

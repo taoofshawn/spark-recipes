@@ -20,11 +20,13 @@ RUN pip install --no-deps --no-cache-dir -i "$PIP_INDEX" "sglang-kernel==0.4.7" 
 RUN rm -rf /sgl-workspace/sglang/python
 COPY runtime/sglang-canary/python /sgl-workspace/sglang/python
 RUN python3 -c "import sglang, sglang.srt.models.deepseek_v4, sglang.srt.layers.attention.deepseek_v4_backend, sglang.srt.models.deepseek_v4_dspark; print('import ok')"
-# RoCEnante overlay (SG17, rhys101) applied to the branch tree with offsets, then adapted to TP4
-COPY runtime/sglang-rocenante.patch runtime/roce_tp4_adapt.py /tmp/
-RUN cd /sgl-workspace/sglang && patch -p1 -F3 < /tmp/sglang-rocenante.patch && python3 /tmp/roce_tp4_adapt.py && rm /tmp/sglang-rocenante.patch /tmp/roce_tp4_adapt.py
+# RoCEnante overlay (SG17, rhys101) applied to the branch tree with offsets, then adapted to TP4;
+# DSV41_ROCE_TWOSHOT=1 (opt-in, off by default) selects the two-shot copy b12x.comm.roce_twoshot
+# (flashinfer#6915 port, Luke Alonso)
+COPY runtime/sglang-rocenante.patch runtime/roce_tp4_adapt.py runtime/roce_twoshot_adapt.py /tmp/
+RUN cd /sgl-workspace/sglang && patch -p1 -F3 < /tmp/sglang-rocenante.patch && python3 /tmp/roce_tp4_adapt.py && python3 /tmp/roce_twoshot_adapt.py && rm /tmp/sglang-rocenante.patch /tmp/roce_tp4_adapt.py /tmp/roce_twoshot_adapt.py
 COPY runtime/b12x/b12x /opt/b12x/b12x
-RUN PYTHONPATH=/opt/b12x python3 -c "from b12x.comm import roce; print('roce', roce.API_VERSION)"
+RUN PYTHONPATH=/opt/b12x python3 -c "from b12x.comm import roce; print('roce', roce.API_VERSION); from b12x.comm.roce_twoshot import api, _twoshot_cute; print('roce_twoshot', api.API_VERSION)"
 # b12x main renamed to b12x_next (scripts/build_b12x_next.sh) for adapter/moe_b12x_next.py, beside
 # the SG17 b12x that RoCEnante needs; its JIT/tuning cache is B12X_NEXT_COMPILE_CACHE_DIR.
 COPY runtime/b12x_next/b12x_next /opt/b12x_next/b12x_next
@@ -34,23 +36,44 @@ COPY adapter /opt/dsv41/adapter
 RUN g++ -O2 -Wall -Wextra -Werror -std=c++17 -shared -fPIC -pthread \
     adapter/row_store.cpp -o adapter/librow_store.so
 COPY runtime/flash_mla_sm120.canary.py /sgl-workspace/sglang/python/sglang/kernels/ops/attention/flash_mla_sm120.py
+# DSV41_PREFILL_NATIVE_EXTRA (opt-in, default off): prefill reads the extra cache's native 128/256-token pages through
+# a separate FlashInfer module generated from THIS image's sparse_mla_sm120 sources; anchor drift fails the build.
+COPY runtime/flashinfer_pce/dsv41_pce.py /sgl-workspace/sglang/python/sglang/kernels/ops/attention/dsv41_pce.py
+COPY runtime/flashinfer_pce/gen_pce_sources.py runtime/flashinfer_pce/APPROVED_CLOSURE.json /opt/dsv41/runtime/flashinfer_pce/
+# The generator refuses unless the image's whole sparse_mla_sm120 source closure is the approved one; the module is then
+# compiled here (sm_121a, no GPU needed) and served from the image with its sha256 checked (no JIT at boot).
+RUN FI_DIRS="$(python3 -c 'from flashinfer.jit import env; print(env.FLASHINFER_CSRC_DIR, env.FLASHINFER_INCLUDE_DIR)')" \
+ && python3 /opt/dsv41/runtime/flashinfer_pce/gen_pce_sources.py $FI_DIRS /opt/dsv41/runtime/flashinfer_pce/gen \
+ && FLASHINFER_CUDA_ARCH_LIST=12.1a python3 -m sglang.kernels.ops.attention.dsv41_pce build \
+ && python3 -m sglang.kernels.ops.attention.dsv41_pce verify
+# DSV41_SWA_NATIVE_DECODE (module default off; on in the production profile since v2.6.4): FlashInfer's sparse-MLA
+# decode at the SWA pool's own 256-token pages. One module with all six sources of runtime/flashinfer_v41c (the
+# swan kernel plus v41c / v41n readers that have no caller here): the bytes the TP4 A/Bs ran; ~25 s of nvcc.
+# The module (runtime/flashinfer_v41c: vendored FlashInfer sources, VENDORED.json) is built here against the same
+# approved FlashInfer closure as the K8 module above, .so sha256 recorded in lib/module.json and checked at load.
+COPY runtime/flashinfer_v41c/v41c.py /sgl-workspace/sglang/python/sglang/kernels/ops/attention/dsv41_v41c.py
+COPY runtime/flashinfer_v41c/csrc /opt/dsv41/runtime/flashinfer_v41c/csrc
+COPY runtime/flashinfer_v41c/include /opt/dsv41/runtime/flashinfer_v41c/include
+COPY runtime/flashinfer_v41c/VENDORED.json /opt/dsv41/runtime/flashinfer_v41c/VENDORED.json
+RUN FLASHINFER_CUDA_ARCH_LIST=12.1a python3 -m sglang.kernels.ops.attention.dsv41_v41c build \
+ && python3 -m sglang.kernels.ops.attention.dsv41_v41c verify
+# FlashInfer PR #7676 (issue #7675, Thireus): one proxy fence after producer_acquire in the b12x SM120/SM121 dense GEMM
+# that every MXFP8 dense linear runs (adapter/mxfp8_b12x.py). The patcher only edits the pinned 0.6.18 file (sha256
+# before and after); any other FlashInfer fails the build. CuTe DSL compiles the kernel in-process at first use.
+COPY runtime/flashinfer_fi7676 /opt/dsv41/runtime/flashinfer_fi7676
+RUN python3 /opt/dsv41/runtime/flashinfer_fi7676/apply_fi7676.py \
+ && python3 /opt/dsv41/runtime/flashinfer_fi7676/apply_fi7676.py --check
 # Fail the build if either pinned textual-placeholder anchor has drifted.
 COPY runtime/patch_encoding_dsv41.py /opt/dsv41/runtime/patch_encoding_dsv41.py
 RUN python3 /opt/dsv41/runtime/patch_encoding_dsv41.py
-# Fail the build if the SWA tail-eviction backport anchor has drifted (sglang #35515;
-# without it one recycled 128-slot SWA tail tombstone-cascades into deleting the whole
-# branch's full-attention KV, and agent conversations re-prefill 130K-755K tokens
-# every turn).
-COPY runtime/patch_swa_tail_eviction.py /opt/dsv41/runtime/patch_swa_tail_eviction.py
-RUN python3 /opt/dsv41/runtime/patch_swa_tail_eviction.py
 COPY boot.py /opt/dsv41/boot.py
 COPY scripts /opt/dsv41/scripts
-# SITE MOD (2026-10-26): the pinned base (dev-dsv41 @ sha256:3dbc3130…) carries a deep
-# layer chain (docker history: ~180 entries); knapcio's fleet builds on a shallower base
-# revision. With one RUN per verify/test script the layer chain exceeded buildkit's max
-# depth ("failed to prepare … max depth exceeded" mid-build). The scripts are collapsed
-# into chained RUNs — every script still runs, in order, &&-gated; only cache granularity
-# and layer count change.
+# SITE MOD (2026-10-26, re-applied 2026-11-06 on v2.6.4): the pinned base (dev-dsv41 @
+# sha256:3dbc3130…) carries a deep layer chain (docker history: ~180 entries); knapcio's
+# fleet builds on a shallower base revision. With one RUN per verify/test script the layer
+# chain exceeded buildkit's max depth ("failed to prepare … max depth exceeded" mid-build).
+# The scripts are collapsed into chained RUNs — every script still runs, in order,
+# &&-gated; only cache granularity and layer count change.
 RUN python3 /opt/dsv41/scripts/verify_sglang_bounded_replay.py /sgl-workspace/sglang/python \
  && python3 /opt/dsv41/scripts/verify_sglang_layer20_tail.py /sgl-workspace/sglang/python \
  && python3 /opt/dsv41/scripts/verify_sglang_prefill_interval_min_bs.py /sgl-workspace/sglang/python \
@@ -77,8 +100,9 @@ RUN python3 /opt/dsv41/scripts/verify_sglang_bounded_replay.py /sgl-workspace/sg
  && python3 /opt/dsv41/scripts/verify_sglang_dsv41_blocked_kv_dequant.py /sgl-workspace/sglang/python \
  && python3 /opt/dsv41/scripts/test_sglang_dsv41_blocked_kv_dequant.py \
  && python3 /opt/dsv41/scripts/verify_sglang_dsv41_align_indexer_width.py /sgl-workspace/sglang/python \
- && python3 /opt/dsv41/scripts/test_sglang_dsv41_align_indexer_width.py \
- && python3 /opt/dsv41/scripts/verify_sglang_dsv41_thinking_parity.py /sgl-workspace/sglang/python \
+ && python3 /opt/dsv41/scripts/test_sglang_dsv41_align_indexer_width.py
+# #45804 narrows #45762 to native DeepSeek encoders and covers Responses API.
+RUN python3 /opt/dsv41/scripts/verify_sglang_dsv41_thinking_parity.py /sgl-workspace/sglang/python \
  && python3 /opt/dsv41/scripts/test_sglang_dsv41_thinking_parity.py /sgl-workspace/sglang/python \
  && python3 /opt/dsv41/scripts/verify_sglang_dsv41_window_history_src.py /sgl-workspace/sglang/python \
  && python3 /opt/dsv41/scripts/test_sglang_dsv41_window_history_src.py \
@@ -93,9 +117,9 @@ RUN python3 /opt/dsv41/scripts/verify_sglang_bounded_replay.py /sgl-workspace/sg
 COPY runtime/sglang-canary/upstream-tests/test_parallel_prompt_encode.py /opt/dsv41/upstream-tests/test_parallel_prompt_encode.py
 COPY runtime/sglang-canary/upstream-tests/test_plain_text_encode.py /opt/dsv41/upstream-tests/test_plain_text_encode.py
 COPY runtime/sglang-canary/upstream-tests/test_reasoning_parser.py /opt/dsv41/upstream-tests/test_reasoning_parser.py
-RUN PYTHONPATH=/sgl-workspace/sglang/python python3 -m pytest -q /opt/dsv41/upstream-tests/test_parallel_prompt_encode.py \
- && PYTHONPATH=/sgl-workspace/sglang/python python3 -m pytest -q /opt/dsv41/upstream-tests/test_plain_text_encode.py \
- && PYTHONPATH=/sgl-workspace/sglang/python python3 /opt/dsv41/scripts/run_sglang_45458_upstream_test.py /opt/dsv41/upstream-tests/test_reasoning_parser.py
+RUN PYTHONPATH=/sgl-workspace/sglang/python python3 -m pytest -q /opt/dsv41/upstream-tests/test_parallel_prompt_encode.py
+RUN PYTHONPATH=/sgl-workspace/sglang/python python3 -m pytest -q /opt/dsv41/upstream-tests/test_plain_text_encode.py
+RUN PYTHONPATH=/sgl-workspace/sglang/python python3 /opt/dsv41/scripts/run_sglang_45458_upstream_test.py /opt/dsv41/upstream-tests/test_reasoning_parser.py
 COPY tests /opt/dsv41/tests
 COPY benchmarks /opt/dsv41/benchmarks
 # Packaging tests below also verify patch provenance and both canary build
@@ -129,14 +153,19 @@ RUN PYTHONPATH=/opt/dsv41/adapter python3 /opt/dsv41/tests/test_anthropic_thinki
  && python3 /opt/dsv41/tests/test_sglang_dsv41_draft_metadata_glue_patch.py \
  && python3 /opt/dsv41/tests/test_sglang_greedy_flags_refresh_patch.py \
  && DSV41_PREFILL_BYPASS_SOURCE_ROOT=/sgl-workspace/sglang/python/sglang/srt/managers DSV41_PREFILL_BYPASS_EXPECT=supported PYTHONPATH=/opt/dsv41/adapter python3 /opt/dsv41/tests/test_prefill_bypass.py \
+ && DSV41_PREFILL_BYPASS_SOURCE_ROOT=/sgl-workspace/sglang/python/sglang/srt/managers DSV41_PREFILL_BYPASS_EXPECT=supported PYTHONPATH=/opt/dsv41/adapter python3 /opt/dsv41/tests/test_prefill_bypass_solo.py \
+ && DSV41_DECODE_YIELD_SOURCE_ROOT=/sgl-workspace/sglang/python/sglang/srt/managers PYTHONPATH=/opt/dsv41/adapter python3 /opt/dsv41/tests/test_decode_yield.py \
  && PYTHONPATH=/opt/dsv41/adapter python3 /opt/dsv41/tests/test_thinking_alias.py \
  && PYTHONPATH=/opt/dsv41/adapter python3 /opt/dsv41/tests/test_max_new_tokens.py \
  && PYTHONPATH=/opt/dsv41/adapter python3 /opt/dsv41/tests/test_loop_abort.py \
+ && PYTHONPATH=/opt/dsv41/adapter python3 /opt/dsv41/tests/test_history_repair.py \
+ && PYTHONPATH=/opt/dsv41/adapter python3 /opt/dsv41/tests/test_loop_exit_passthrough.py /sgl-workspace/sglang/python \
  && PYTHONPATH=/opt/dsv41/adapter python3 /opt/dsv41/tests/test_fast_load_pacing.py \
  && CUDA_VISIBLE_DEVICES= PYTHONPATH=/opt/dsv41/adapter python3 /opt/dsv41/tests/test_fast_load_tp_slice.py \
  && CUDA_VISIBLE_DEVICES= PYTHONPATH=/opt/dsv41/adapter python3 /opt/dsv41/tests/test_prefill_sp.py \
  && CUDA_VISIBLE_DEVICES= PYTHONPATH=/opt/dsv41/adapter python3 /opt/dsv41/tests/test_fast_load_slab.py \
  && CUDA_VISIBLE_DEVICES= PYTHONPATH=/opt/dsv41/adapter python3 /opt/dsv41/tests/test_moe_b12x_next_cpu.py \
+ && PYTHONPATH=/opt/b12x_next python3 /opt/dsv41/tests/test_b12x_next_claim_barrier.py \
  && PYTHONPATH=/opt/dsv41/adapter python3 /opt/dsv41/tests/test_wo_a_w8.py \
  && CUDA_VISIBLE_DEVICES= PYTHONPATH=/opt/dsv41/adapter python3 /opt/dsv41/tests/test_wo_a_input_fp8.py \
  && PYTHONPATH=/opt/dsv41/adapter python3 /opt/dsv41/tests/test_draft_tau.py \
@@ -144,6 +173,9 @@ RUN PYTHONPATH=/opt/dsv41/adapter python3 /opt/dsv41/tests/test_anthropic_thinki
  && CUDA_VISIBLE_DEVICES= PYTHONPATH=/opt/dsv41/adapter python3 /opt/dsv41/tests/test_eager_glue.py \
  && PYTHONPATH=/opt/dsv41/adapter python3 /opt/dsv41/tests/test_draft_head_fp8.py \
  && BV_TEST_N=60000 PYTHONPATH=/opt/dsv41/adapter python3 /opt/dsv41/tests/test_block_verify.py \
+ && PYTHONPATH=/opt/dsv41/adapter python3 /opt/dsv41/tests/test_block_verify_numerics.py \
+ && CUDA_VISIBLE_DEVICES= TRITON_INTERPRET=1 PYTHONPATH=/opt/dsv41/adapter:/opt/dsv41/tests python3 /opt/dsv41/tests/test_block_verify_fold.py \
+ && CUDA_VISIBLE_DEVICES= PYTHONPATH=/opt/dsv41/adapter python3 /opt/dsv41/tests/test_block_verify_fold_receipts.py \
  && PYTHONPATH=/opt/dsv41/adapter python3 /opt/dsv41/tests/test_autotune_keep.py \
  && PYTHONPATH=/opt/dsv41/adapter python3 /opt/dsv41/tests/test_ab_variant.py \
  && CUDA_VISIBLE_DEVICES= PYTHONPATH=/opt/dsv41/adapter python3 /opt/dsv41/tests/test_cert_head.py \
@@ -153,7 +185,12 @@ RUN PYTHONPATH=/opt/dsv41/adapter python3 /opt/dsv41/tests/test_anthropic_thinki
  && CUDA_VISIBLE_DEVICES= VC_TEST_N=60000 PYTHONPATH=/opt/dsv41/adapter python3 /opt/dsv41/tests/test_verify_cap.py \
  && CUDA_VISIBLE_DEVICES= PYTHONPATH=/opt/dsv41/adapter python3 /opt/dsv41/tests/test_spec_sync_free.py \
  && CUDA_VISIBLE_DEVICES= python3 /opt/dsv41/tests/test_roce_ring.py \
- && cd /opt/dsv41/tests && CUDA_VISIBLE_DEVICES= PYTHONPATH=/opt/dsv41/adapter python3 test_indexer_chunked_v3.py /sgl-workspace/sglang/python/sglang/srt/layers/attention/deepseek_v4_backend.py
+ && CUDA_VISIBLE_DEVICES= PYTHONPATH=/opt/dsv41/adapter python3 /opt/dsv41/tests/test_roce_twoshot.py \
+ && CUDA_VISIBLE_DEVICES= PYTHONPATH=/opt/dsv41/adapter python3 /opt/dsv41/tests/test_roce_idle_park.py \
+ && FI7676_EXPECT=patched python3 /opt/dsv41/tests/test_fi7676_fence.py \
+ && CUDA_VISIBLE_DEVICES= PYTHONPATH=/opt/dsv41/adapter:/opt/b12x_next python3 /opt/dsv41/tests/test_moe_launch_prepared.py \
+ && cd /opt/dsv41/tests && CUDA_VISIBLE_DEVICES= PYTHONPATH=/opt/dsv41/adapter python3 test_indexer_chunked_v3.py /sgl-workspace/sglang/python/sglang/srt/layers/attention/deepseek_v4_backend.py \
+ && CUDA_VISIBLE_DEVICES= PYTHONPATH=/opt/dsv41/adapter python3 test_indexer_nosync.py /sgl-workspace/sglang/python/sglang/srt/layers/attention/deepseek_v4_backend.py
 # SGLANG_RUST_BUILD_MODE=never still probes `cargo --version --verbose`, and rustup can
 # hang there for minutes trying to fetch a toolchain (a TP rank stuck before torch
 # distributed init). With no reachable dist server the probe fails at once and the
@@ -165,6 +202,10 @@ ENV PYTHONPATH=/opt/dsv41/adapter:/opt/b12x:/opt/b12x_next \
     CARGO_NET_OFFLINE=true
 # Every hash-pinned adapter must install on this engine tree (a drift kills the head at boot).
 RUN CUDA_VISIBLE_DEVICES= python3 /opt/dsv41/tests/test_adapter_engine_pins.py
+# DSV41_SWA_THIN on the real UnifiedRadixCache (CPU): engine pins + the eviction-order scenario.
+RUN CUDA_VISIBLE_DEVICES= python3 /opt/dsv41/tests/test_swa_thin.py
+# DSV41_SWA_CONE_REPLAY on the real UnifiedRadixCache (CPU): engine pins, the cone flow, the hook install.
+RUN CUDA_VISIBLE_DEVICES= python3 /opt/dsv41/tests/test_swa_cone.py
 EXPOSE 8888
 HEALTHCHECK --interval=30s --timeout=30s --start-period=30m --retries=3 \
     CMD ["python3", "-S", "/opt/dsv41/boot.py", "health"]

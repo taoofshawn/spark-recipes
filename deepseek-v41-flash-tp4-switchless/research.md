@@ -333,6 +333,58 @@ packed shards, profiler-estimate off.
     Pre-registered interpretation unchanged: after cumulative re-pump demand (~3M)
     exhausts post-fleet evictable (~2.1M), A probe ≈ 0% (or page-quantized partial)
     CONFIRMS evictable-supply; ≈ 99% FALSIFIES it.
+  - **Stage-2c attempt 2 RESULT (07:20–07:31 UTC, driver
+    `.research/dsv41-repro-supply3.py`, job exit 0): evictable-supply theory CONFIRMED.**
+    Baseline `evicted=22661888 evictable=3644160 running=0` (clean lane). Fleet of 10
+    × ~250K `ignore_eos` sessions ready in ~10 s **flat** (attempt 1 staggered 91.5–516 s)
+    — see cross-run caveat below. After fleet: `evicted` delta +8,192,
+    `evictable=661248` (NOT ~2.1M — fleet inserts mostly MATCHED old resident chains),
+    `running=10`. A turn1 `t=2.3s prompt=29612 cached=29440` **99.42%**, turn2
+    `t=2.0s prompt=32412 cached=32256` **99.52%**; after A `evictable=628992`. Pump C#1
+    `t=535.2s prompt=990029 cached=606208` (61.23% matched at admission — again old
+    resident content), then **decisive A probe(C2): `t=10.8s prompt=35212 cached=0` —
+    0.00%**; loop broke after one pump (pre-registered confirm condition). End state
+    `evicted=23158272 evictable=3637504 running=0` (self-restored; total evicted delta
+    ≈ +496,384).
+  - **Engine-log verification of the fleet drop (07:24–07:30 UTC decode/prefill batches).**
+    `#running-req: 10` stable through 07:25:49 (pump queued, `#queue-req: 1`, full usage
+    0.83); **07:25:56 running 10→9, full token 3,034,112→2,732,288 (−302K ≈ one fleet
+    session's prompt+decode footprint)** — a scheduler retraction coincident with pump
+    admission; a second fleet drop follows (pump-end snapshot `running=8`). Pump first
+    prefill chunk 07:26:16 `#cached-token: 606208` (admission match), then 8,192-token
+    chunks `#cached-token: 0` while full usage climbs 0.83→0.94 (overcommit pressure);
+    A probe chunks 07:29:28–07:29:30 all `#cached-token: 0`; 07:29:31 `running=9` =
+    8 fleet + probe, full token 2,476,544 (0.68) after the pump released ~990K. The 2
+    retracted sessions sat in the queue (re-prefill pending) and were discarded by the
+    phase-D connection close. No `Abort` lines in this build's log; retraction is
+    inferred from the count/footprint deltas, not a log line.
+  - **Cross-run content match (resolves the A-turn salt caveat above — salt anomaly
+    CONFIRMED as benign).** `base_text(salt)` only offsets line indices; line content is
+    identical across runs. Chains from attempt 1 / Stage-2b were still resident as
+    evictables and re-matched instantly: fleet ready ~10 s with evicted delta only
+    +8,192; A turn1 99.42% on a "fresh" salt; pump C#1 matched 606,208 (61.23%). Ledger
+    consequence: post-fleet evictable was 661,248, not ~2.1M, so exhaustion armed on
+    pump #1 (629K evictable − 606K locked by the pump's own match ≈ 23K free vs 384K
+    unmatched new-token demand → old evictables, then A, then 2 fleet retractions).
+    Future repro fix: embed the salt into line content, not just the index offset.
+  - **Stage-2/2b "A survives the pump" anomaly RESOLVED — it was never an anomaly.**
+    Those pumps (105K / 762K unmatched) never exceeded evictable supply (~3.6M), so
+    plain LRU predicts A's MRU-fresh chain survives untouched. Whole-prefix collapse
+    requires demand > evictable supply; only Stage-2c attempt 2 (384K vs ~23K) crossed
+    that line. The remaining planned escalation into unread code paths
+    (`_remove_leaf_from_parent`, `_evict_host_leaf`, `UnifiedLRUList`, insert-path
+    recency) is NO LONGER NEEDED for this theory — Stage-2's survival is predicted
+    behavior, not a code puzzle.
+  - **Verdict (pre-registered reading):** (a) evictable-supply exhaustion reproduces the
+    exact production signature — a session whose chain matched at 99.4% minutes earlier
+    collapses to 0/256 whole-prefix when cumulative new-token demand exceeds evictable
+    supply, while in-flight-locked sessions keep their hits (production hour-02 pattern:
+    46.2K session hit 99% at 02:19:03, 52K victim hit 0/256 at 02:19:23). (b) This is
+    LRU behaving as designed under saturation, not a retention bug in the six fixes:
+    retention stayed 94.7–100% across the 78-min watch whenever supply was ample. Next
+    open item: quantify whether production hour-02 actually crossed the supply line
+    (reconstruct evictable trajectory from the 02:00–02:29 engine log) before drawing
+    any fix-direction conclusions; no fix work authorized until that reconciliation.
 
 ### 2026-11-07 — 78-min live watch: radix retention intact; a NEW long-prefix (>130K) hit-rate collapse confirmed server-side
 

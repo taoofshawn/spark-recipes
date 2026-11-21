@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# glm-v53-flash-fp8-tp4-switchless — Phase 1b (v2, idempotent): align a fresh DGX Spark
+# Host-align helper (vendored; see ../REUSE.md) — Phase 1b (v2, idempotent): align a fresh DGX Spark
 # (ships kernel 7.0.0-1019-nvidia, which breaks switchless-ring NCCL/RoCE per forum
 # thread 383023) onto the site kernel 6.17.0-1032-nvidia, driver 580.178.04.
 #

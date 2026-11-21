@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# glm-v53-flash-fp8-tp4-switchless — add docker log rotation to every node's daemon.json,
+# Host-align helper (vendored; see ../REUSE.md) — add docker log rotation to every node's daemon.json,
 # preserving existing per-node settings (nvidia runtime on ranks 0-1, containerd-
 # snapshotter=false on ranks 2-3). Site-level host change, like the snapshotter fix.
 # Applied cluster-wide so all ranks keep the same logging behavior.

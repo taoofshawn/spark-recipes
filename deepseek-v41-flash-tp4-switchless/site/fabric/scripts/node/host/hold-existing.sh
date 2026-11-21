@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# glm-v53-flash-fp8-tp4-switchless — Phase 1b step 3 (existing nodes spark-0f0b / spark-6d14):
+# Host-align helper (vendored; see ../REUSE.md) — Phase 1b step 3 (existing nodes spark-0f0b / spark-6d14):
 # they already run kernel 6.17.0-1032-nvidia + driver 580.173.02 (module .32) — add the
 # site freeze holds so no future apt upgrade can move them (7.x regression kernel or a
 # driver/module split).

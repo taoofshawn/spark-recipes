@@ -1,3 +1,10 @@
+> **Vendored 2026-11-21** (decision D1): copied from this repository's FP8 recipe
+> (`glm-v53-flash-fp8-tp4-switchless/upstream/scripts/node/nccl/`, MIT, (c) 2026 Jacopo
+> Nardiello) so this lane's documented 2-PF rollback is executable from this recipe alone.
+> Adaptations: `build.sh` loads the helper and the facts from `site/fabric/` instead of a
+> repo-relative path. `SHA256SUMS` is the OUTPUT manifest for the staged libs
+> (`~/.local/lib/nccl-patched*`), not input checksums.
+
 # Patched NCCL build and install
 
 Every rank preloads `$NCCL_DIR/libnccl.so.2`. The four-node switchless ring has no

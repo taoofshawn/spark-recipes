@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# glm-v53-flash-fp8-tp4-switchless — verify that the short-name DNS aliases resolve to the same
+# Host-align helper (vendored; see ../REUSE.md) — verify that the short-name DNS aliases resolve to the same
 # host keys already pinned (FQDN) in the workstation's known_hosts, then append the
 # short-name entries so the recipe's strict ssh (StrictHostKeyChecking=yes) works with
 # short aliases. Fingerprints are compared before anything is written.

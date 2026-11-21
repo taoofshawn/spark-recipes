@@ -197,6 +197,8 @@ All of `noswitch-prep/` is site-owned, not upstream-owned:
 - **2026-10-20 — External-survey pass: DeepSeek-V4.1 TP4 switchless recipes (owner
   request). Doc-only for this lane; no config change. The full survey record lives in
   `../../deepseek-v41-flash-tp4-switchless/research.md`, 2026-10-20 entry.**
+  *(Historical reference — as of 2026-11-21 this recipe no longer depends on a sibling
+  recipe's files; see the decoupling entry at the top of this changelog.)*
   - Applies-to-this-lane deltas vs the NVFP4 lane's 2026-10-20 entry:
     (a) the NCCL pinned-buffer shrink (`NCCL_BUFFSIZE=1MiB` etc., frees ~4.6 GiB/rank)
     is a better fit here than on the NVFP4 lane because `GPU_MEM_UTIL=0.85` is the

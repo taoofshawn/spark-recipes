@@ -20,7 +20,7 @@ too slow, the fallback lane is the lossless8 conversion (see research.md §2 dec
 **Endpoint (after bring-up):** `http://10.69.43.170:8000/v1` — model name
 `glm-5.3-flash`, 1,048,576-token context, ~3.25M-token fp8 KV pool (20 GiB/rank pin →
 ~3.1× full-1M concurrency). No auth/TLS — trusted LAN only. GPU contention rule: the
-FP8 E29 stack must be down (`tp4ctl down` in the glm-v53-flash-fp8-tp4-switchless recipe)
+the other lane must be down (`./bin/stop.sh` in that lane's directory)
 before this lane goes up.
 
 ## Cluster map
@@ -115,8 +115,8 @@ without renames — switching is teardown + branch checkout:
   `NCCL_IB_HCA` in its `cluster.env`, coupled: HCA + NCCL_DIR + EXTRA_DOCKER_ENV append).
   Keep both dirs staged; the fabric netplan (all 4 PCIe views addressed) serves both lanes.
   Preflight before any switch: `bash site/fabric/preflight.sh` (read-only, safe while serving).
-- **FP8 → NVFP4:** `tp4ctl down` in the FP8 recipe (`glm-v53-flash-fp8-tp4-switchless/upstream`)
-  on the head; confirm `glm53_fp8_dflash_tp4` is gone on all 4; on all 4 nodes
+- **From another lane to this one:** run that lane's `./bin/stop.sh` there; this lane's
+  `./bin/start.sh` refuses until nothing else serves (`bin/guard.sh`, fail-closed). On all 4 nodes
   `cd ~/code/spark-recipes && git pull` (both lanes share this branch);
   cache ritual; `./start.sh serve` from this recipe's `upstream/`.
 - **NVFP4 → FP8:** `./start.sh stop` here (stops, preserves containers for inspection —
@@ -157,4 +157,4 @@ without renames — switching is teardown + branch checkout:
 References: upstream [README](https://github.com/knapcio/GLM-5.3-Flash-4x-DGX-Spark-TP4)
 · [docs/switchless.md](https://github.com/knapcio/GLM-5.3-Flash-4x-DGX-Spark-TP4/blob/main/docs/switchless.md)
 · [docs/install.md](https://github.com/knapcio/GLM-5.3-Flash-4x-DGX-Spark-TP4/blob/main/docs/install.md)
-· sibling FP8 recipe `glm-v53-flash-fp8-tp4-switchless/` (fabric + NCCL provenance)
+· [`site/fabric/REUSE.md`](site/fabric/REUSE.md) — provenance of the vendored fabric material

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# glm-v53-flash-fp8-tp4-switchless — Phase 1b step 2 (fresh nodes): unify the driver on
+# Host-align helper (vendored; see ../REUSE.md) — Phase 1b step 2 (fresh nodes): unify the driver on
 # 580.173.02 with the plain kernel-module build 6.17.0-1032.32, matching spark-0f0b
 # and spark-6d14 exactly.
 #

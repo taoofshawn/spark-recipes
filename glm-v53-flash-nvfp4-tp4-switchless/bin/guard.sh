@@ -36,10 +36,13 @@ GUARD_NODES=(${NODES:-})
 
 # Known container patterns across every switchless recipe on this host set. Each entry is
 # "<glob>|<recipe label>|<optional: exact names>".
+# Short labels only — never a sibling DIRECTORY name, so this file stays valid when a
+# sibling recipe is deleted (A1). "knowing the container name" is not "depending on that
+# recipe": nothing here reads another recipe's files.
 GUARD_KNOWN=(
-  "glm53_fp8_dflash_tp4|glm-v53-flash-fp8-tp4-switchless|"
-  "glm53-nvfp4-r*|glm-v53-flash-nvfp4-tp4-switchless|"
-  "dsv41-*|deepseek-v41-flash-tp4-switchless|dsv41-head dsv41-worker"
+  "glm53_fp8_dflash_tp4|fp8-lane|"
+  "glm53-nvfp4-r*|nvfp4-lane|"
+  "dsv41-*|deepseek-lane|dsv41-head dsv41-worker"
 )
 
 guard_log()  { printf '[guard] %s\n' "$*"; }

@@ -26,8 +26,10 @@ set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 TP4_LOG_TAG='[nccl-build]'
-# shellcheck source=../../lib/common.sh
-. "$HERE/../../lib/common.sh"
+# VENDORED COPY (site/nccl-2pf): the shared helper lives in this recipe's vendored fabric
+# tree, not at an upstream-relative ../../lib.
+# shellcheck source=../fabric/scripts/lib/common.sh
+. "$HERE/../fabric/scripts/lib/common.sh"
 
 HOST=""                            # default: rank 1 of NODES (cluster.env); any ssh alias with docker works
 DEST='$HOME/nccl-build-repro'      # literal $HOME: expanded by the remote shell
@@ -57,10 +59,17 @@ done
 
 # Load site configuration only after argument parsing so --help also works from a
 # fresh public checkout. Only NODES is used, to select the default build host.
-tp4_load_env "$HERE/../../.."
+# VENDORED COPY (site/nccl-2pf): this recipe's facts live in site/fabric, and the helper
+# comes from the vendored lib there — not from a repo root this recipe must not assume.
+if [ ! -f "$HERE/../fabric/cluster.env" ]; then
+  usage_die "site/fabric/cluster.env missing — this build needs the recipe's own facts"
+fi
+# shellcheck source=/dev/null
+. "$HERE/../fabric/scripts/lib/common.sh"
+tp4_load_env "$HERE/../fabric"
 # cluster.env defines PATCH_FILE (the vLLM indexer rollback-lane path, expanded on the
 # nodes); it must not clobber the vendored NCCL patch selected above. SITE FIX
-# (glm-v53-flash-fp8-tp4-switchless, 2026-09-26): re-assert the vendored patch after loading
+# (2026-09-26): re-assert the vendored patch after loading
 # the site configuration.
 PATCH_FILE="$HERE/nccl-v2.30.7-1-spark-switchless.patch"
 # Deriving the default build host from NODES: the same validation the workstation scripts

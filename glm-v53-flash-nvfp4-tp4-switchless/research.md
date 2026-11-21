@@ -185,6 +185,8 @@ changes). §5 never carried it separately, so no row here.
   request). Doc-only for this lane; no config change. The full survey record —
   per-repo verdicts, all forum threads, engine-comparison numbers — lives in
   `../../deepseek-v41-flash-tp4-switchless/research.md`, 2026-10-20 entry.**
+  *(Historical reference — as of 2026-11-21 this recipe no longer depends on a sibling
+  recipe's files; see the decoupling entry at the top of this changelog.)*
   - GLM-relevant deltas from that survey:
     - Engine-switch question answered NO: knapcio already measured SGLang-vs-vLLM GLM
       TP4 head-to-head (vendored launcher in THIS repo at `upstream/docs/sglang/`,

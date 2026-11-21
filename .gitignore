@@ -26,3 +26,5 @@ glm-v53-flash-fp8-tp4-switchless/upstream/docs/historical_benchmarks/baselines/*
 # local research scratch (untracked working notes)
 .research/
 
+# container log captures written by each recipe's bin/stop.sh (evidence, not source)
+*/logs/

@@ -47,10 +47,10 @@ recipes (`adopt-recipe`). It never merges PRs.
 1. **Assess state** (all 4 nodes): `docker ps` for the other lane's containers
    (`glm53_fp8_dflash_tp4` vs `glm53-nvfp4-r*`), node repo branch/log/status. One lane
    at a time — tear down the other lane first.
-2. **Preflight (non-negotiable):** `bash
-   glm-v53-flash-fp8-tp4-switchless/noswitch-prep/scripts/verify-fabric-p2.sh` — must print
-   `ALL CHECKS PASS` (netplan vs generated, 16 interface addresses, two-view ping mesh,
-   both NCCL SHAs). Failure text names the fix; resolve before booting anything.
+2. **Preflight (non-negotiable):** run the TARGET recipe's own
+   `preflight.sh` (`<recipe>/site/fabric/preflight.sh` or `<recipe>/noswitch-prep/preflight.sh`)
+   — must print `ALL CHECKS PASS` (committed netplan vs generator vs live host, fabric
+   addresses, ring mesh, NCCL SHAs, host pins, CONTRACT_DIGEST). Failure text names the fix.
 3. **Stale-mirror check** (the gotcha that costs boots): the FP8 recipe's
    `upstream/cluster.env` and `upstream/scripts/node/etc/<node>/*.yaml` are gitignored
    derived files — `git pull` does NOT refresh them. After any repo config change:

@@ -169,6 +169,18 @@ changes). §5 never carried it separately, so no row here.
 
 ## Changelog
 
+- **2026-11-21 — Recipe decoupling (Phase 1, repo-only).** This lane now carries every
+  cluster-level asset it needs; nothing under this recipe reads a sibling recipe directory.
+  Added: `site/fabric/` (cluster.env facts with CONTRACT_DIGEST + both NCCL SHA pins,
+  vendored lib/renderer/bootstrap/deploy-host, the `/etc` + host-align set, committed
+  netplan for both files per node, `preflight.sh`, `REUSE.md`), `site/nccl-4pf/` build
+  tree now byte-identical to the other lanes', and `site/nccl-2pf/` — the rollback that
+  used to name another recipe's `~/.local/lib/nccl-patched` is now executable from here.
+  `verify-fabric-p2.sh` (cross-lane) is deleted; this lane's `site/fabric/preflight.sh`
+  replaces it and prints CONTRACT_DIGEST. `site/materialize-weights.sh` no longer falls back
+  to another lane's on-node `chat_template.jinja` (the pinned nvidia snapshot ships it).
+  No serving value, image, KV pin, boot order or transport setting changed.
+
 - **2026-10-20 — External-survey pass: DeepSeek-V4.1 TP4 switchless recipes (owner
   request). Doc-only for this lane; no config change. The full survey record —
   per-repo verdicts, all forum threads, engine-comparison numbers — lives in

@@ -1056,3 +1056,16 @@ All of `noswitch-prep/` is site-owned, not upstream-owned:
   (detached checkout, committed at `9cd37a0`); created this research.md documenting
   the 4 local mods (§2), site-owned files (§3), and the update procedure (§4).
   Added `upstream/VENDORED-AT.md` recording the pin + mods.
+
+## Changelog
+
+- **2026-11-21 — Recipe decoupling (Phase 1, repo-only).** This lane now carries every
+  cluster-level asset it needs; nothing under this recipe reads a sibling recipe directory.
+  Added: `noswitch-prep/` (cluster.env facts with CONTRACT_DIGEST + both NCCL SHA pins,
+  vendored lib/renderer/bootstrap/deploy-host, the `/etc` + host-align set, committed
+  netplan for both files per node, `preflight.sh`, `REUSE.md`), `noswitch-prep/nccl-4pf/` build
+  tree now byte-identical to the other lanes', `verify-fabric-p2.sh` (cross-lane) is deleted; this lane's `noswitch-prep/preflight.sh`
+  replaces it and prints CONTRACT_DIGEST. `site/materialize-weights.sh` no longer falls back
+  to another lane's on-node `chat_template.jinja` (the pinned nvidia snapshot ships it).
+  No serving value, image, KV pin, boot order or transport setting changed.
+

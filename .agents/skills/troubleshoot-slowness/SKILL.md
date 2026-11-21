@@ -47,7 +47,7 @@ concurrency? long prefill? KV pressure?).
 | stats-tick gaps during IDLE periods | the logger going quiet — judge gaps ONLY while requests are in-system |
 | `No available shared memory broadcast block found in 60 seconds` | benign — another rank compiling |
 | `DEVSELECT_BUILD_FAILED` (NVFP4, rank 0) | known watch item; decode continues on the fallback — not the cause of slowness |
-| NCCL WARN / QP timeouts / `Connection reset` | REAL transport trouble — capture logs, check `verify-fabric-p2.sh`, do NOT restart blind |
+| NCCL WARN / QP timeouts / `Connection reset` | REAL transport trouble — capture logs, run the target recipe's `preflight.sh`, do NOT restart blind |
 
 ## Step 2 — Scheduler / admission layer
 
@@ -64,7 +64,7 @@ concurrency? long prefill? KV pressure?).
 
 Decode far below the lane's own bench history (NVFP4 c1 ~44/77/96 tok/s prose/code/json;
 FP8 c1 prose ~94) suggests transport. Check: boot logs still show all four PFs carrying
-QPs on every rank (`RouteFinal`), `verify-fabric-p2.sh` ALL PASS, no NCCL WARNs since
+QPs on every rank (`RouteFinal`), that recipe's `preflight.sh` ALL PASS, no NCCL WARNs since
 boot. Do NOT "fix" c1 latency with config — it is ring-physics; the lever was the
 four-PF transport (done) and the remaining gap is known.
 

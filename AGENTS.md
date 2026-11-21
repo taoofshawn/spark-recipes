@@ -147,7 +147,7 @@ New recipes inherit this rule; do not copy the upstream "stop but preserve" beha
 
 | symptom | cause / fix |
 |---|---|
-| NCCL init hangs / QP RTR timeout | transport wiring — run `verify-fabric-p2.sh`; boot env must show `MERGE_NICS=0` + `SWITCHLESS_RING_ONLY=1` + `EXTENDED_IPV4_GIDS=1` + 4-PF HCA |
+| NCCL init hangs / QP RTR timeout | transport wiring — run the target recipe's `preflight.sh`; boot env must show `MERGE_NICS=0` + `SWITCHLESS_RING_ONLY=1` + `EXTENDED_IPV4_GIDS=1` + 4-PF HCA |
 | `wrong listener count` at ncclCommInitRank | four-PF lib without `NCCL_IB_EXTENDED_IPV4_GIDS=1` |
 | FP8 launcher GID preflight rejects a P2 HCA | stale deployed config/gid-checker allowlist (site fix #7) — redeploy from the head |
 | FP8 boots old config after a repo change | tp4ctl reads the DEPLOYED `~/.local/tp4/cluster.env` — `deploy.sh` from the head |
@@ -161,7 +161,7 @@ New recipes inherit this rule; do not copy the upstream "stop but preserve" beha
 
 - **Do** read `LANE-SWITCHING.md` before any bring-up/switch, and the lane's README +
   latest research.md entries before touching it.
-- **Do** run `verify-fabric-p2.sh` before every switch; record anomalies (failed/retried
+- **Do** run the target recipe's `preflight.sh` before every switch; record anomalies (failed/retried
   boots, NCCL WARNs, gate failures, config changes, doc fixes) in research.md — a clean
   switch with no surprises updates nothing.
 - **Do** keep site mods documented in VENDORED-AT.md with re-apply recipes; keep

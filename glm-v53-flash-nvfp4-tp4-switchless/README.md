@@ -114,9 +114,7 @@ without renames — switching is teardown + branch checkout:
   the legacy 2-PF build `~/.local/lib/nccl-patched/` (`afe5f486…`) is documented at
   `NCCL_IB_HCA` in its `cluster.env`, coupled: HCA + NCCL_DIR + EXTRA_DOCKER_ENV append).
   Keep both dirs staged; the fabric netplan (all 4 PCIe views addressed) serves both lanes.
-  Preflight before any switch:
-  `bash glm-v53-flash-fp8-tp4-switchless/noswitch-prep/scripts/verify-fabric-p2.sh` (read-only,
-  safe while serving).
+  Preflight before any switch: `bash site/fabric/preflight.sh` (read-only, safe while serving).
 - **FP8 → NVFP4:** `tp4ctl down` in the FP8 recipe (`glm-v53-flash-fp8-tp4-switchless/upstream`)
   on the head; confirm `glm53_fp8_dflash_tp4` is gone on all 4; on all 4 nodes
   `cd ~/code/spark-recipes && git pull` (both lanes share this branch);

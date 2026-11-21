@@ -247,10 +247,10 @@ OOM (`NV_ERR_NO_MEMORY`), or a rank container exiting while others stay up.
   four-PF `NCCL_IB_HCA` — see `cluster.env`). The legacy 2-PF SparkRing build
   `~/.local/lib/nccl-patched` (`afe5f486…`) stays staged as THIS lane's rollback artifact
   (the coupled rollback is documented at `NCCL_IB_HCA` in `cluster.env`). Keep both dirs;
-  never merge or swap them. **Preflight both lanes' fabric state before any bring-up or
-  switch:** `bash glm-v53-flash-fp8-tp4-switchless/noswitch-prep/scripts/verify-fabric-p2.sh`
-  (read-only, safe while serving — checks live netplan vs generated, all 16 interface
-  addresses, the 16-ping two-view mesh, and both NCCL staging SHAs).
+  never merge or swap them. **Preflight the fabric before any bring-up or switch:**
+  `bash noswitch-prep/preflight.sh` (read-only, safe while serving — checks the committed
+  netplan against the generator and against the live host, every fabric address, the ring
+  ping mesh, both NCCL staging SHAs, the kernel/driver pins, and prints CONTRACT_DIGEST).
 - **Measured knobs are not shared tuning knobs**: `GPU_MEM_UTIL=0.85`, the 16 GiB KV
   pool (`--kv-cache-memory-bytes`), `MAX_NUM_SEQS=6`, KV dtype, backend flags, spec
   schedule (k=7/3). Don't tune them casually; every one has a measured baseline and a

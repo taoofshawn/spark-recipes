@@ -58,21 +58,23 @@ drafter `bf582e4e`).
    `bash glm-v53-flash-nvfp4-tp4-switchless/site/materialize-weights.sh`
    — hardlinks the HF-cache snapshots into `~/.local/nvfp4-tp4/weights/` (zero copy,
    zero modification) and guarantees `chat_template.jinja` exists in the model dir
-   (start.sh requires it; falls back to the FP8 stack's zai template if the snapshot
-   lacks it).
-2. **NCCL + netplan staging (the highest-risk item):** this lane ships its own four-PF
-   NCCL build and fabric netplan (Phase E, `site/nccl-4pf/` + `site/netplan/<node>/`):
-   stage `~/.local/lib/nccl-patched-4pf/libnccl.so.2.30.7` (real file; SHA pinned in
-   `site/env.switchless` — the launcher's preflight enforces it) with an in-dir
-   `libnccl.so.2 → libnccl.so.2.30.7` symlink, and install the per-node netplan
-   (`sudo cp site/netplan/<node>/40-cx7.yaml /etc/netplan/40-cx7.yaml && sudo netplan
-   apply`). The netplan addresses BOTH PCIe views of every cable (f-port octet + 2 on the
-   P2 views) — additive over the FP8 plan, so the FP8 lane keeps working, but **never
-   re-deploy the FP8 recipe's 2-address netplan here** (it strips the P2 addresses).
+   (start.sh requires it).
+2. **NCCL + netplan staging (the highest-risk item):** this recipe ships its own four-PF
+   NCCL build and fabric netplan — `site/nccl-4pf/` and `site/netplan/<node>/`, both
+   rendered/verified from `site/fabric/cluster.env`:
+   stage `~/.local/lib/nccl-patched-4pf/libnccl.so.2.30.7` (real file; SHA
+   `8de68def…`, pinned as `NCCL_4PF_SHA256` in `site/fabric/cluster.env` — the
+   launcher's preflight enforces it) with an in-dir `libnccl.so.2 → libnccl.so.2.30.7`
+   symlink, and install the per-node netplan (`sudo cp site/netplan/<node>/40-cx7.yaml
+   /etc/netplan/40-cx7.yaml && sudo netplan apply`; `bash site/fabric/preflight.sh`
+   verifies it first). The netplan addresses BOTH PCIe views of every cable (f-port
+   octet + 2 on the P2 views), which is what the four-PF listener contract requires.
    All four PFs must carry QPs per rank at boot (`Connected all rings` + RouteFinal
-   lines). Rollback if a boot stalls in NCCL init: point `NCCL_HOST_DIR` back at
-   `~/.local/lib/nccl-patched` and re-apply the staged-transport mods documented in the
-   `upstream/scripts/transport.sh` comment (FP8-proven 2-PF wiring).
+   lines). **Rollback if a boot stalls in NCCL init:** this recipe vendors its own 2-PF
+   tree at `site/nccl-2pf/` — build and stage it to `~/.local/lib/nccl-patched`, point
+   `NCCL_HOST_DIR` there, and re-apply the staged-transport mods documented in the
+   `upstream/scripts/transport.sh` comment. The rollback is executable from this recipe
+   alone.
 3. **Image build (every node, from the upstream checkout):**
    `docker build -f Dockerfile.roce -t glm53-roce:v11-b58f34ea .` — minutes, no CUDA
    compile. Digest/base pins per upstream `docs/install.md`.

@@ -14,9 +14,11 @@ MODEL_SNAP="${1:-$HF/hub/models--nvidia--GLM-5.3-Flash-NVFP4/snapshots/da920bb0b
 MODEL_DST="${2:-$HOME/.local/nvfp4-tp4/weights/nvidia-glm53-nvfp4}"
 DRAFT_SNAP="${3:-$HF/hub/models--incoai--GLM-5.3-Flash-DFlash2/snapshots/bf582e4eacc1810f76656d1811693ff6c6737d2a}"
 DRAFT_DST="${4:-$HOME/.local/nvfp4-tp4/weights/glm53-dflash2}"
-# Fallback chat template if the nvidia snapshot does not ship chat_template.jinja
-# (start.sh hard-requires /model/chat_template.jinja). The FP8 stack's deployed zai copy.
-CHAT_FALLBACK="${5:-$HOME/glm53-flash-fp8-zai/chat_template.jinja}"
+# start.sh hard-requires /model/chat_template.jinja. The pinned nvidia snapshot SHIPS it
+# (verified on the 09b04e5e and da920bb inventories), so no cross-lane fallback is used:
+# this recipe must work with every sibling recipe's on-node artifacts absent. If a future
+# pin drops the file, pass the template explicitly as arg 5 (a tracked file or a path).
+CHAT_FALLBACK="${5:-}"
 
 [ -d "$MODEL_SNAP" ] || { echo "ERROR: model snapshot missing: $MODEL_SNAP" >&2; exit 1; }
 [ -d "$DRAFT_SNAP" ] || { echo "ERROR: drafter snapshot missing: $DRAFT_SNAP" >&2; exit 1; }
@@ -37,12 +39,13 @@ materialize "$DRAFT_SNAP" "$DRAFT_DST"
 
 # start.sh passes --chat-template /model/chat_template.jinja — must exist in the model dir.
 if [ ! -f "$MODEL_DST/chat_template.jinja" ]; then
-  if [ -f "$CHAT_FALLBACK" ]; then
+  if [ -n "$CHAT_FALLBACK" ] && [ -f "$CHAT_FALLBACK" ]; then
     cp "$CHAT_FALLBACK" "$MODEL_DST/chat_template.jinja"
-    echo "[materialize] chat_template.jinja copied from fallback: $CHAT_FALLBACK"
+    echo "[materialize] chat_template.jinja copied from explicit arg 5: $CHAT_FALLBACK"
   else
-    echo "ERROR: $MODEL_DST/chat_template.jinja missing and fallback absent: $CHAT_FALLBACK" >&2
-    echo "       supply the zai pinned template (rev 690b7052, sha256 0c4099f3...) as arg 5." >&2
+    echo "ERROR: $MODEL_DST/chat_template.jinja missing — the pinned nvidia snapshot no longer" >&2
+    echo "       ships it. Pass the chat template as arg 5:" >&2
+    echo "         $0 <snap> <dst> <draft_snap> <draft_dst> /path/to/chat_template.jinja" >&2
     exit 1
   fi
 fi

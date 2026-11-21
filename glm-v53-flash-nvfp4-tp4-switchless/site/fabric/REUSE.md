@@ -30,6 +30,17 @@ The host-align scripts (`scripts/node/host/{kernel-align-fresh,hold-existing,dri
 Each copied script carries a two-line provenance header naming the source path and this pin.
 Upstream headers were not stripped.
 
+## NCCL build trees
+
+| tree | origin | notes |
+|---|---|---|
+| `nccl-4pf/` | this repo's own site build (othexmr/switchless-nccl `94c2669` + a one-line site GID patch), previously only in the NVFP4 recipe | 6 files; patch SHAs asserted at the top of `build-4pf.sh:44-50`; builds `~/.local/lib/nccl-patched-4pf` = `8de68def…` |
+| `nccl-2pf/` | *(NVFP4 only)* `glm-v53-flash-fp8-tp4-switchless/upstream/scripts/node/nccl/` (MIT, Nardiello), 2-PF SparkRing family | the documented rollback so it is executable from this recipe alone; builds `~/.local/lib/nccl-patched` = `afe5f486…` |
+
+`build-4pf.sh` is byte-identical in all three recipes (sha256 `0d86c2e1…`): a change to it is a
+deliberate three-recipe change, exactly like the contract digest. The NVFP4 origin copy lost its
+"mirrors the FP8 recipe" prose for the same reason.
+
 ## What was NOT copied
 
 Serving-side material stays where it is in this recipe: `site/env.switchless` (image, weights,

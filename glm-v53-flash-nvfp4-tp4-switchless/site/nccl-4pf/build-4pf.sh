@@ -3,9 +3,9 @@
 #
 # Runs ON A NODE (AArch64, docker). Self-contained: this directory (scp'd whole to
 # $DEST/patches) carries all four patches + the builder Dockerfile; the only network
-# fetch is the pinned NCCL source. Mirrors the FP8 recipe's node NCCL build pattern
-# (glm-v53-flash-fp8-tp4-switchless/upstream/scripts/node/nccl/build.sh) adapted to the
-# othexmr four-patch stack.
+# fetch is the pinned NCCL source. The build pattern follows this repository's node NCCL
+# build convention (docker builder + pinned patches, half-clone safety on rename), adapted
+# to the othexmr four-patch stack.
 #
 # Usage: DOCKER=docker ./build-4pf.sh [DEST] [JOBS]
 #   DEST   scratch dir on the node (default $HOME/nccl-4pf-build) — NOT the repo

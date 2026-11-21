@@ -80,25 +80,37 @@ bash scripts/node/host/tp4-iommu.sh --apply     # grub IOMMU drop-in; takes effe
 
 ## 6. NCCL: build the four-PF library and prove its identity
 
-Vendored build tree: `site/fabric/nccl-4pf/`.
+Vendored build tree: `site/fabric/nccl-4pf/`. Run it **on a node** — AArch64, the node's
+docker, ~1 GB scratch outside the checkout. **No copying needed:** the tree is already in the
+node's `~/code/spark-recipes` checkout.
 
 ```bash
-scp -r site/fabric/nccl-4pf <node>:~/
-ssh <node> 'DOCKER="sudo -n docker" ~/nccl-4pf/build-4pf.sh'
-# stage: ~/.local/lib/nccl-patched-4pf/libnccl.so.2.30.7 (+ libnccl.so.2 symlink)
-python3 site/fabric/check_switchless_nccl.py \
-  --library ~/.local/lib/nccl-patched-4pf/libnccl.so.2.30.7 \
-  --sha256 8de68def30bcde20fabded468bd60f0df82ea12d3ead02d5120c7feda7a41a87
+cd ~/code/spark-recipes/deepseek-v41-flash-tp4-switchless/site/fabric/nccl-4pf
+DOCKER="sudo -n docker" ./build-4pf.sh "$HOME/nccl-4pf-build"
+install -D -m 0644 "$HOME/nccl-4pf-build/nccl/build/lib/libnccl.so.2.30.7" \
+  "$HOME/.local/lib/nccl-patched-4pf/libnccl.so.2.30.7"
+ln -sfn libnccl.so.2.30.7 "$HOME/.local/lib/nccl-patched-4pf/libnccl.so.2"
 ```
 
-`site/env.switchless` carries the same SHA as `SWITCHLESS_NCCL_SHA256`; the launcher also
-refuses a stock library by grepping for the `SWITCHLESS_RING_ONLY` marker.
+The build prints the SHA but **does not stage**; the two commands above do. A rebuild is not
+bit-reproducible, so judge it by `symbols=165` + size ≈ 61.4 MB + the identity check:
+
+```bash
+python3 site/fabric/check_switchless_nccl.py \
+  --library "$HOME/.local/lib/nccl-patched-4pf/libnccl.so.2.30.7" \
+  --sha256 "$(sha256sum "$HOME/.local/lib/nccl-patched-4pf/libnccl.so.2.30.7" | cut -d' ' -f1)"
+```
+
+`site/env.switchless` carries the pinned `8de68def…` as `SWITCHLESS_NCCL_SHA256` for the
+original artifact; if you accept a rebuild, update it (and the same pin in the other recipes'
+facts — all lanes load the same host lib). The launcher additionally refuses a stock library by
+grepping for the `SWITCHLESS_RING_ONLY` marker.
 
 **Rollback** (only if a boot stalls in NCCL init): this lane has **no** 2-PF build tree. Its
 rollback is a donor-image extraction, recorded in
 `upstream-sparkring-archive/profile-deepseek-v41-flash-cycle/README.md` (pull the pinned
-sparkring image, `docker cp` its `libnccl.so.2`). That is self-contained and is **not**
-needed for a four-PF boot.
+sparkring image, `docker cp` its `libnccl.so.2`). That is self-contained and is **not** needed
+for a four-PF boot.
 
 ## 7. Image
 

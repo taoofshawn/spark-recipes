@@ -187,14 +187,33 @@ for alias in "${ALIASES[@]}"; do
   log "$alias: ping mesh $ok/$total"
 
   # --- 5. NCCL staging identity -------------------------------------------------
+  # Two stages. A REBUILT lib will not match the pinned SHA (the build is not
+  # bit-reproducible: compiler/toolkit paths and timestamps embed), so a SHA difference is a
+  # WARNING with an explicit remedy, not a failure. Structure (AArch64 ELF, symlink stays
+  # in-dir) is what a rebuild must satisfy, and that is what the vendored checker validates.
+  CHECKER="$HERE/check_switchless_nccl.py"
   for pair in "${NCCL_ARTIFACTS[@]}"; do
-    rel=${pair%%:*}; want=${pair#*:}
+    rel=${pair%%:*}; want=${pair#*:}; lib="\$HOME/$rel"
     if [ -z "$want" ]; then fail "$alias: no SHA pinned for $rel"; continue; fi
-    got=$(ssh "${SSH_OPTS[@]}" "$host" "sha256sum \$HOME/$rel 2>/dev/null | cut -d' ' -f1" 2>/dev/null)
-    if [ "$got" = "$want" ]; then
-      log "$alias: $rel SHA OK (${want:0:8}…)"
+    got=$(ssh "${SSH_OPTS[@]}" "$host" "sha256sum $lib 2>/dev/null | cut -d' ' -f1" 2>/dev/null)
+    if [ -z "$got" ]; then fail "$alias: $rel missing (want ${want:0:8}…)"; continue; fi
+
+    if [ -f "$CHECKER" ]; then
+      # pass the checker's source over stdin so nothing is copied onto the node
+      if ssh "${SSH_OPTS[@]}" "$host" "python3 - --library $lib --sha256 $got" \
+           < "$CHECKER" >/dev/null 2>&1; then
+        log "$alias: $rel structure OK (AArch64 ELF, in-dir symlink)"
+      else
+        fail "$alias: $rel failed the structure check (not an AArch64 ELF, or the symlink escapes its dir)"
+      fi
     else
-      fail "$alias: $rel missing or SHA mismatch (got ${got:-none}, want ${want:0:8}…)"
+      warn "$alias: no check_switchless_nccl.py beside preflight.sh — structure check skipped"
+    fi
+
+    if [ "$got" = "$want" ]; then
+      log "$alias: $rel SHA matches the pin (${want:0:8}…)"
+    else
+      warn "$alias: $rel SHA DIFFERS from the pin (got ${got:0:8}…, want ${want:0:8}…) — expected after a rebuild; if you accepted it, update NCCL_4PF_SHA256 in every recipe's facts"
     fi
   done
 

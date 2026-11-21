@@ -100,31 +100,50 @@ sentinel so `deploy-host.sh` stops re-pushing until you `--revert`.
 
 ## 6. NCCL: build the four-PF library, stage it, prove its identity
 
-The build tree is vendored: `site/nccl-4pf/` (6 files, patch SHAs asserted at `:44-50`).
-Run it **on a node** — it needs docker and a pinned NCCL source clone.
+The build tree is vendored here: `site/nccl-4pf/` (6 files; the four patch SHAs are asserted
+by the script itself at `:44-50`). The build must run **on a node** — AArch64, the node's
+docker, and a ~1 GB scratch tree that must not live in the checkout. **Nothing needs copying:**
+this recipe's tree is already in the node's `~/code/spark-recipes` checkout (that is what the
+repo flow is for).
+
+On **each node**, from the checkout:
 
 ```bash
-# on each node (or build once and copy the .so; the SHA is the contract)
-scp -r site/nccl-4pf <node>:~/
-ssh <node> 'DOCKER="sudo -n docker" ~/nccl-4pf/build-4pf.sh'
-# stage the result where the launcher expects it
-~/.local/lib/nccl-patched-4pf/libnccl.so.2.30.7
-~/.local/lib/nccl-patched-4pf/libnccl.so.2 -> libnccl.so.2.30.7
+cd ~/code/spark-recipes/glm-v53-flash-nvfp4-tp4-switchless/site/nccl-4pf
+DOCKER="sudo -n docker" ./build-4pf.sh "$HOME/nccl-4pf-build"     # DEST outside the repo
 ```
 
-Identity check (this is the one that matters — a marker grep is not an identity check):
+It prints `BUILD DONE`, `sha256sum`, `size=`, `symbols=`. **It does not stage the library** —
+do that yourself, since the launcher looks only at `~/.local/lib/nccl-patched-4pf/`:
+
+```bash
+install -D -m 0644 "$HOME/nccl-4pf-build/nccl/build/lib/libnccl.so.2.30.7" \
+  "$HOME/.local/lib/nccl-patched-4pf/libnccl.so.2.30.7"
+ln -sfn libnccl.so.2.30.7 "$HOME/.local/lib/nccl-patched-4pf/libnccl.so.2"
+```
+
+**A rebuild will not reproduce the pinned SHA.** The build is not bit-reproducible (the
+compiler and CUDA toolkit embed build paths/timestamps) — the sibling 2-PF build says so
+explicitly: *"a differing sha is a WARNING, not an error"*. Judge a rebuild by structure, not
+by hash: `symbols=165`, size ≈ 61.4 MB, and the identity check passing (which validates the
+AArch64 ELF and the in-dir symlink against the lib's own hash):
 
 ```bash
 python3 site/fabric/check_switchless_nccl.py \
-  --library ~/.local/lib/nccl-patched-4pf/libnccl.so.2.30.7 \
-  --sha256 8de68def30bcde20fabded468bd60f0df82ea12d3ead02d5120c7feda7a41a87
+  --library "$HOME/.local/lib/nccl-patched-4pf/libnccl.so.2.30.7" \
+  --sha256 "$(sha256sum "$HOME/.local/lib/nccl-patched-4pf/libnccl.so.2.30.7" | cut -d' ' -f1)"
 ```
 
+If you accept a rebuilt lib, update `NCCL_4PF_SHA256` in this recipe's
+`site/fabric/cluster.env` **and in the other recipes' facts files** (all lanes load the same
+host lib — a deliberate multi-recipe change). The pinned `8de68def…` remains the reference for
+the original artifact; `preflight.sh` compares against whatever is pinned.
+
 **Rollback** (only if a boot stalls in NCCL init): this recipe vendors its own 2-PF tree at
-`site/nccl-2pf/`. Build it, stage to `~/.local/lib/nccl-patched` (`afe5f486…`), point
-`NCCL_HOST_DIR` there in `site/env.switchless`, and re-apply the staged-transport mods in the
-`upstream/scripts/transport.sh` comment. Keep both directories; the two libs hard-reject each
-other's config.
+`site/nccl-2pf/`. Build and stage it to `~/.local/lib/nccl-patched` (`afe5f486…` reference),
+point `NCCL_HOST_DIR` there in `site/env.switchless`, and re-apply the staged-transport mods in
+the `upstream/scripts/transport.sh` comment. Keep both directories; the two libs hard-reject
+each other's config.
 
 ## 7. Image
 

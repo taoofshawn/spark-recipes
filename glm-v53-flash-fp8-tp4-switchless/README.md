@@ -301,9 +301,15 @@ Run in this order:
    `upstream/scripts/{bootstrap-node,deploy-host}.sh` for `/etc`, sudoers, ssh mesh, grub and
    the kernel pins (`upstream/scripts/node/bootstrap/versions.env`); the host-align helpers
    are `noswitch-prep/scripts/{kernel-align-fresh,hold-existing,driver-align-173,docker-log-rotation,verify-hostkeys}.sh`.
-4. **NCCL build** — `noswitch-prep/nccl-4pf/build-4pf.sh` (byte-identical to the other
-   lanes') reproduces `~/.local/lib/nccl-patched-4pf` = `8de68def…`. This lane's 2-PF
-   rollback build stays at `upstream/scripts/node/nccl/` (`afe5f486…`).
+4. **NCCL build** — `noswitch-prep/nccl-4pf/build-4pf.sh` (byte-identical to the other lanes')
+   rebuilds the four-PF lib from pinned patches; run it **on a node, from this checkout** and
+   then **stage the result yourself** (`install` the `.so` into
+   `~/.local/lib/nccl-patched-4pf/libnccl.so.2.30.7` + the in-dir `libnccl.so.2` symlink) —
+   the build prints the SHA but does not install. The reference artifact is `8de68def…`; a
+   rebuild will NOT reproduce that hash (the build is not bit-reproducible), so judge it by
+   `symbols=165`, size ≈ 61.4 MB and the structure check, and re-pin `NCCL_4PF_SHA256` in
+   every recipe's facts if you accept it. Full procedure: `nvfp4/site/FROM-ZERO.md` §6.
+   This lane's 2-PF rollback build stays at `upstream/scripts/node/nccl/` (`afe5f486…`).
 5. **Verify** — `bash noswitch-prep/preflight.sh` → `ALL CHECKS PASS`: committed netplan vs
    generator vs live host, every fabric address, the ring ping mesh, both NCCL staging SHAs,
    kernel/driver pins, docker/rdma/infiniband, and `CONTRACT_DIGEST`.

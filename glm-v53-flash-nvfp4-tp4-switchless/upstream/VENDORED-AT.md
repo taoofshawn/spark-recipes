@@ -18,8 +18,8 @@
 | `profiles/stock-nvfp4.env` | site-added serving profile: sources upstream `profiles/current.env`, then strips the lossless8/fp8-drafter-only switches and applies the shawndo site serving values (1M ctx, 20 GiB/rank KV pin, port 8000, `glm-5.3-flash`) |
 
 The recipe's premise is the stock `nvidia/GLM-5.3-Flash-NVFP4` checkpoint with no
-conversion step, so unlike the FP8 glm-v53-flash-fp8-tp4-switchless recipe there is no lossless8/drafter-fp8
-build to wire in. The site `.env` lives OUTSIDE upstream (see `../site/env.switchless`)
+conversion step, so unlike an FP8-served lane there is no lossless8/drafter-fp8 build to
+wire in. The site `.env` lives OUTSIDE upstream (see `../site/env.switchless`)
 because upstream's `.gitignore` ignores `.env`; bring-up copies it to `upstream/.env` on
 the head (ignored file, node tree stays pristine).
 

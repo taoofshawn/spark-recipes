@@ -78,6 +78,25 @@ else
   NCCL_ARTIFACTS=(".local/lib/nccl-patched-4pf/libnccl.so.2.30.7:${NCCL_4PF_SHA256:-}")
 fi
 
+# ---------------------------------------------------------------- 0. derived mirrors
+# Some recipes' launchers read a GITIGNORED copy of the facts at a second path (FP8's
+# upstream renderer reads upstream/cluster.env). On a fresh checkout that copy does not
+# exist. It is DERIVED from this recipe's own facts, so materialize it here rather than
+# leaving the recipe unrenderable — and never the other way round.
+if [ -n "${DERIVED_MIRROR_REL:-}" ]; then
+  mirror=$(cd "$HERE" && cd "$(dirname "$DERIVED_MIRROR_REL")" 2>/dev/null && pwd)/$(basename "$DERIVED_MIRROR_REL")
+  if [ -f "$mirror" ]; then
+    if cmp -s "$HERE/cluster.env" "$mirror"; then
+      log "derived mirror up to date: ${DERIVED_MIRROR_REL#../}"
+    else
+      warn "derived mirror DIFFERS from cluster.env: $mirror — refreshing"
+      cp "$HERE/cluster.env" "$mirror" && log "refreshed ${DERIVED_MIRROR_REL#../} from cluster.env"
+    fi
+  elif [ -n "$(dirname "$mirror")" ] && [ -d "$(dirname "$mirror")" ]; then
+    cp "$HERE/cluster.env" "$mirror" && log "materialized derived mirror ${DERIVED_MIRROR_REL#../} from cluster.env"
+  fi
+fi
+
 # ---------------------------------------------------------------- 1. generator --check
 RENDER="$HERE/${RENDER_REL:-scripts/render-netplan.sh}"
 if [ -f "$RENDER" ]; then

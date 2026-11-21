@@ -45,12 +45,36 @@ fi
 # The launcher command, exactly as this recipe documents it (see README "bring-up").
 LAUNCH=(bash "$RECIPE/upstream/start.sh" serve)
 
+# The launcher refuses to run without upstream/.env (start.sh:7) and that file is
+# GITIGNORED, so a fresh checkout has none. Materialize it from the committed site env —
+# the step the README documents as `cp ../site/env.switchless .env`. Never edit it in place:
+# site/env.switchless is the source of truth and the node tree stays pristine.
+ENV_SRC="$RECIPE/site/env.switchless"
+ENV_DST="$RECIPE/upstream/.env"
+needs_env=0
+if [ ! -f "$ENV_DST" ]; then
+  needs_env=1
+elif ! cmp -s "$ENV_SRC" "$ENV_DST"; then
+  needs_env=2
+fi
+
 if [ "$DRY" = 1 ]; then
   printf '[start] dry run — would run, from %s:\n' "$RECIPE/upstream"
   printf '        %s %s\n' "${LAUNCH[*]}" "$*"
-  printf '[start] (this recipe'"'"'s launcher renders site/env.switchless to .env itself)\n'
+  case "$needs_env" in
+    0) printf '[start] upstream/.env is present and matches site/env.switchless\n' ;;
+    1) printf '[start] would materialize upstream/.env from site/env.switchless (absent)\n' ;;
+    2) printf '[start] would refresh upstream/.env from site/env.switchless (differs)\n' ;;
+  esac
   exit 0
 fi
+
+case "$needs_env" in
+  0) : ;;
+  1) cp "$ENV_SRC" "$ENV_DST" && printf '[start] materialized upstream/.env from site/env.switchless\n' ;;
+  2) cp "$ENV_SRC" "$ENV_DST" && printf '[start] refreshed upstream/.env from site/env.switchless (was stale)\n' ;;
+esac
+[ -f "$ENV_DST" ] || { printf '[start] cannot create %s\n' "$ENV_DST" >&2; exit 3; }
 
 printf '[start] launching: %s\n' "${LAUNCH[*]}"
 cd "$RECIPE/upstream" || { printf '[start] cannot cd to %s\n' "$RECIPE/upstream" >&2; exit 3; }

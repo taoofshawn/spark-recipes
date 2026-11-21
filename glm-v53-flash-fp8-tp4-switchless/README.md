@@ -281,6 +281,31 @@ OOM (`NV_ERR_NO_MEMORY`), or a rank container exiting while others stay up.
 - Autostart: rank 0's `tp4-autostart.service` launches the whole cluster at boot —
   after a rank-0 reboot just wait; don't double-start with `up`.
 
+## Cluster fabric (four-PF) — the recipe-local path
+
+Everything needed to provision and verify the fabric from **this directory alone** now lives
+here; upstream's `docs/install-from-zero.md` covers the serving stack, this covers the host.
+Run in this order:
+
+1. **Facts** — `noswitch-prep/cluster.env` (topology, ring peers, NCCL SHA pins,
+   `CONTRACT_DIGEST`). Generated files are derived from it; never hand-edit them.
+2. **Netplan** — committed expectation in `noswitch-prep/netplan/<node>/` (both
+   `40-cx7.yaml` and `tp4-fabric-iptables.env` per node). Verify:
+   `cd upstream && bash scripts/render-netplan.sh --check --out ../noswitch-prep/netplan`.
+3. **Host provisioning** — this lane keeps upstream's own
+   `upstream/scripts/{bootstrap-node,deploy-host}.sh` for `/etc`, sudoers, ssh mesh, grub and
+   the kernel pins (`upstream/scripts/node/bootstrap/versions.env`); the host-align helpers
+   are `noswitch-prep/scripts/{kernel-align-fresh,hold-existing,driver-align-173,docker-log-rotation,verify-hostkeys}.sh`.
+4. **NCCL build** — `noswitch-prep/nccl-4pf/build-4pf.sh` (byte-identical to the other
+   lanes') reproduces `~/.local/lib/nccl-patched-4pf` = `8de68def…`. This lane's 2-PF
+   rollback build stays at `upstream/scripts/node/nccl/` (`afe5f486…`).
+5. **Verify** — `bash noswitch-prep/preflight.sh` → `ALL CHECKS PASS`: committed netplan vs
+   generator vs live host, every fabric address, the ring ping mesh, both NCCL staging SHAs,
+   kernel/driver pins, docker/rdma/infiniband, and `CONTRACT_DIGEST`.
+
+Start and stop with `./bin/start.sh` / `./bin/stop.sh`. The start path refuses while any other
+lane is running (fail-closed); the stop path captures logs then removes this lane's containers.
+
 ## When something's wrong
 
 1. `./scripts/tp4ctl status` — which ranks are up/down?

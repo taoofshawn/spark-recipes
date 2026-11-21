@@ -288,10 +288,14 @@ Everything needed to provision and verify the fabric from **this directory alone
 here; upstream's `docs/install-from-zero.md` covers the serving stack, this covers the host.
 Run in this order:
 
-1. **Facts** — `noswitch-prep/cluster.env` (topology, ring peers, NCCL SHA pins,
-   `CONTRACT_DIGEST`). Generated files are derived from it; never hand-edit them.
+1. **Facts + verify** — `noswitch-prep/cluster.env` is the source of truth (topology, ring
+   peers, NCCL SHA pins, `CONTRACT_DIGEST`). Generated files are derived from it; never
+   hand-edit them. **First command on a fresh checkout: `bash noswitch-prep/preflight.sh`.**
+   It materializes the gitignored `upstream/cluster.env` mirror from these facts (declared
+   as `DERIVED_MIRROR_REL`), then verifies the fabric. Run it before the renderer, since
+   the renderer is an upstream script that reads that mirror.
 2. **Netplan** — committed expectation in `noswitch-prep/netplan/<node>/` (both
-   `40-cx7.yaml` and `tp4-fabric-iptables.env` per node). Verify:
+   `40-cx7.yaml` and `tp4-fabric-iptables.env` per node). After preflight:
    `cd upstream && bash scripts/render-netplan.sh --check --out ../noswitch-prep/netplan`.
 3. **Host provisioning** — this lane keeps upstream's own
    `upstream/scripts/{bootstrap-node,deploy-host}.sh` for `/etc`, sudoers, ssh mesh, grub and

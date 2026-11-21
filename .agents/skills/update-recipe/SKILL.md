@@ -34,8 +34,8 @@ the recipe up on the sparks, restart containers, or verify a live endpoint — t
 Sibling repos worth checking (the GLM serving family): `tonyd2wild/GLM-5.3-Flash-NVFP4-1M-KV-4x-DGX-Spark`,
 `tonyd2wild/GLM-5.3-Flash-NVFP4-DFlash2-2x-DGX-Spark`, plus kindlingai/eugr/technigma
 stacks for cross-stack ideas. Model checkpoints: `nvidia/GLM-5.3-Flash-NVFP4` (pinned
-`09b04e5e`), drafter `incoai/GLM-5.3-Flash-DFlash2` (pinned `bf582e4e`, **CC BY-NC-ND** —
-no derivative re-encodes). Check HF `lastModified`/siblings for new revisions.
+`da920bb`), drafter `incoai/GLM-5.3-Flash-DFlash2` (pinned `bf582e4e`, **CC BY-NC-ND** —
+no derivative re-encodes), `deepseek-ai/DeepSeek-V4.1-Flash-1017` (pinned `1bae0e10`). Check HF `lastModified`/siblings for new revisions.
 
 ## Review loop
 

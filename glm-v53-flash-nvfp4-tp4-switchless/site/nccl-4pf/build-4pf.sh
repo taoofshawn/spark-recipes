@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
 # build-4pf.sh — Phase E site build of the four-PF switchless NCCL for the 4-node ring.
 #
-# Runs ON A NODE (AArch64, docker). Self-contained: this directory (scp'd whole to
-# $DEST/patches) carries all four patches + the builder Dockerfile; the only network
+# Runs ON A NODE (AArch64, docker), from the node's own checkout: this directory
+# carries all four patches + the builder Dockerfile; the only network
 # fetch is the pinned NCCL source. The build pattern follows this repository's node NCCL
 # build convention (docker builder + pinned patches, half-clone safety on rename), adapted
 # to the othexmr four-patch stack.
 #
 # Usage: DOCKER=docker ./build-4pf.sh [DEST] [JOBS]
-#   DEST   scratch dir on the node (default $HOME/nccl-4pf-build) — NOT the repo
+#   DEST   scratch dir on the node (default $HOME/nccl-4pf-build) — NOT the repo,
+#          and must be fresh: a reused DEST whose index already carries the applied
+#          patches fails the base-tree provenance check
 #   JOBS   make parallelism (default 20)
 #   DOCKER use 'sudo -n docker' if the node user is outside the docker group
 #

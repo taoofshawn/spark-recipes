@@ -24,7 +24,7 @@ transport degraded. Prove it with numbers before touching config.
 
 ```bash
 ssh spark-0f0b.shawndo.intra 'docker ps --format "{{.Names}} {{.Status}}"'
-curl -s http://10.69.42.170:8000/v1/models | python -c "import json,sys; d=json.load(sys.stdin)['data'][0]; print(d['id'], d.get('max_model_len'))"
+curl -s http://10.69.43.170:8000/v1/models | python -c "import json,sys; d=json.load(sys.stdin)['data'][0]; print(d['id'], d.get('max_model_len'))"
 ```
 
 NVFP4 (`glm53-nvfp4-r*`, max_model_len 1,048,576) vs FP8 (`glm53_fp8_dflash_tp4`,

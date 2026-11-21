@@ -96,11 +96,11 @@ drafter `bf582e4e`).
    decision input: lane stays vs lossless8 revisit). Routine bring-ups update nothing —
    only anomalies (failed boots, NCCL WARNs, gate failures) get a changelog entry.
 
-## Switching between the FP8 and NVFP4 lanes
+## Switching to this lane from another
 
-> **Runbook: [`../../LANE-SWITCHING.md`](../../LANE-SWITCHING.md)** — the one-doc
-> procedure (preflight, both directions, verification, gotchas). The notes below are
-> the lane-specific background.
+> No runbook is needed: run that recipe's `./bin/stop.sh` there, then this recipe's
+> `site/fabric/preflight.sh` and `./bin/start.sh` here (the guard refuses while anything
+> else serves). The notes below are this lane's own background.
 
 GPU contention rule: only one lane serves at a time. The lanes were built to coexist
 without renames — switching is teardown + branch checkout:

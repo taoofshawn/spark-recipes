@@ -225,8 +225,9 @@ OOM (`NV_ERR_NO_MEMORY`), or a rank container exiting while others stay up.
 
 ## Invariants — do not break
 
-> Switching to/from the NVFP4 lane? **Runbook: [`../LANE-SWITCHING.md`](../LANE-SWITCHING.md)**
-> (preflight, both directions, verification, gotchas).
+> Switching lanes? No runbook: stop the other recipe with **its** `./bin/stop.sh`, run
+> **this** recipe's `noswitch-prep/preflight.sh`, then `./bin/start.sh` here — it refuses
+> while anything else is serving. Verify with the gates below.
 
 - **One model at a time.** All recipes use every reserved GPU; run `tp4ctl down`
   before starting anything else.

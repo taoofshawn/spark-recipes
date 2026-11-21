@@ -134,10 +134,11 @@ The launcher's `serve` auto-triggers it only when an image is missing — build 
      returns, capture the boot config (`swa_tokens`, `c4_size`, ratio) BEFORE touching
      anything — that is the diagnostic signal the 2026-10-25/26 investigation was missing.
 
-## Switching (GLM lanes ↔ this lane)
+## Switching to this lane from another
 
-Runbook: [`../../LANE-SWITCHING.md`](../../LANE-SWITCHING.md) — the one-doc procedure;
-this lane's rows are in "The lanes" table below it. Lane-specific:
+No runbook: stop the other recipe with its own `./bin/stop.sh`, flip the proxy's
+`BACKEND_MODEL` to `deepseek-v41-flash`, then run this recipe's `site/fabric/preflight.sh`
+and `./bin/start.sh` (the guard refuses while anything else serves). Lane-specific:
 
 - **Teardown of this lane:** `./start-cluster.sh stop`. The site wrapper removes the
   stopped containers — relaunch is a fresh `serve`, model/cache bind mounts stay on disk.

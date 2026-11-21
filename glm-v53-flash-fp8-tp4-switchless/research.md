@@ -1071,3 +1071,28 @@ All of `noswitch-prep/` is site-owned, not upstream-owned:
   to another lane's on-node `chat_template.jinja` (the pinned nvidia snapshot ships it).
   No serving value, image, KV pin, boot order or transport setting changed.
 
+- **2026-11-21 — Phase 2 live run (this lane brought up twice, `bin/` only).** Round-trip
+  DeepSeek→FP8 and the reverse NVFP4→FP8 leg; no node-side config change, no tuning.
+  - Teardown rule verified on both legs: logs captured first (`logs/20261121T134827Z` head
+    341,853 lines / workers ~43.4k; `20261121T141115Z` head 57,657 / workers ~16.9k),
+    containers removed and verified absent, `dsv41-local-weights` kept.
+  - `/health` 200 after 1065 s (first leg; the pinned image had to be pulled — see below) and
+    759 s (second leg); served name `glm-5.3-flash`, ctx 262,144 as expected.
+  - Functional gates: chat gate "The capital of Italy is Rome."; `tool_choice:"required"` +
+    thinking on produced `get_weather {"city":"Tokyo"}` with reasoning preserved (the field
+    is `reasoning`, not `reasoning_content` — the gate check must read that key), engine
+    alive. Corruption probes `p23` and `p26b`: 40 Italian prompts, 0 invalid UTF-8,
+    0 U+FFFD, 0 repetition flags, 10/10 tool calls, 0 parse failures.
+  - 0 `NCCL WARN` on all four ranks on both legs.
+  - **Gate defect found:** the Phase-2 pass text asks for `Connected all rings` + `RouteFinal`
+    per rank, but this lane pins `-e NCCL_DEBUG=WARN`
+    (`upstream/scripts/launcher/launch-glm53-tp4.sh:571`), so those INFO lines can never
+    reach a log. Route evidence available without changing the env: the launch line's four
+    HCAs/GIDs per rank, plus RoCE `port_rcv_data`/`port_xmit_data` nonzero on all four PF
+    views on all four nodes — cumulative since boot, so it is not per-run proof. Reading
+    RouteFinal here needs an INFO-level run (the NVFP4 lane sets INFO and does print it).
+  - **Image was absent on all four nodes** (`ghcr.io/fujitsupolycom/sparkring-glm53-sparkcache@sha256:0d40…`);
+    build-record step 1 is the remedy — `docker pull` on each node, every node then reports
+    `IMAGE_ID sha256:5e32aaa1bbe3…`, matching the pin. First `./bin/start.sh` attempt failed
+    at the launch stage for this reason; retry after the pull succeeded.
+

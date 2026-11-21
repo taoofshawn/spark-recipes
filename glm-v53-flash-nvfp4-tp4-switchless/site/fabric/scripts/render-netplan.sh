@@ -91,7 +91,9 @@ while [ $# -gt 0 ]; do
 done
 
 tp4_load_env "$REPO" --require
-[ -n "$OUT" ] || OUT="$REPO/scripts/node/etc"
+# This recipe commits its rendered expectation; default --write/--check to it so the
+# operator never has to remember a flag. Override with --out.
+[ -n "$OUT" ] || OUT="$REPO/../netplan"
 
 read -r -a ALIASES <<<"$NODES"
 NNODES=${#ALIASES[@]}

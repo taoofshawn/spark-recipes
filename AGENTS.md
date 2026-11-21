@@ -126,6 +126,23 @@ its next use).
 - Shared: port 8000, `glm-5.3-flash`, offline serving, four-PF NCCL contract,
   `FABRIC_P2_VIEWS=1`, all-ranks teardown.
 
+## Teardown rule (repo-wide — every recipe, including future ones)
+
+**Stopping a lane removes its containers.** Every recipe's `bin/stop.sh` must:
+
+1. **capture `docker logs` first** for every rank into a lane-owned file (the container is
+   the only place NVFP4 keeps its log — removal destroys it, so this step is not optional);
+2. delegate to the recipe's own stop/teardown;
+3. **remove** the recipe's containers (`docker rm -f` its own names only) and verify absence;
+4. `--keep-containers` is the explicit, single-inspection opt-out.
+
+Never leave stopped containers behind: a preserved container blocks the next `serve` on lanes
+whose preflight refuses existing names (NVFP4), and it makes "delete any recipe dir at any time"
+false in practice. Warm JIT caches are unaffected — they live in host bind-mounts
+(`~/.local/nvfp4-tp4/cache`, `~/.cache/tp4-vllm-cache`), not the container layer.
+
+New recipes inherit this rule; do not copy the upstream "stop but preserve" behaviour.
+
 ## Failure modes (4x; each cost a boot)
 
 | symptom | cause / fix |

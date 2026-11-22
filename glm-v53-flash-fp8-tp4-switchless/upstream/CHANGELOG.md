@@ -5,6 +5,16 @@ Versions and releases are created only at the owner's explicit request.
 
 ## Unreleased
 
+### Changed
+
+- `scripts/render-netplan.sh`: the `FABRIC_P2_VIEWS` documentation no longer describes
+  another recipe's deployment or cites a path outside this tree; it describes the four-PF
+  contract this site runs. Comment text only — the renderer's output is byte-identical
+  (`--check` passes unchanged, verified 2026-11-21). Part of the recipe-decoupling pass:
+  each recipe now carries its own fabric facts, committed netplan, NCCL build tree,
+  preflight and from-zero runbook, and no file under a recipe names a sibling recipe's
+  directory except for licence attribution.
+
 ### Added
 
 - E36 is the new default: the vocab-parallel `lm_head` that the target shares with the

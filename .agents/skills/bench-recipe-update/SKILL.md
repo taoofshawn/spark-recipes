@@ -6,7 +6,7 @@ description: >-
   candidate config and must not regress. Triggers: "bench the recipe update",
   "before/after benchmark", "did the update regress anything", "A/B the configs",
   "run the regression bench", "verify the recipe change with numbers". Does NOT deploy
-  or tear down lanes itself (bring-up-spark-recipe / LANE-SWITCHING.md), does NOT
+  or tear down lanes itself (bring-up-spark-recipe + each recipe's `bin/`), does NOT
   update recipe sources (update-recipe), and does NOT merge PRs.
 ---
 
@@ -20,7 +20,7 @@ noise-aware verdicts.
 ## Scope boundary
 
 This skill benchmarks only. Deploying/tearing down lanes between sides is
-`bring-up-spark-recipe` + `LANE-SWITCHING.md`'s job; recipe changes are
+`bring-up-spark-recipe` + each recipe's `bin/{start,stop}.sh`; recipe changes are
 `update-recipe`'s. Never merge/adopt as a result of a bench — posting the comparison
 and the verdict is the stopping point.
 
@@ -63,11 +63,11 @@ and the verdict is the stopping point.
 ## Procedure
 
 1. **Scope the bench from the diff** — which knobs changed? Only one lane's knobs →
-   bench that lane. Transport/NCCL changes → both lanes' ladders + the fabric
+   bench that lane. Transport/NCCL changes → every affected recipe's ladder + the fabric
    preflight before each boot. KV-pin/memory changes → also record host
    `MemAvailable` and compare the KV pool line from the boot logs.
 2. **BEFORE side:** the lane up with the current pinned config
-   (`LANE-SWITCHING.md` flow; never edit files on the nodes — config travels through
+   (the recipe's own flow; never edit files on the nodes — config travels through
    the repo + the derived-file mirror steps). Wait for READY + health 200 + correct
    model id + the expected `GPU KV cache size` line + zero real tracebacks. A Tier-0
    failure = STOP; a bench against a broken boot measures the break.

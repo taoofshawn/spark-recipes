@@ -10,10 +10,10 @@ Vendored from [knapcio's 4x-DGX-Spark TP4 stack](https://github.com/knapcio/Deep
 the MiaAI-Lab stack it replaces is archived at `upstream-miaai-archive/` — swap rationale
 research.md 2026-10-26, the v2.6.4 refresh research.md 2026-11-06).
 
-**Transport:** the site's shared four-PF switchless NCCL contract — same lib
-(`~/.local/lib/nccl-patched-4pf`, SHA `8de68def…`), same netplan (all four PCIe views),
-same HCA list and env flags as both GLM lanes. One `verify-fabric-p2.sh` preflight serves
-all three lanes. The launcher overlays the host NCCL onto the container's pip NCCL
+**Transport:** this site's four-PF switchless NCCL contract — lib
+`~/.local/lib/nccl-patched-4pf` (SHA `8de68def…`), all four PCIe views addressed, four-HCA
+list and the contract env flags. Everything needed to verify it is in this recipe
+(`site/fabric/`), including the build tree that reproduces the library. The launcher overlays the host NCCL onto the container's pip NCCL
 (`NCCL_OVERLAY_PIP=1`, ring-mode default) and refuses a stock library.
 
 **Endpoint (after bring-up):** `http://10.69.43.170:8000/v1` (the head's mgmt address
@@ -102,8 +102,8 @@ The launcher's `serve` auto-triggers it only when an image is missing — build 
 
 ## Bring-up (after a stack change)
 
-1. **Preflight:** `bash glm-v53-flash-fp8-tp4-switchless/noswitch-prep/scripts/verify-fabric-p2.sh`
-   must print `ALL CHECKS PASS` (shared netplan + NCCL lib verification).
+1. **Preflight:** `bash site/fabric/preflight.sh` must print `ALL CHECKS PASS`
+   (netplan, addresses, ring mesh, NCCL lib SHA, host pins; prints CONTRACT_DIGEST).
 2. **Image build:** `bash deepseek-v41-flash-tp4-switchless/site/build-cluster.sh`
    (head + workers; adapter sentinel verified per node).
 3. **Packed Engram shards:** `deepseek-v41-flash-tp4-switchless/site/start-cluster.sh pack`
@@ -134,10 +134,11 @@ The launcher's `serve` auto-triggers it only when an image is missing — build 
      returns, capture the boot config (`swa_tokens`, `c4_size`, ratio) BEFORE touching
      anything — that is the diagnostic signal the 2026-10-25/26 investigation was missing.
 
-## Switching (GLM lanes ↔ this lane)
+## Switching to this lane from another
 
-Runbook: [`../../LANE-SWITCHING.md`](../../LANE-SWITCHING.md) — the one-doc procedure;
-this lane's rows are in "The lanes" table below it. Lane-specific:
+No runbook: stop the other recipe with its own `./bin/stop.sh`, flip the proxy's
+`BACKEND_MODEL` to `deepseek-v41-flash`, then run this recipe's `site/fabric/preflight.sh`
+and `./bin/start.sh` (the guard refuses while anything else serves). Lane-specific:
 
 - **Teardown of this lane:** `./start-cluster.sh stop`. The site wrapper removes the
   stopped containers — relaunch is a fresh `serve`, model/cache bind mounts stay on disk.
@@ -146,8 +147,9 @@ this lane's rows are in "The lanes" table below it. Lane-specific:
 - **Proxy:** `BACKEND_MODEL=deepseek-v41-flash`; add `deepseek-v41-flash` to
   `SPOOF_FROM` in `model-name-proxy/.env`, then `docker compose --env-file .env up -d`
   (leader node). One-line change, same as every other switch.
-- **No netplan/NCCL decisions at switch time:** the four-PF netplan + shared
-  `nccl-patched-4pf` lib serve all three lanes. `verify-fabric-p2.sh` before every boot.
+- **No netplan/NCCL decisions at switch time:** the four-PF netplan + the
+  `nccl-patched-4pf` lib are host-level state; this recipe's `site/fabric/preflight.sh`
+  verifies both before every boot.
 - **Branches are per-lane** (node checkout follows whichever lane is serving; `main`
   never used on nodes).
 
@@ -175,5 +177,4 @@ this lane's rows are in "The lanes" table below it. Lane-specific:
 References: knapcio
 [repo README](https://github.com/knapcio/DeepSeek-V4.1-Flash-4x-DGX-Spark-TP4#readme)
 · [switchless-ring doc](https://github.com/knapcio/DeepSeek-V4.1-Flash-4x-DGX-Spark-TP4/blob/main/docs/switchless-ring.md)
-· sibling GLM recipes `glm-v53-flash-fp8-tp4-switchless/` +
-  `glm-v53-flash-nvfp4-tp4-switchless/` (fabric + NCCL provenance)
+· `site/fabric/REUSE.md` — provenance of this recipe's vendored fabric material

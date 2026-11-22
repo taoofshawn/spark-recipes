@@ -1,7 +1,7 @@
 ---
 name: update-recipe
 description: >-
-  Use when reviewing one of the two active 4x-switchless recipes (glm-v53-flash-fp8-tp4-switchless
+  Use when reviewing one of the three active 4x-switchless recipes (glm-v53-flash-fp8-tp4-switchless
   FP8, glm-v53-flash-nvfp4-tp4-switchless NVFP4) against its upstream sources for updates,
   fixes, or improvements — checking the NVIDIA forum, the upstream GitHub repos
   (knapcio, jnardiello, tonyd2wild), HF model revisions, and other sources — then
@@ -13,7 +13,7 @@ description: >-
 
 # Recipe Update (4x-switchless lanes)
 
-Research pass → evaluate → commit → push for one of the two active GLM-5.3-Flash lanes
+Research pass → evaluate → commit → push for one of the three active switchless recipes
 on the 4-node switchless ring. Find anything new in the upstream sources, decide what's
 worth adopting on THIS cluster, and land it on the working branch — while NEVER touching
 the running cluster.
@@ -24,7 +24,7 @@ This skill researches, evaluates, commits, and PUSHES recipe changes. It does NO
 the recipe up on the sparks, restart containers, or verify a live endpoint — that is
 `bring-up-spark-recipe`. Do not cross over: stop at "pushed".
 
-## The two active recipes and their upstreams
+## The three active recipes and their upstreams
 
 | recipe | upstream | pin (verify at review time) |
 |---|---|---|
@@ -34,8 +34,8 @@ the recipe up on the sparks, restart containers, or verify a live endpoint — t
 Sibling repos worth checking (the GLM serving family): `tonyd2wild/GLM-5.3-Flash-NVFP4-1M-KV-4x-DGX-Spark`,
 `tonyd2wild/GLM-5.3-Flash-NVFP4-DFlash2-2x-DGX-Spark`, plus kindlingai/eugr/technigma
 stacks for cross-stack ideas. Model checkpoints: `nvidia/GLM-5.3-Flash-NVFP4` (pinned
-`09b04e5e`), drafter `incoai/GLM-5.3-Flash-DFlash2` (pinned `bf582e4e`, **CC BY-NC-ND** —
-no derivative re-encodes). Check HF `lastModified`/siblings for new revisions.
+`da920bb`), drafter `incoai/GLM-5.3-Flash-DFlash2` (pinned `bf582e4e`, **CC BY-NC-ND** —
+no derivative re-encodes), `deepseek-ai/DeepSeek-V4.1-Flash-1017` (pinned `1bae0e10`). Check HF `lastModified`/siblings for new revisions.
 
 ## Review loop
 
@@ -55,7 +55,7 @@ no derivative re-encodes). Check HF `lastModified`/siblings for new revisions.
    serving profile. For the FP8 recipe, classify upstream changes against the site-mods
    list in its `VENDORED-AT.md` (site paths, the NCCL SHA re-pin, the gid-checker fix,
    the netplan P2 extension — re-apply on refresh).
-4. **Image/checkpoint pass:** both lanes build locally (`glm53-roce:v11-b58f34ea` from
+4. **Image/checkpoint pass:** every lane builds locally (`glm53-roce:v11-b58f34ea` from
    knapcio's `Dockerfile.roce`; the FP8 digest-pinned image per its build-record) — no
    Docker Hub tracking. HF checkpoint revisions per the table above.
 5. **Evaluate before adopting.** Every candidate must (a) apply to our pinned
@@ -73,7 +73,7 @@ no derivative re-encodes). Check HF `lastModified`/siblings for new revisions.
 
 ## Branch conventions
 
-Work happens on the per-lane working branch (`glm-v53-flash-nvfp4-4x-noswitch` — it
+Work happens on `main` via a topic branch (`glm-v53-flash-nvfp4-4x-noswitch` — it
 carries BOTH recipes since the 2026-10-10 reorg). Never commit to `main` directly;
 branch protection blocks it. Changes reach the nodes via git pull + the derived-file
-mirror steps in `LANE-SWITCHING.md`.
+and the recipe's own `site/fabric/` mirror steps.

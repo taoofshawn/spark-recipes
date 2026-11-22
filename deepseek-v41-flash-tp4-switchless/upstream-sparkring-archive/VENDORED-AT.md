@@ -57,8 +57,9 @@ preloading mechanism is untouched. Rationale:
 1. **Seamless switching** (the lane's premise): the GLM lanes' contract
    (`NCCL_SWITCHLESS_RING_ONLY=1`, `MERGE_NICS=0`, subnet-aware routing, extended IPv4
    GIDs, 4-PF HCA, MTU 9000) is already what sparkring's TP4 profile itself sets —
-   same HCA list, same GID 3, same flags. One netplan + one NCCL lib serve all three
-   lanes; `verify-fabric-p2.sh` remains the switch preflight.
+   same HCA list, same GID 3, same flags. One netplan + one NCCL lib serve every
+   lane; each recipe's own `preflight.sh` verifies them (this archive predates that
+   consolidation — historical wording kept).
 2. The donor extraction procedure (docker pull of a ~23 GB image + `docker cp`) is a
    provision-time cost; the four-PF lib is already staged on all four nodes.
 

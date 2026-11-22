@@ -1,11 +1,20 @@
 
 # collection of recipes and scripts for starting models on a 4-node dgx spark switchless ring
 
-- active lanes: `glm-v53-flash-fp8-tp4-switchless` (FP8) and `glm-v53-flash-nvfp4-tp4-switchless` (NVFP4) — switching: [LANE-SWITCHING.md](LANE-SWITCHING.md)
+- active lanes, each **self-contained** (its own fabric facts, netplan, NCCL build, host
+  bootstrap, preflight, from-zero runbook and `bin/start.sh`/`bin/stop.sh`):
+  - `glm-v53-flash-fp8-tp4-switchless` (FP8)
+  - `glm-v53-flash-nvfp4-tp4-switchless` (NVFP4)
+  - `deepseek-v41-flash-tp4-switchless` (DeepSeek-V4.1-Flash)
+- **any recipe directory may be deleted at any time** — the others keep working. Nothing
+  under a recipe reads a sibling recipe's files.
+- starting/stopping is per recipe: `cd <recipe> && ./bin/start.sh` (refuses while anything
+  else serves) and `./bin/stop.sh` (captures logs, then removes its containers).
 - everything else is archived under `.archived/` (2-node era); in-progress work on branches
 
 # links:
-- [lane switching runbook](LANE-SWITCHING.md): switching the GLM-5.3-Flash FP8/NVFP4 lanes on the 4-node switchless ring (start here for that task)
+- [model-name proxy](model-name-proxy/README.md): one stable client-facing name across every
+  recipe (a deliberate repo-root exception — it exists while there is more than one recipe)
 - [discussion forum](https://forums.developer.nvidia.com/c/accelerated-computing/dgx-spark-gb10/719): the source for most/all of this information
 - [dgx spark hardware](https://marketplace.nvidia.com/en-us/developer/dgx-spark/)
 - [connectx-7 cable](https://docs.nvidia.com/sync/latest/cluster-assistant.html#check-network-performance) : model `NJAAKK-N911`- interconnect 2 sparks

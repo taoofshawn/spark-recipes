@@ -21,9 +21,9 @@ set -euo pipefail
 #                    3..6; no wraparound). SITE EXTENSION (shawndo, 2026-10-10) for
 #                    the four-PF switchless NCCL contract, additive over the 2-PF
 #                    plan: the f-port addresses and FABRIC_TARGETS semantics are
-#                    unchanged, so the 2-PF transport keeps working. This is the
-#                    addressing the sibling NVFP4 lane's Phase E deployed (its
-#                    site/netplan/<node>/40-cx7.yaml is the reference content).
+#                    unchanged, so the 2-PF transport keeps working. The P2 addresses
+#                    are what that contract's listener requires (2 cable subnets x 2
+#                    PCI roots, full cross product).
 #   FABRIC_IFACES_BY_RANK  optional four-element override array.
 #   NETPLAN_RENDERER / NETPLAN_RENDERER_BY_RANK  homogeneous renderer / per-rank overrides.
 #

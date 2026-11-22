@@ -20,7 +20,7 @@ too slow, the fallback lane is the lossless8 conversion (see research.md §2 dec
 **Endpoint (after bring-up):** `http://10.69.43.170:8000/v1` — model name
 `glm-5.3-flash`, 1,048,576-token context, ~3.25M-token fp8 KV pool (20 GiB/rank pin →
 ~3.1× full-1M concurrency). No auth/TLS — trusted LAN only. GPU contention rule: the
-FP8 E29 stack must be down (`tp4ctl down` in the glm-v53-flash-fp8-tp4-switchless recipe)
+the other lane must be down (`./bin/stop.sh` in that lane's directory)
 before this lane goes up.
 
 ## Cluster map
@@ -58,21 +58,23 @@ drafter `bf582e4e`).
    `bash glm-v53-flash-nvfp4-tp4-switchless/site/materialize-weights.sh`
    — hardlinks the HF-cache snapshots into `~/.local/nvfp4-tp4/weights/` (zero copy,
    zero modification) and guarantees `chat_template.jinja` exists in the model dir
-   (start.sh requires it; falls back to the FP8 stack's zai template if the snapshot
-   lacks it).
-2. **NCCL + netplan staging (the highest-risk item):** this lane ships its own four-PF
-   NCCL build and fabric netplan (Phase E, `site/nccl-4pf/` + `site/netplan/<node>/`):
-   stage `~/.local/lib/nccl-patched-4pf/libnccl.so.2.30.7` (real file; SHA pinned in
-   `site/env.switchless` — the launcher's preflight enforces it) with an in-dir
-   `libnccl.so.2 → libnccl.so.2.30.7` symlink, and install the per-node netplan
-   (`sudo cp site/netplan/<node>/40-cx7.yaml /etc/netplan/40-cx7.yaml && sudo netplan
-   apply`). The netplan addresses BOTH PCIe views of every cable (f-port octet + 2 on the
-   P2 views) — additive over the FP8 plan, so the FP8 lane keeps working, but **never
-   re-deploy the FP8 recipe's 2-address netplan here** (it strips the P2 addresses).
+   (start.sh requires it).
+2. **NCCL + netplan staging (the highest-risk item):** this recipe ships its own four-PF
+   NCCL build and fabric netplan — `site/nccl-4pf/` and `site/netplan/<node>/`, both
+   rendered/verified from `site/fabric/cluster.env`:
+   stage `~/.local/lib/nccl-patched-4pf/libnccl.so.2.30.7` (real file; SHA
+   `8de68def…`, pinned as `NCCL_4PF_SHA256` in `site/fabric/cluster.env` — the
+   launcher's preflight enforces it) with an in-dir `libnccl.so.2 → libnccl.so.2.30.7`
+   symlink, and install the per-node netplan (`sudo cp site/netplan/<node>/40-cx7.yaml
+   /etc/netplan/40-cx7.yaml && sudo netplan apply`; `bash site/fabric/preflight.sh`
+   verifies it first). The netplan addresses BOTH PCIe views of every cable (f-port
+   octet + 2 on the P2 views), which is what the four-PF listener contract requires.
    All four PFs must carry QPs per rank at boot (`Connected all rings` + RouteFinal
-   lines). Rollback if a boot stalls in NCCL init: point `NCCL_HOST_DIR` back at
-   `~/.local/lib/nccl-patched` and re-apply the staged-transport mods documented in the
-   `upstream/scripts/transport.sh` comment (FP8-proven 2-PF wiring).
+   lines). **Rollback if a boot stalls in NCCL init:** this recipe vendors its own 2-PF
+   tree at `site/nccl-2pf/` — build and stage it to `~/.local/lib/nccl-patched`, point
+   `NCCL_HOST_DIR` there, and re-apply the staged-transport mods documented in the
+   `upstream/scripts/transport.sh` comment. The rollback is executable from this recipe
+   alone.
 3. **Image build (every node, from the upstream checkout):**
    `docker build -f Dockerfile.roce -t glm53-roce:v11-b58f34ea .` — minutes, no CUDA
    compile. Digest/base pins per upstream `docs/install.md`.
@@ -94,11 +96,11 @@ drafter `bf582e4e`).
    decision input: lane stays vs lossless8 revisit). Routine bring-ups update nothing —
    only anomalies (failed boots, NCCL WARNs, gate failures) get a changelog entry.
 
-## Switching between the FP8 and NVFP4 lanes
+## Switching to this lane from another
 
-> **Runbook: [`../../LANE-SWITCHING.md`](../../LANE-SWITCHING.md)** — the one-doc
-> procedure (preflight, both directions, verification, gotchas). The notes below are
-> the lane-specific background.
+> No runbook is needed: run that recipe's `./bin/stop.sh` there, then this recipe's
+> `site/fabric/preflight.sh` and `./bin/start.sh` here (the guard refuses while anything
+> else serves). The notes below are this lane's own background.
 
 GPU contention rule: only one lane serves at a time. The lanes were built to coexist
 without renames — switching is teardown + branch checkout:
@@ -112,11 +114,9 @@ without renames — switching is teardown + branch checkout:
   the legacy 2-PF build `~/.local/lib/nccl-patched/` (`afe5f486…`) is documented at
   `NCCL_IB_HCA` in its `cluster.env`, coupled: HCA + NCCL_DIR + EXTRA_DOCKER_ENV append).
   Keep both dirs staged; the fabric netplan (all 4 PCIe views addressed) serves both lanes.
-  Preflight before any switch:
-  `bash glm-v53-flash-fp8-tp4-switchless/noswitch-prep/scripts/verify-fabric-p2.sh` (read-only,
-  safe while serving).
-- **FP8 → NVFP4:** `tp4ctl down` in the FP8 recipe (`glm-v53-flash-fp8-tp4-switchless/upstream`)
-  on the head; confirm `glm53_fp8_dflash_tp4` is gone on all 4; on all 4 nodes
+  Preflight before any switch: `bash site/fabric/preflight.sh` (read-only, safe while serving).
+- **From another lane to this one:** run that lane's `./bin/stop.sh` there; this lane's
+  `./bin/start.sh` refuses until nothing else serves (`bin/guard.sh`, fail-closed). On all 4 nodes
   `cd ~/code/spark-recipes && git pull` (both lanes share this branch);
   cache ritual; `./start.sh serve` from this recipe's `upstream/`.
 - **NVFP4 → FP8:** `./start.sh stop` here (stops, preserves containers for inspection —
@@ -157,4 +157,4 @@ without renames — switching is teardown + branch checkout:
 References: upstream [README](https://github.com/knapcio/GLM-5.3-Flash-4x-DGX-Spark-TP4)
 · [docs/switchless.md](https://github.com/knapcio/GLM-5.3-Flash-4x-DGX-Spark-TP4/blob/main/docs/switchless.md)
 · [docs/install.md](https://github.com/knapcio/GLM-5.3-Flash-4x-DGX-Spark-TP4/blob/main/docs/install.md)
-· sibling FP8 recipe `glm-v53-flash-fp8-tp4-switchless/` (fabric + NCCL provenance)
+· [`site/fabric/REUSE.md`](site/fabric/REUSE.md) — provenance of the vendored fabric material

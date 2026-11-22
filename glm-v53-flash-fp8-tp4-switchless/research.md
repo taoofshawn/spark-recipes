@@ -197,6 +197,8 @@ All of `noswitch-prep/` is site-owned, not upstream-owned:
 - **2026-10-20 — External-survey pass: DeepSeek-V4.1 TP4 switchless recipes (owner
   request). Doc-only for this lane; no config change. The full survey record lives in
   `../../deepseek-v41-flash-tp4-switchless/research.md`, 2026-10-20 entry.**
+  *(Historical reference — as of 2026-11-21 this recipe no longer depends on a sibling
+  recipe's files; see the decoupling entry at the top of this changelog.)*
   - Applies-to-this-lane deltas vs the NVFP4 lane's 2026-10-20 entry:
     (a) the NCCL pinned-buffer shrink (`NCCL_BUFFSIZE=1MiB` etc., frees ~4.6 GiB/rank)
     is a better fit here than on the NVFP4 lane because `GPU_MEM_UTIL=0.85` is the
@@ -1056,3 +1058,41 @@ All of `noswitch-prep/` is site-owned, not upstream-owned:
   (detached checkout, committed at `9cd37a0`); created this research.md documenting
   the 4 local mods (§2), site-owned files (§3), and the update procedure (§4).
   Added `upstream/VENDORED-AT.md` recording the pin + mods.
+
+## Changelog
+
+- **2026-11-21 — Recipe decoupling (Phase 1, repo-only).** This lane now carries every
+  cluster-level asset it needs; nothing under this recipe reads a sibling recipe directory.
+  Added: `noswitch-prep/` (cluster.env facts with CONTRACT_DIGEST + both NCCL SHA pins,
+  vendored lib/renderer/bootstrap/deploy-host, the `/etc` + host-align set, committed
+  netplan for both files per node, `preflight.sh`, `REUSE.md`), `noswitch-prep/nccl-4pf/` build
+  tree now byte-identical to the other lanes', `verify-fabric-p2.sh` (cross-lane) is deleted; this lane's `noswitch-prep/preflight.sh`
+  replaces it and prints CONTRACT_DIGEST. `site/materialize-weights.sh` no longer falls back
+  to another lane's on-node `chat_template.jinja` (the pinned nvidia snapshot ships it).
+  No serving value, image, KV pin, boot order or transport setting changed.
+
+- **2026-11-21 — Phase 2 live run (this lane brought up twice, `bin/` only).** Round-trip
+  DeepSeek→FP8 and the reverse NVFP4→FP8 leg; no node-side config change, no tuning.
+  - Teardown rule verified on both legs: logs captured first (`logs/20261121T134827Z` head
+    341,853 lines / workers ~43.4k; `20261121T141115Z` head 57,657 / workers ~16.9k),
+    containers removed and verified absent, `dsv41-local-weights` kept.
+  - `/health` 200 after 1065 s (first leg; the pinned image had to be pulled — see below) and
+    759 s (second leg); served name `glm-5.3-flash`, ctx 262,144 as expected.
+  - Functional gates: chat gate "The capital of Italy is Rome."; `tool_choice:"required"` +
+    thinking on produced `get_weather {"city":"Tokyo"}` with reasoning preserved (the field
+    is `reasoning`, not `reasoning_content` — the gate check must read that key), engine
+    alive. Corruption probes `p23` and `p26b`: 40 Italian prompts, 0 invalid UTF-8,
+    0 U+FFFD, 0 repetition flags, 10/10 tool calls, 0 parse failures.
+  - 0 `NCCL WARN` on all four ranks on both legs.
+  - **Gate defect found:** the Phase-2 pass text asks for `Connected all rings` + `RouteFinal`
+    per rank, but this lane pins `-e NCCL_DEBUG=WARN`
+    (`upstream/scripts/launcher/launch-glm53-tp4.sh:571`), so those INFO lines can never
+    reach a log. Route evidence available without changing the env: the launch line's four
+    HCAs/GIDs per rank, plus RoCE `port_rcv_data`/`port_xmit_data` nonzero on all four PF
+    views on all four nodes — cumulative since boot, so it is not per-run proof. Reading
+    RouteFinal here needs an INFO-level run (the NVFP4 lane sets INFO and does print it).
+  - **Image was absent on all four nodes** (`ghcr.io/fujitsupolycom/sparkring-glm53-sparkcache@sha256:0d40…`);
+    build-record step 1 is the remedy — `docker pull` on each node, every node then reports
+    `IMAGE_ID sha256:5e32aaa1bbe3…`, matching the pin. First `./bin/start.sh` attempt failed
+    at the launch stage for this reason; retry after the pull succeeded.
+

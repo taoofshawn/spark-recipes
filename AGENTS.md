@@ -1,25 +1,54 @@
 # AGENTS.md
 
-Operational guide to this repository for agentic/automated contributors. **Scope
-(2026-10-10 reorg): only the two 4x-switchless GLM-5.3-Flash lanes are active.** All
-2-node recipes and their skills/docs knowledge are archived under `.archived/`
-(recipe dirs + `.archived/skills/` for the pre-cleanup skills and the full pre-cleanup
-AGENTS.md). Do not resurrect archived flows; this file describes the live cluster only.
+Operational guide to this repository for agentic/automated contributors. **Scope: three
+self-contained 4-node-switchless serving recipes are active.** All 2-node recipes and their
+skills/docs knowledge are archived under `.archived/`. Do not resurrect archived flows; this
+file describes the live cluster only.
 
 ## What this repository is
 
-Two self-contained serving lanes for **GLM-5.3-Flash (320B MoE)** on the **4-node DGX
-Spark (GB10) switchless ring**, both TP4 across all four nodes at DFlash2 speculative
-decoding:
+Three **discrete, independently operable** serving recipes on the **4-node DGX Spark (GB10)
+switchless ring**, each TP4 across all four nodes. Each recipe carries its own fabric facts,
+netplan generator + committed netplan, host bootstrap, `/etc` set, kernel/driver pins,
+four-PF NCCL build tree, preflight, from-zero runbook and `bin/{start,stop}.sh`.
 
 | recipe | weights | context / KV | control | upstream |
 |---|---|---|---|---|
-| `glm-v53-flash-nvfp4-tp4-switchless` | stock `nvidia/GLM-5.3-Flash-NVFP4` @ `09b04e5e` (zero weight mod — the lane's premise) | 1M / 20 GiB/rank pin (~3.25M tokens) | `./start.sh` | vendored knapcio `770d115` |
-| `glm-v53-flash-fp8-tp4-switchless` | zai FP8 + the E36 conversion stack | 262K / 14 GiB pool (1,194,033 tokens) | `tp4ctl` | pinned jnardiello `ed365a6` |
+| `glm-v53-flash-nvfp4-tp4-switchless` | stock `nvidia/GLM-5.3-Flash-NVFP4` @ `da920bb` (zero weight mod — the lane's premise) | 1M / 20 GiB/rank pin (~3.25M tokens) | `./bin/start.sh` → `upstream/start.sh serve` | vendored knapcio `770d115` |
+| `glm-v53-flash-fp8-tp4-switchless` | zai FP8 + the E36 conversion stack | 262K / 14 GiB pool (1,194,033 tokens) | `./bin/start.sh` → `upstream/scripts/tp4ctl up` | pinned jnardiello `ed365a6` (`080fe09` in the README; reconcile) |
+| `deepseek-v41-flash-tp4-switchless` | stock `deepseek-ai/DeepSeek-V4.1-Flash-1017` @ `1bae0e10` (zero weight mod, MIT) | 1M / free-memory-sized pool | `./bin/start.sh` → `site/start-cluster.sh serve` | vendored knapcio `540bf07` (v2.6.4) |
 
-Both serve `glm-5.3-flash` on `:8000` behind the model-name proxy; clients never
-change at switch time. **Switch procedure: [`LANE-SWITCHING.md`](LANE-SWITCHING.md)**
-— the one-doc runbook (preflight, both directions, verification, gotchas).
+The two GLM recipes serve `glm-5.3-flash`; DeepSeek serves `deepseek-v41-flash`. All on
+`:8000` behind the model-name proxy, so clients keep one name across recipes.
+
+**There is no lane-switching document, and none is needed.** The one precondition that cannot
+be derived — "only one lane at a time" — is executable: each recipe's `bin/start.sh` refuses
+while anything else serves (`bin/guard.sh`, fail-closed) and `bin/stop.sh` captures logs then
+removes that recipe's own containers. Each recipe's README carries its start/stop/gates.
+
+## Deletion rule (the point of the layout)
+
+**Any recipe directory may be deleted at any time; the others must keep working.** Nothing
+under a recipe reads a sibling recipe's files. If you delete one, remove its rows from this
+file, `README.md`, the skills, and the proxy's `SPOOF_FROM` in the same commit. The
+`model-name-proxy/` is the only deliberate repo-root exception — it exists precisely because
+there is more than one recipe.
+
+## Switching lanes: the one manual step
+
+Stopping one recipe and starting another is `bin/stop.sh` then `bin/start.sh` — the start
+path refuses while anything else serves, so there is nothing else to remember. **The proxy is
+the exception:** `model-name-proxy/.env`'s `BACKEND_MODEL` is the value the proxy rewrites
+every request's `"model"` to, so it must track the serving recipe.
+
+- DeepSeek ↔ GLM: flip `BACKEND_MODEL` (`deepseek-v41-flash` ↔ `glm-5.3-flash`) and recreate
+  the proxy container, then send one chat request to confirm it round-trips.
+- GLM ↔ GLM (FP8 ↔ NVFP4): no edit — both serve `glm-5.3-flash`.
+
+A stale `BACKEND_MODEL` does **not** look like a proxy fault: `/v1/models` still reports the
+new lane correctly (with its context length) while **every chat completion 404s**
+("The model <stale> does not exist"). Observed live 2026-11-21; that is why the round-trip
+check, not `/v1/models`, is the verification.
 
 ## Cluster topology (four fixed nodes, switchless ring)
 
@@ -32,9 +61,8 @@ change at switch time. **Switch procedure: [`LANE-SWITCHING.md`](LANE-SWITCHING.
 
 **2026-10-19 move:** the cluster is now on the wireless mgmt NIC `wlP9s9`
 (10.69.43.0/16) — the wired `enP7s7` is DOWN at the new location. The QSFP56 fabric
-(10.10.x) is unaffected. Site configs pin `IPS=10.69.43.x` / `FABRIC_IFACE=wlP9s9`
-(NVFP4 `site/env.switchless`; FP8 mirrors still pinned to 10.69.42.x — update before
-its next use).
+(10.10.x) is unaffected. Every recipe pins `MGMT_IPS=10.69.43.x` / `MGMT_IF=wlP9s9` in its
+own facts file (`<recipe>/site/fabric/cluster.env` or `noswitch-prep/cluster.env`).
 
 - **Fabric:** 4 QSFP56 cables in a switchless ring rank0→1→2→3→0; each cable presents
   **2 PFs per PCIe root** (`enp1s0f0np0`/`enp1s0f1np1` = the f ports,
@@ -52,18 +80,20 @@ its next use).
   the FP8 lane's rollback artifact — keep both dirs, never swap in place (the four-PF
   lib hard-rejects merged vdevs and vice versa).
 - **SSH** to nodes via DNS hostnames from the workstation (`eve`); never fabric IPs.
-- **GPU contention rule:** both lanes use all reserved GPUs. Tear down the serving
-  lane before starting the other. One lane at a time.
+- **GPU contention rule:** every recipe uses all reserved GPUs and binds `:8000`. One lane at
+  a time — enforced by each recipe's `bin/start.sh` (see the deletion rule above); do not
+  start a second lane by hand.
 
 ## Where the knowledge lives
 
 | doc | contents |
 |---|---|
-| `LANE-SWITCHING.md` | the switch runbook — start here for any bring-up/switch task |
-| `<recipe>/README.md` | that lane's active-running ops doc (invariants, boot markers, tuning rows) |
-| `<recipe>/research.md` | audit trail: provenance, dated changelog, watchlist, measured receipts |
+| `<recipe>/README.md` | that recipe's ops doc: start/stop via `bin/`, invariants, gates |
+| `<recipe>/research.md` | audit trail: provenance, dated changelog, watchlist, receipts |
+| `<recipe>/site/fabric/` (FP8: `noswitch-prep/`) | fabric facts, netplan + committed netplan, vendored host bootstrap, preflight, `REUSE.md` |
+| `<recipe>/site/FROM-ZERO.md` (or upstream `docs/install-from-zero.md`) | rebuild that recipe from wiped nodes |
 | `<recipe>/upstream/VENDORED-AT.md` | upstream pin + every site modification and its re-apply recipe |
-| `<recipe>/upstream/docs/switchless.md` + `scripts/check_switchless_nccl.py` | the four-PF transport contract and validator |
+| `<recipe>/site/fabric/check_switchless_nccl.py` (FP8: `noswitch-prep/`) | NCCL artifact identity check |
 
 ## Upstream sources (for update passes)
 
@@ -78,12 +108,13 @@ its next use).
   `tonyd2wild/GLM-5.3-Flash-NVFP4-1M-KV-4x-DGX-Spark` + his 2x sibling (serving
   family; his current default is knapcio's stack), kindlingai / eugr / technigma
   stacks for cross-stack ideas.
-- **HF checkpoints:** `nvidia/GLM-5.3-Flash-NVFP4` (pin `09b04e5e` — any update must
-  re-verify the zero-mod premise), drafter `incoai/GLM-5.3-Flash-DFlash2` (pin
-  `bf582e4e`, **CC BY-NC-ND 4.0** — no derivative re-encodes). Compare
-  `lastModified`/`siblings` at review time.
-- **Images:** both lanes build locally (`glm53-roce:v11-b58f34ea` from knapcio's
-  `Dockerfile.roce`; the FP8 digest-pinned image per its `noswitch-prep/` records) —
+- **HF checkpoints:** `nvidia/GLM-5.3-Flash-NVFP4` (pin `da920bb` — any update must re-verify
+  the zero-mod premise), drafter `incoai/GLM-5.3-Flash-DFlash2` (pin `bf582e4e`,
+  **CC BY-NC-ND 4.0** — no derivative re-encodes), `deepseek-ai/DeepSeek-V4.1-Flash-1017`
+  (pin `1bae0e10`). Compare `lastModified`/`siblings` at review time.
+- **Images:** every lane builds locally (`glm53-roce:v11-b58f34ea` from knapcio's
+  `Dockerfile.roce`; the FP8 digest-pinned image per its `noswitch-prep/` records;
+  DeepSeek's `dsv41-4x-spark:canary-roce-miaai` from a digest-pinned base) —
   no registry tracking. An image bump cascades into pins, mount paths, and gates.
 - **Adoption gate:** every candidate must (a) apply to the pinned image/revision,
   (b) not contradict the lane's validated invariants, (c) carry a measured claim.
@@ -126,15 +157,38 @@ its next use).
 - Shared: port 8000, `glm-5.3-flash`, offline serving, four-PF NCCL contract,
   `FABRIC_P2_VIEWS=1`, all-ranks teardown.
 
+## Teardown rule (repo-wide — every recipe, including future ones)
+
+**Stopping a lane removes its containers.** Every recipe's `bin/stop.sh` must:
+
+1. **capture `docker logs` first** for every rank into a lane-owned file (the container is
+   the only place NVFP4 keeps its log — removal destroys it, so this step is not optional);
+2. delegate to the recipe's own stop/teardown;
+3. **remove** the recipe's containers (`docker rm -f` its own names only) and verify absence;
+4. `--keep-containers` is the explicit, single-inspection opt-out.
+
+Never leave stopped containers behind: a preserved container blocks the next `serve` on lanes
+whose preflight refuses existing names (NVFP4), and it makes "delete any recipe dir at any time"
+false in practice. Warm JIT caches are unaffected — they live in host bind-mounts
+(`~/.local/nvfp4-tp4/cache`, `~/.cache/tp4-vllm-cache`), not the container layer.
+
+New recipes inherit this rule; do not copy the upstream "stop but preserve" behaviour.
+
 ## Failure modes (4x; each cost a boot)
 
 | symptom | cause / fix |
 |---|---|
-| NCCL init hangs / QP RTR timeout | transport wiring — run `verify-fabric-p2.sh`; boot env must show `MERGE_NICS=0` + `SWITCHLESS_RING_ONLY=1` + `EXTENDED_IPV4_GIDS=1` + 4-PF HCA |
+| NCCL init hangs / QP RTR timeout | transport wiring — run the target recipe's `preflight.sh`; boot env must show `MERGE_NICS=0` + `SWITCHLESS_RING_ONLY=1` + `EXTENDED_IPV4_GIDS=1` + 4-PF HCA |
 | `wrong listener count` at ncclCommInitRank | four-PF lib without `NCCL_IB_EXTENDED_IPV4_GIDS=1` |
 | FP8 launcher GID preflight rejects a P2 HCA | stale deployed config/gid-checker allowlist (site fix #7) — redeploy from the head |
 | FP8 boots old config after a repo change | tp4ctl reads the DEPLOYED `~/.local/tp4/cluster.env` — `deploy.sh` from the head |
-| container name/overlay path refused | stopped containers from a previous `stop` not removed |
+| container name/overlay path refused | a container from a previous run still exists — `bin/stop.sh` captures logs and **removes** this recipe's containers, so re-run it, then start |
+| two lanes "running" at once | impossible by construction — each recipe's `bin/start.sh` refuses while anything else serves (`bin/guard.sh`, fail-closed). If you see it, someone bypassed the guard; stop both and use `bin/start.sh` |
+| DeepSeek stop leaves a hung cluster | stop order matters: **rank 0 first** (`start-cluster.sh stop` does this). A worker that starts while an old head still listens on the rendezvous port joins the old head and hangs |
+| DeepSeek refuses to start; `doctor` reports `MemAvailable` low | memory fragmentation on that rank after long uptime — **reboot that rank**, not the lane |
+| DeepSeek loses Engram shards after a checkpoint change | packed shards are checkpoint-bound — re-pack per rank (`start-cluster.sh pack`); the loader verifies geometry, not identity |
+| a live recipe directory rename pulls mounts out from under a running engine | do renames with the lane **DOWN**: tear down → pull → preflight → bring up |
+| re-deploying an old 2-address netplan | strips the P2 addresses and breaks the four-PF listener contract; your recipe's committed netplan always has both views |
 | `DEVSELECT_BUILD_FAILED` ×1 at NVFP4 boot (EVERY rank, ~20:22:30 boot-moment) | RESOLVED 2026-10-11: upstream platform limitation — stream-captured conditional-node CUDA-graph parents reject NCCL-collective child graphs at `capture_end` (`cudaErrorInvalidValue`; reproducible with stock NCCL, mode/registration-independent). Device-side select NEVER arms on this driver stack; host fallback is the validated baseline. Zero action — expected boot line. Re-verify only if the kernel/driver pin changes (nvfp4 research.md 2026-10-11 entry). |
 | `tool_choice:"required"` + thinking-on killed the engine (grammar-bitmask assert) | FIXED 2026-10-10: the E35 runner-k worker-side draft trim desynced the grammar bitmask (8 rows) from the trimmed logit mapping (4) — grammar steps no longer trim + the worker re-slices the bitmask; thinking-on + required is now a supported combination (fp8 research.md 2026-10-10 entry) |
 | ring decode far below switched fleets | expected — c1 is latency-bound; compare against the lane's own bench history only |
@@ -142,9 +196,10 @@ its next use).
 
 ## Agents: do / don't
 
-- **Do** read `LANE-SWITCHING.md` before any bring-up/switch, and the lane's README +
-  latest research.md entries before touching it.
-- **Do** run `verify-fabric-p2.sh` before every switch; record anomalies (failed/retried
+- **Do** read the target recipe's README (start/stop, gates) + its latest research.md
+  entries before touching it. There is no switch runbook — `bin/start.sh` enforces the
+  one-lane-at-a-time precondition.
+- **Do** run the target recipe's `preflight.sh` before every switch; record anomalies (failed/retried
   boots, NCCL WARNs, gate failures, config changes, doc fixes) in research.md — a clean
   switch with no surprises updates nothing.
 - **Do** keep site mods documented in VENDORED-AT.md with re-apply recipes; keep

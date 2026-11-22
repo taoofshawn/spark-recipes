@@ -26,7 +26,9 @@ set -euo pipefail
 REPO_SITE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # <repo>/deepseek-v41-flash-tp4-switchless/site
 LANE_DIR="$(cd "$REPO_SITE_DIR/.." && pwd)"
 REPO="$(cd "$LANE_DIR/.." && pwd)"
-UPSTREAM="deepseek-v41-flash-tp4-switchless/upstream"
+# Derived from this script's own location, never a hardcoded directory name, so the
+# recipe works under any checkout path and keeps no self-referential coupling.
+UPSTREAM="$(basename "$LANE_DIR")/upstream"
 COMMIT="${1:-HEAD}"
 
 STACK="$HOME/.local/ds41f-miaai/stack"

@@ -76,7 +76,8 @@ Non-negotiables for any new lane:
   revisions on ALL FOUR nodes (`site/materialize-weights.sh` pattern — hardlink
   snapshots; HF snapshot symlinks break inside container mounts).
 - **`HF_HUB_OFFLINE=1`/`TRANSFORMERS_OFFLINE=1`** semantics: no runtime downloads.
-- **LANE-SWITCHING.md integration**: distinct container names + overlay roots from the
+- **Control-surface integration**: a new recipe ships `bin/{start,stop}.sh` + a facts file,
+  with distinct container names + overlay roots from the
   existing lanes; add the new lane's column to that runbook.
 - **GPU contention**: the new lane must document the teardown requirement for the
   others.
@@ -93,7 +94,7 @@ Check for collisions; record alternatives in research.md.
 `main` = stable only; direct pushes are blocked. The per-lane working branch carries
 the active recipes — branch from it:
 
-    git checkout glm-v53-flash-nvfp4-4x-noswitch && git pull
+    git checkout main && git pull
     git checkout -b adopt-<recipe-name>
     mkdir <recipe-name>
 

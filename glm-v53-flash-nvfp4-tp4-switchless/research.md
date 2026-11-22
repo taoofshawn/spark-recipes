@@ -169,10 +169,24 @@ changes). §5 never carried it separately, so no row here.
 
 ## Changelog
 
+- **2026-11-21 — Recipe decoupling (Phase 1, repo-only).** This lane now carries every
+  cluster-level asset it needs; nothing under this recipe reads a sibling recipe directory.
+  Added: `site/fabric/` (cluster.env facts with CONTRACT_DIGEST + both NCCL SHA pins,
+  vendored lib/renderer/bootstrap/deploy-host, the `/etc` + host-align set, committed
+  netplan for both files per node, `preflight.sh`, `REUSE.md`), `site/nccl-4pf/` build
+  tree now byte-identical to the other lanes', and `site/nccl-2pf/` — the rollback that
+  used to name another recipe's `~/.local/lib/nccl-patched` is now executable from here.
+  `verify-fabric-p2.sh` (cross-lane) is deleted; this lane's `site/fabric/preflight.sh`
+  replaces it and prints CONTRACT_DIGEST. `site/materialize-weights.sh` no longer falls back
+  to another lane's on-node `chat_template.jinja` (the pinned nvidia snapshot ships it).
+  No serving value, image, KV pin, boot order or transport setting changed.
+
 - **2026-10-20 — External-survey pass: DeepSeek-V4.1 TP4 switchless recipes (owner
   request). Doc-only for this lane; no config change. The full survey record —
   per-repo verdicts, all forum threads, engine-comparison numbers — lives in
   `../../deepseek-v41-flash-tp4-switchless/research.md`, 2026-10-20 entry.**
+  *(Historical reference — as of 2026-11-21 this recipe no longer depends on a sibling
+  recipe's files; see the decoupling entry at the top of this changelog.)*
   - GLM-relevant deltas from that survey:
     - Engine-switch question answered NO: knapcio already measured SGLang-vs-vLLM GLM
       TP4 head-to-head (vendored launcher in THIS repo at `upstream/docs/sglang/`,
@@ -924,3 +938,32 @@ changes). §5 never carried it separately, so no row here.
 - **2026-09-29** — Recipe created: vendored knapcio `770d115`, site env + zero-mod
   profile + weight materialization script; decisions 1–5 recorded above. Uncommitted,
   awaiting owner review.
+
+- **2026-11-21 — Phase 2 live run (FP8→NVFP4, then the reverse DeepSeek→NVFP4 leg).** `bin/`
+  only; no tuning, no throughput run.
+  - `/health` 200 after 180 s on both legs (warm JIT caches), name `glm-5.3-flash`,
+    ctx 1,048,576 as expected.
+  - Route lines are readable on this lane because it launches NCCL at INFO
+    (`NCCL_DEBUG=INFO` + `NCCL_DEBUG_SUBSYS=INIT,NET`) — the FP8 lane pins WARN and cannot
+    print them. `Connected all rings` present on every rank; RouteFinal QPs on all four PF
+    views per rank, in view order f0/f1/P2f0/P2f1 — leg 1: r0 4/4/2/3, r1 3/4/2/4,
+    r2 4/4/2/2, r3 4/4/2/3; leg 2: r0 4/4/3/2, r1 4/4/3/2, r2 4/4/2/3, r3 4/4/2/4.
+    0 `NCCL WARN` per rank on both legs.
+  - U+FFFD probe: 0 on both emoji/CJK prompts (T=0, thinking off). **Gate has no
+    implementation inside this recipe** — the README names the probe but the lane ships no
+    script; the only copy lives in the FP8 tree, which contradicts the deletion rule. Ran an
+    inline stdlib counter against the endpoint instead. Either vendor a probe into this lane
+    or reword the README gate as "any U+FFFD counter".
+  - `prefix_scan.py` (`run`, c8, T=0.8, seed 7, 2998 records, P≈97.4k): run 1 `p24` PASS —
+    degenerate 0, errors 0, false-anomaly 0, drift `cold_cold 0.0443 / cold_warm 0.0326` vs
+    limit 0.0664, no warm-without-hit. Warmed re-run `p24-warm` **FAILED** the relative test:
+    `warm incorrect 7 > cold 4 + 2`. The same single record was misquoted in both runs
+    (`Record 02973: HXJTN (truth HCNPM)`), so this is not the documented cold-boot transient —
+    it is sampling variance on a small sample, and run 1's pass was the lucky draw. Recorded,
+    not chased; no `--strict` was used either time.
+  - Env materialization fired as designed: `[start] refreshed upstream/.env from
+    site/env.switchless (was stale)` — the head's pre-existing `.env` differed from the
+    committed site env, which is exactly the case commit `e07a8c5` exists for.
+  - Exec-bit defect: `./preflight.sh` and `./bin/*.sh` were committed `100644`, so the
+    documented `./bin/stop.sh` failed with `Permission denied` on a fresh checkout. Fixed in
+    `6d84e8f` (bin) and `4d3dc3c` (site entry points).

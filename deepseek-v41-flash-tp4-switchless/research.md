@@ -160,6 +160,18 @@ packed shards, profiler-estimate off.
 
 ## Changelog
 
+- **2026-11-21 — Recipe decoupling (Phase 1, repo-only).** This lane now carries every
+  cluster-level asset it needs; nothing under this recipe reads a sibling recipe directory.
+  Added: `site/fabric/` (cluster.env facts with CONTRACT_DIGEST + both NCCL SHA pins,
+  vendored lib/renderer/bootstrap/deploy-host, the `/etc` + host-align set, committed
+  netplan for both files per node, `preflight.sh`, `REUSE.md`), `site/nccl-4pf/` build
+  tree now byte-identical to the other lanes', and `site/nccl-2pf/` — the rollback that
+  used to name another recipe's `~/.local/lib/nccl-patched` is now executable from here.
+  `verify-fabric-p2.sh` (cross-lane) is deleted; this lane's `site/fabric/preflight.sh`
+  replaces it and prints CONTRACT_DIGEST. `site/materialize-weights.sh` no longer falls back
+  to another lane's on-node `chat_template.jinja` (the pinned nvidia snapshot ships it).
+  No serving value, image, KV pin, boot order or transport setting changed.
+
 ### 2026-11-08 (latest) — repro round 2: client-shape variants (a)/(b)/(c) all CLEAN; optional gates sealed; lane self-restored
 
 Follow-up to the hour-02 verdict: three controlled variants testing whether any
@@ -1710,3 +1722,54 @@ launch the prefill. Both the "does it fire" probe and the A/B above do that.
   no downloads performed by the adoption session.
 - Open: first bring-up pending (README "Bring-up"); receipts in §5 are upstream's,
   site numbers start accruing at bring-up.
+
+- **2026-11-21 — Phase 2 live run + the NCCL rebuild drill (D7).** Lane brought up twice
+  (`bin/stop.sh` → `bin/start.sh` only, no node-side config change).
+  - `/health` 200 after 245 s and 194 s; served name `deepseek-v41-flash`, ctx 1,048,576.
+    Stop order verified on both legs: rank 0 first via `start-cluster.sh stop`, workers after,
+    logs captured before removal (`logs/…` head 341,853 / 248,298 lines, workers ~43.4k),
+    containers removed and verified absent, `dsv41-local-weights` kept. Cosmetic: the stop
+    path prints Docker's `--time deprecated, use -t` notice.
+  - Live container env carries the whole contract: `NCCL_SWITCHLESS_RING_ONLY=1`,
+    `NCCL_IB_MERGE_NICS=0`, `NCCL_IB_EXTENDED_IPV4_GIDS=1`,
+    `NCCL_IB_PRESERVE_PCI_DOMAIN=1`, four-PF `NCCL_IB_HCA`. Encoding tag confirmed — swan tag
+    `00505fe850b7` (`so_sha256 53035a8c…`), no fallback path taken.
+  - Gate receipts: `DSV41_SWA_THIN installed (mode=all)` + first-request receipt
+    `chunk_steps=0 prompt_steps=1 demoted=0 errors=0`; `DSV41_SWA_CONE installed` scheduler
+    `N=8192 min_save=8192` and backend `N=8192 min_save=8192 test=False`;
+    `DSV41_DECODE_YIELD armed: share=33%`; SpecDecoding acceptance len 2.11–3.95 (> 1),
+    verified-share 0.67–0.77; `max_total_num_tokens=3,462,912`, `DSV4 pool sizes: full=3462912
+    swa=225024 c4=865728 c128=27054 c4_state=28128 c128_state=0`.
+  - **Anomaly:** the doctor prints the "listener GID publication is capped at 2 / only
+    rocep1s0f0 and rocep1s0f1 can be selected" warning block on every boot even though
+    `NCCL_IB_EXTENDED_IPV4_GIDS=1` and the four-PF lib is in use — the warning contradicts
+    the run it is describing. Harmless but misleading; worth a wording fix in the doctor
+    (site fix #7 area), not a transport change.
+  - **P2-9, the open evidence gap, now verified in substance** on spark-6d14 with its lane
+    down, built from that node's own checkout into a fresh DEST (`$HOME/nccl-4pf-drill`):
+    `symbols=165`, `size=61,426,528` — byte-identical size to the pinned lib — structure check
+    (checker piped over stdin, nothing copied) exit 0 against its own hash, in-dir symlink
+    present after the explicit staging step. Its hash is `410cf9a1…`, **not** `8de68def…`:
+    so D7's claim holds — rebuild is functionally identical but not bit-reproducible, and the
+    SHA must stay a reported fact with the warning-based check, never a hard gate. Preflight on
+    that node printed WARN-only for the diff and still `ALL CHECKS PASS`, digest unchanged.
+    Decision: **revert** — the other three nodes still run the October build, so re-pinning
+    would leave three permanent warnings. Node back to `8de68def…`, `.bak` and scratch removed,
+    clean boot (`/health` 200 in 194 s, no wrong-listener-count error).
+  - **Two defects the drill caught:** (a) `~/nccl-4pf-build` on spark-6d14 was the October
+    build dir — a shallow clone whose *index* still carries the applied patches, so
+    `git write-tree` returns SITE_TREE and the base-tree provenance check fails; run the
+    drill in a fresh DEST (note added to all three byte-identical copies). Its built lib
+    hashes to `8de68def…`, confirming the staged libs came from that build. (b) `build-4pf.sh`
+    headers still said "scp'd whole to `$DEST/patches`" after commit `5eb4ded` removed scp;
+    corrected to "from the node's own checkout".
+  - **P2-8** on spark-6d14: `netplan try --timeout 120` from the committed file applied and
+    reverted cleanly, all four PF views + `wlP9s9` still up with the committed addresses, then
+    that lane's preflight `ALL CHECKS PASS` at the new tip. Note the node also carries a
+    leftover `/etc/netplan/40-cx7.yaml.bak-phaseE` (not part of the committed set).
+  - **Proxy rule corrected:** `BACKEND_MODEL` is what the proxy rewrites the model field to,
+    so any lane change where the served name differs from it needs a flip + recreate — not
+    only DeepSeek. With the proxy still on `deepseek-v41-flash` while a GLM lane served,
+    `/v1/models` reported the right context but every chat request 404'd (`The model
+    deepseek-v41-flash does not exist`). Flipped both ways during the run (GLM → `d3c9e59`,
+    DeepSeek → `6a5279b`) and verified a request round-trips on each; cluster left on this lane.

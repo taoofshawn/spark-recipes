@@ -225,8 +225,9 @@ OOM (`NV_ERR_NO_MEMORY`), or a rank container exiting while others stay up.
 
 ## Invariants — do not break
 
-> Switching to/from the NVFP4 lane? **Runbook: [`../LANE-SWITCHING.md`](../LANE-SWITCHING.md)**
-> (preflight, both directions, verification, gotchas).
+> Switching lanes? No runbook: stop the other recipe with **its** `./bin/stop.sh`, run
+> **this** recipe's `noswitch-prep/preflight.sh`, then `./bin/start.sh` here — it refuses
+> while anything else is serving. Verify with the gates below.
 
 - **One model at a time.** All recipes use every reserved GPU; run `tp4ctl down`
   before starting anything else.
@@ -247,10 +248,10 @@ OOM (`NV_ERR_NO_MEMORY`), or a rank container exiting while others stay up.
   four-PF `NCCL_IB_HCA` — see `cluster.env`). The legacy 2-PF SparkRing build
   `~/.local/lib/nccl-patched` (`afe5f486…`) stays staged as THIS lane's rollback artifact
   (the coupled rollback is documented at `NCCL_IB_HCA` in `cluster.env`). Keep both dirs;
-  never merge or swap them. **Preflight both lanes' fabric state before any bring-up or
-  switch:** `bash glm-v53-flash-fp8-tp4-switchless/noswitch-prep/scripts/verify-fabric-p2.sh`
-  (read-only, safe while serving — checks live netplan vs generated, all 16 interface
-  addresses, the 16-ping two-view mesh, and both NCCL staging SHAs).
+  never merge or swap them. **Preflight the fabric before any bring-up or switch:**
+  `bash noswitch-prep/preflight.sh` (read-only, safe while serving — checks the committed
+  netplan against the generator and against the live host, every fabric address, the ring
+  ping mesh, both NCCL staging SHAs, the kernel/driver pins, and prints CONTRACT_DIGEST).
 - **Measured knobs are not shared tuning knobs**: `GPU_MEM_UTIL=0.85`, the 16 GiB KV
   pool (`--kv-cache-memory-bytes`), `MAX_NUM_SEQS=6`, KV dtype, backend flags, spec
   schedule (k=7/3). Don't tune them casually; every one has a measured baseline and a
@@ -280,6 +281,41 @@ OOM (`NV_ERR_NO_MEMORY`), or a rank container exiting while others stay up.
 - IOMMU passthrough is active (`iommu.passthrough=1` in the kernel cmdline).
 - Autostart: rank 0's `tp4-autostart.service` launches the whole cluster at boot —
   after a rank-0 reboot just wait; don't double-start with `up`.
+
+## Cluster fabric (four-PF) — the recipe-local path
+
+Everything needed to provision and verify the fabric from **this directory alone** now lives
+here; upstream's `docs/install-from-zero.md` covers the serving stack, this covers the host.
+Run in this order:
+
+1. **Facts + verify** — `noswitch-prep/cluster.env` is the source of truth (topology, ring
+   peers, NCCL SHA pins, `CONTRACT_DIGEST`). Generated files are derived from it; never
+   hand-edit them. **First command on a fresh checkout: `bash noswitch-prep/preflight.sh`.**
+   It materializes the gitignored `upstream/cluster.env` mirror from these facts (declared
+   as `DERIVED_MIRROR_REL`), then verifies the fabric. Run it before the renderer, since
+   the renderer is an upstream script that reads that mirror.
+2. **Netplan** — committed expectation in `noswitch-prep/netplan/<node>/` (both
+   `40-cx7.yaml` and `tp4-fabric-iptables.env` per node). After preflight:
+   `cd upstream && bash scripts/render-netplan.sh --check --out ../noswitch-prep/netplan`.
+3. **Host provisioning** — this lane keeps upstream's own
+   `upstream/scripts/{bootstrap-node,deploy-host}.sh` for `/etc`, sudoers, ssh mesh, grub and
+   the kernel pins (`upstream/scripts/node/bootstrap/versions.env`); the host-align helpers
+   are `noswitch-prep/scripts/{kernel-align-fresh,hold-existing,driver-align-173,docker-log-rotation,verify-hostkeys}.sh`.
+4. **NCCL build** — `noswitch-prep/nccl-4pf/build-4pf.sh` (byte-identical to the other lanes')
+   rebuilds the four-PF lib from pinned patches; run it **on a node, from this checkout** and
+   then **stage the result yourself** (`install` the `.so` into
+   `~/.local/lib/nccl-patched-4pf/libnccl.so.2.30.7` + the in-dir `libnccl.so.2` symlink) —
+   the build prints the SHA but does not install. The reference artifact is `8de68def…`; a
+   rebuild will NOT reproduce that hash (the build is not bit-reproducible), so judge it by
+   `symbols=165`, size ≈ 61.4 MB and the structure check, and re-pin `NCCL_4PF_SHA256` in
+   every recipe's facts if you accept it. Full procedure: `nvfp4/site/FROM-ZERO.md` §6.
+   This lane's 2-PF rollback build stays at `upstream/scripts/node/nccl/` (`afe5f486…`).
+5. **Verify** — `bash noswitch-prep/preflight.sh` → `ALL CHECKS PASS`: committed netplan vs
+   generator vs live host, every fabric address, the ring ping mesh, both NCCL staging SHAs,
+   kernel/driver pins, docker/rdma/infiniband, and `CONTRACT_DIGEST`.
+
+Start and stop with `./bin/start.sh` / `./bin/stop.sh`. The start path refuses while any other
+lane is running (fail-closed); the stop path captures logs then removes this lane's containers.
 
 ## When something's wrong
 

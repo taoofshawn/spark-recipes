@@ -1,0 +1,178 @@
+# Single-node and switchless deployments (one to four Sparks)
+
+The deployment tools accept one to four Sparks without a switch (`one GPU and one TP rank per node`), all as shapes of one recipe,
+[config/cluster.json](../config/cluster.json): `tp1` (single-node `local` executor, `262,144` context, `4` sequences, `8.00 GiB` KV), `tp2-direct` (two Sparks cabled directly over ConnectX-7, `262,144` context, `4` sequences, `8.00 GiB` KV, using the zero-copy `io_uring` expert slot cache and RM carve-out), `tp3-triangle-4k` (stock `4 KiB` pages without Memory Saver, `262,144` context, `8` sequences, `2.20 GiB` KV), `tp3-triangle` (`1,048,576` context, `8` sequences, `4.90625 GiB` KV), and `tp4-ring` for the four-node ring (`1,048,576` context, `32` sequences, `16.50 GiB` KV), each with the TileLang kernel family and sparknet's
+one-shot collectives ([r6 record](../experiments/2026-10-05-tilelang-r6/README.md)).
+The site names its cabling with `bin/spark site shape NAME --apply`. The
+`tp4-ring` shape reads the site's ring map from `config/nodes-ring4.local.json`
+([config/examples/nodes-ring4.json](../config/examples/nodes-ring4.json)); `tp2-direct` reads `config/nodes-direct2.local.json` ([config/examples/nodes-direct2.json](../config/examples/nodes-direct2.json)), and `tp1` reads `config/nodes-tp1.local.json` ([config/examples/nodes-tp1.json](../config/examples/nodes-tp1.json)).
+
+The history of the four-node path, measured with B12X: NCCL ring, RoCEnante CPU
+relay and NIC forwarding pass the hardware collective probe on four connected
+Sparks. The relay plus four-channel NCCL candidate passes the main DS4.1
+serving screen, with about 23% faster prefill than the one-channel TP4 control.
+Sustained-load cooling and full-context qualification remain open; see the
+[serving decision](../experiments/2026-10-03-collective-serving/decision.md),
+[hardware results](../experiments/2026-10-02-rocenante-mesh4/README.md),
+[queue-capacity investigation](../experiments/2026-10-02-mesh4-queue-depth/README.md) and
+[four-path comparison](../experiments/2026-10-02-mesh4-fourpaths/README.md).
+RoCEnante's transports (`rocenante-direct`, `rocenante-ring4` and
+`rocenante-mesh4`) are retired, with the mesh4 NIC tooling and `bin/spark
+tuning` (B12X's transport profiles); those records keep the commands they ran.
+
+The [matched TP3–TP4 workload comparison](../experiments/2026-10-03-tp3-tp4-comparison/README.md)
+measures the four-node candidate against the historical three-node control.
+Its [padding audit](../experiments/2026-10-03-tp3-tp4-comparison/padding.md)
+distinguishes the removed TP3 divisibility padding from retained graph,
+sequence-parallel and compact MoE tail handling.
+
+| Fabric | TP transport | Peer map |
+| --- | --- | --- |
+| Three-node triangle, promoted (TileLang) | sparknet one-shot small collectives (`oneshot-direct`) plus NCCL | Both other ranks |
+| Four-node ring, promoted (TileLang) | sparknet ring4 one-shot small collectives (`oneshot-ring4`) plus NCCL ring | Previous and next ranks only |
+| Four-node ring, NCCL only (`nccl-ring`) | NCCL ring for TP collectives | Previous and next ranks only |
+
+Ranks follow cable order: `0—1—2—3—0`. The three-node triangle already connects
+every pair. A four-node ring has no direct link to the opposite rank, and the
+peer-HCA map only chooses an interface for each neighbour; it does not relay
+through another host.
+
+Every configuration names its transport in `fabric.transport`. Configurations
+recorded before r6 have none: they ran B12X's `rocenante-direct`, which is
+retired, and doctor refuses them.
+
+## Configuration
+
+Each cluster profile can select a repository-relative `nodes_config` file.
+Omitting it uses the git-ignored site file `config/nodes.json`, initialized from
+`config/nodes.example.json`. Keep real candidate maps in ignored
+`config/*.local.json` files. `cluster sync` copies the selected map atomically
+to each checkout alongside the default site file. All cluster operations, rendering,
+live checks and benchmarks resolve the same selected node map. No separate
+node-map command-line option needs forwarding to remote helpers.
+
+Start with `config/examples/nodes-ring4.json`. Its management addresses are
+documentation addresses; replace them, the SSH user and interface names with
+the site's actual values. The private fabric subnets are examples too.
+
+For each node:
+
+- `rank` is its position in the cable loop; the API head is rank 0.
+- `roce_peer_hcas` lists the local HCAs reaching each immediate neighbour.
+  Each link has one or two stripes, with matching counts at both endpoints.
+  A local HCA belongs to only one neighbour.
+- `roce_subnets` records the IPv4 `/24` network for each local HCA. Each
+  cable/stripe has its own subnet, present at exactly its two endpoints.
+  Two PCIe-root interfaces on one cable use two separate subnets.
+- No GID slot is needed. NCCL with `NCCL_IB_GID_INDEX` unset and sparknet
+  0.5.0 take each HCA's one IPv4 RoCE v2 GID in its `roce_subnets` network,
+  wherever the kernel filed it (`cluster start` renders the subnets as
+  `SPARKNET_ROCE_SUBNETS`). A configuration that pins a slot may move one
+  node's slot with `roce_gid_index`; elsewhere the field is refused.
+
+Create a complete candidate from a base profile:
+
+```sh
+mkdir -p experiments/2026-10-02-switchless-ring4
+cp config/examples/nodes-ring4.json config/nodes-ring4.local.json
+# Edit config/nodes-ring4.local.json for the actual hosts and cable subnets.
+bin/spark topology create \
+  --nodes-config config/nodes-ring4.local.json \
+  --output experiments/2026-10-02-switchless-ring4/cluster.json
+bin/spark --cluster-config experiments/2026-10-02-switchless-ring4/cluster.json doctor
+bin/spark --cluster-config experiments/2026-10-02-switchless-ring4/cluster.json render dgx4
+```
+
+To use the 4 KiB base, put `--shape tp3-triangle-4k` before `topology create`. Creating a three-node candidate preserves the base
+three-node transport settings. Creation never overwrites a file and always
+sets `deployment.launch_enabled=false`; the image, model, context, KV budget
+and promoted baseline remain inherited. The baseline identifies the source
+configuration, not four-node acceptance. Additional memory is not automatically
+allocated to KV before measurement.
+
+The generator updates target TP, draft TP and `--nnodes` together. For four
+nodes it selects `fabric.transport=nccl-ring` and the required transport policy
+from `scripts/topology.py`, and drops the base's `SPARKNET_ROCE_*` settings. `doctor` rejects contradictory settings, non-neighbour
+routes, duplicate ranks, asymmetric links and ambiguous subnets. Live doctor
+and launch preflight also check that each port carries exactly one IPv4 RoCE v2
+GID, in its declared subnet, and that any pinned slot holds it.
+These checks report configuration/address mismatches; they do not prove that a
+cable actually delivers RDMA packets. The collective probe checks communication.
+
+## Why the NCCL settings matter
+
+The pinned NCCL source is
+[`73cf1122`](https://github.com/NVIDIA/nccl/tree/73cf112295c33aee2b895f329f592f2a9b4b0f97).
+
+- `NCCL_ALGO=Ring` and ranks in cable order keep collective communication on
+  neighbour edges. See `src/graph/connect.cc:connectRings`. The generated profile
+  defaults to one channel. Four-node validation also accepts equal
+  `NCCL_MIN_NCHANNELS`/`NCCL_MAX_NCHANNELS` settings of 2, 4 or 8, qualified by the
+  [collective and serving screens](../experiments/2026-10-03-collective-serving/README.md).
+  Per-call channel use can be lower; keep the actual plan/ring logs. Serving
+  performance still requires a matched candidate screen.
+- `NCCL_RUNTIME_CONNECT=1` postpones connections until their algorithm is used.
+  In `src/init.cc`, runtime connection requires **cuMem support**, so this profile
+  sets `NCCL_CUMEM_ENABLE=1`. Keeping the three-node profile's `0` would eagerly
+  connect trees and PAT, including unreachable opposite peers. This setting
+  must be verified on-device; setting the variable cannot create missing CUDA
+  virtual-memory capability.
+- PAT, NVLS, CollNet, MNNVL, RMA and GIN are disabled. Custom vLLM all-reduce is
+  disabled in the NCCL-only profile. `oneshot-ring4` keeps it enabled for
+  sparknet's one-shot collectives and requires an image with them.
+- NIC merging and subnet-aware routing are enabled. NCCL can select the local
+  interface matching the neighbour's advertised subnet. The renderer supplies
+  an exact per-node HCA list from the cable map.
+
+This supports a single tensor-parallel group, with uniform all-reduce,
+all-gather, reduce-scatter and broadcast. Expert parallelism, arbitrary
+non-neighbour send/receive, additional data/context/pipeline-parallel groups
+and alternative topology/algorithm plugins are outside this profile. Merely
+setting `NCCL_ALGO=Ring` does not make those operations ring-aware.
+
+## Qualification on the four-node fabric
+
+Reserve a cluster window before recabling, GPU work or serving changes. Publish
+the candidate and use coordinated `cluster sync` so every participating node
+has the same revision and image. Physical recabling requires an explicit plan
+for restoring the original triangle; a watchdog cannot restore cables.
+The `scripts/lab.py` runner rejects a candidate whose node map differs from
+the window's production profile, because its automatic restoration targets
+that profile. The default production profile is the recipe at the site's shape;
+the window records it in the hold file ([lab windows](lab.md#production-profile)).
+
+With serving stopped and the fabric addressed, render one probe command per
+node and run each command on the node it names, concurrently:
+
+```sh
+bin/spark --cluster-config experiments/2026-10-02-switchless-ring4/cluster.json topology probe dgx1
+bin/spark --cluster-config experiments/2026-10-02-switchless-ring4/cluster.json topology probe dgx2
+bin/spark --cluster-config experiments/2026-10-02-switchless-ring4/cluster.json topology probe dgx3
+bin/spark --cluster-config experiments/2026-10-02-switchless-ring4/cluster.json topology probe dgx4
+```
+
+These commands **print plans** and do not start containers. Each printed command
+uses the selected serving image, a separate container and IPC namespace, a
+12 GiB memory limit, a different rendezvous port and a 600-second timeout.
+The limit covers both NCCL communicators and cold compilation. It
+mounts only the probe script, loads no weights and does not use serving caches.
+
+The probe initializes vLLM's distributed groups and tests torch NCCL plus the
+actual vLLM TP communicator: BF16/FP32, tiny/unaligned/large messages,
+all-reduce, all-gather, reduce-scatter and repeated CUDA graph replay with
+changing inputs. Every rank must print a passing JSON result and exit zero.
+Keep the NCCL logs; check the rank ring and IB transport on each node. Run again
+after a cold restart. A passing probe is a prerequisite, not serving acceptance.
+
+Next enable launch in the reviewed candidate and start it through the existing
+coordinated cluster command. Measure startup/steady memory, the quality gate,
+one/eight-stream decode, short/32K/64K/long prefill, prefix replay and admission.
+Run the model's determinism checks independently: a different TP size changes
+floating-point reduction order, and neither this profile nor NCCL promises
+bitwise equality with TP3 or batch-invariant output.
+
+The fourth GPU reduces some per-rank weight work and adds memory, while the ring
+adds communication hops. Performance is not assumed equal to the three-node
+baseline. The promoted ring (`oneshot-ring4`) keeps one-shot collectives for
+small messages; the NCCL-only profile does not. Record a new baseline only
+after four-node serving and measurements pass and the owner accepts promotion.

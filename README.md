@@ -5,7 +5,8 @@
   bootstrap, preflight, from-zero runbook and `bin/start.sh`/`bin/stop.sh`):
   - `glm-v53-flash-fp8-tp4-switchless` (FP8)
   - `glm-v53-flash-nvfp4-tp4-switchless` (NVFP4)
-  - `deepseek-v41-flash-tp4-switchless` (DeepSeek-V4.1-Flash)
+  - `deepseek-v41-flash-tp4-switchless` (DeepSeek-V4.1-Flash, SGLang/knapcio)
+  - `deepseek-v41-flash-christopherowen` (DeepSeek-V4.1-Flash, vLLM `spark-ds41f`, vendored)
 - **any recipe directory may be deleted at any time** — the others keep working. Nothing
   under a recipe reads a sibling recipe's files.
 - starting/stopping is per recipe: `cd <recipe> && ./bin/start.sh` (refuses while anything

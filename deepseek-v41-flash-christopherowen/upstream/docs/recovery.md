@@ -1,0 +1,209 @@
+# Host availability and recovery
+
+## 2026-09-21 dgx3 incident
+
+The preserved dgx3 journal identifies the failure sequence:
+
+- At 06:07:24 the NVIDIA kernel driver logged 172 `NV_ERR_NO_MEMORY`
+  allocation failures while the rejected candidate performed an unused SM121
+  `ll_bf16` router warmup.
+- The host did not reboot. New SSH pre-authentication children accumulated while
+  the machine was impaired. At 07:51:44 the listener entered `MaxStartups`
+  throttling and remained there for 6 hours, 9 minutes.
+- Tailscale's internal watchdog eventually reported a daemon deadlock and
+  systemd restarted it at 10:22:28. The first successful remote SSH session was
+  not accepted until 14:00:55, when the SSH listener exited throttling.
+- The management NIC and both dgx3 peer links were healthy after recovery. From
+  dgx1 and dgx2, `10.0.1.72` returned ICMP and an OpenSSH banner normally.
+
+This was not a DHCP, netplan, RoCE, or physical-link failure. It was a GPU-driver
+memory-exhaustion event followed by management-daemon degradation, made durable
+because dgx3 lacked the watchdog policy already present on dgx1 and dgx2.
+
+## Prevention
+
+The original unused-router cause is removed by upstream-main rebase patch 0021.
+Runtime warmup now follows the same SM121 eligibility decision as execution.
+The three-rank container remains capped at 112 GiB per node and TP2 full-model
+loading is prohibited by the hardware envelope.
+
+The later patch-0022 qualification proved that a steady-state-only memguard was
+not sufficient: selected model kernels and B12X plans can exhaust driver and
+management headroom before API readiness. Every coordinated start now pre-arms
+a protected 5 GiB, quarter-second startup guard before `docker run`, waits for its
+first successful memory sample, and only then permits the rank to launch. The
+guard remains active throughout readiness and switches to the 3 GiB steady
+guard only after the API is healthy. Rollback containers receive the same
+pre-launch protection. A candidate that crosses the threshold is killed
+immediately rather than receiving a five-second graceful-stop window;
+protecting the host takes precedence over preserving an unqualified startup.
+The orchestrator no longer waits for a driver allocation failure or
+management-path loss.
+
+The host-side recovery policy under `host/recovery/` adds bounded recovery
+without changing inference arithmetic or kernel selection:
+
+- systemd feeds the existing SBSA watchdog and reboots after a real PID-1/system
+  stall;
+- ordinary OOM remains non-panicking so a cgroup can kill the workload instead;
+- SSH and Tailscale receive small `MemoryMin` protection and strongly negative
+  OOM scores;
+- SSH retains bounded but larger pre-authentication headroom; and
+- a minute timer restarts only an unresponsive management service or an SSH
+  listener that enters `MaxStartups` throttling.
+
+The policy deliberately does not reboot for gateway loss, Internet loss, a
+single failed health check, or a generic hung task.
+
+The 2026-09-22 recovery also exposed an independent boot-completion race. All
+three hosts had the same vendor `plymouth-quit-wait.service` with an infinite
+timeout. dgx1 received the graphical quit event after 5.4 seconds; dgx2 and
+dgx3 waited about 101 and 98 minutes respectively until an operator issued
+`plymouth quit`. A repository-owned drop-in now preserves the normal handoff
+for 30 seconds, then explicitly quits Plymouth, with a 40-second outer service
+bound. The same drop-in is installed and checked on every node.
+
+## 2026-09-22 three-node qualification incident
+
+A patch-0022 recovery launch disabled the eager JIT registry sweep but left the
+startup memguard off under the old policy. The required profile forward pass
+then compiled model-selected TileLang mHC kernels after 98.1 GiB of weights and
+270 B12X plans were resident. Observed MemAvailable fell to 1.01--1.72 GiB and
+the NVIDIA driver reported allocation failures on every node. The runtime
+reached the intended 1,353,553-token KV allocation but never became ready; all
+three management paths subsequently became unavailable.
+
+The source correction is patch 0023. It drains the active model/backend JIT
+registry after construction and before checkpoint loading. It also fixes a
+separate, concrete preparation-lifetime bug: the collector constructed all 226
+MXFP8 units before compiling the first, and every unit retained its serving-size
+dummy activations. Discovery now streams one unit at a time, the dummy
+activations are created only inside that plan's preparation, and allocator
+scratch is reclaimed before moving to the next plan. The operational correction
+is the startup guard above. After physical recovery, all three hosts passed the
+recovery-policy check and the guard's real SIGKILL path using a GPU-free, 64 MiB
+smoke container. Patch 0023 then built on dgx1 and passed all 55 focused tests
+from the immutable image under a 32 GiB cgroup, without loading weights. Exact
+evidence is recorded in the upstream-main rebase experiment. The promoted
+configuration still sets `deployment.launch_enabled` to false. After
+the image, host, and kill-path gates passed, the dedicated patch-0023 candidate
+configuration was opened only for the guarded cold-cache/warm-cache TP3 startup
+pair. It uses a 108 GiB container cap, a protected 10 GiB startup threshold
+sampled every 100 ms, an isolated content-addressed JIT cache namespace, and no
+CUDA graphs.
+
+## Kernel
+
+The nodes pin GRUB's normal default to `7.0.0-1019-nvidia-64k` in
+`/etc/default/grub.d/zz-spark-kernel-trial.cfg`. The signed memory-saver DKMS
+module is installed on every node. `config/kernel-trial.json` records the pin,
+and `doctor --live` checks both the next normal boot and the loaded kernel/module.
+The retained `7.0.0-1019-nvidia` entry uses the smaller
+[4 KiB serving profile](memory-profiles.md).
+
+The 7.0 kernel enables Kexec HandOver by default
+(`CONFIG_KEXEC_HANDOVER_ENABLE_DEFAULT=y`) with no CMA area
+(`CONFIG_CMA_SIZE_MBYTES=0`). Its scratch pages stay migrate-CMA without being
+counted, so long-term pins such as `ibv_reg_mr` fail with `ENOMEM` under memory
+pressure and NCCL and RoCE break. DGX Spark 26.09.2 installs
+`nvidia-spark-grub-kho`, which adds `kho=off` to the kernel command line and
+removes the problem; the qualification is in
+[experiments/2026-09-25-kernel-7.0](../experiments/2026-09-25-kernel-7.0/README.md).
+
+Qualify a new kernel on one node with a one-shot boot before it becomes the
+default everywhere: `sudo grub-reboot '<submenu id>><entry id>' && sudo reboot`
+(ids from `/boot/grub/grub.cfg`), then check `kho=off`, the RoCE links, an
+`ib_write_bw` run and a guarded service start. Any later reboot returns to
+GRUB's default.
+
+## GB10 GPU clock latch
+
+A GB10 GPU can latch far below its normal clock: it stays in P0 at about
+500-720 MHz and 10-14 W with no clock-event reason and no driver errors, and a
+three-node TP3 cluster with one latched node runs about 45% slower. Neither a
+warm reboot nor `nvidia-smi -lgc` clears it; removing AC power for one to five
+minutes does. It is widely reported on DGX Spark and other GB10 systems
+(NVIDIA developer forum threads 361294, 361296, 376039 and 376239), and is
+attributed to the embedded or USB-C power-delivery controller.
+
+dgx3 latched on 2026-09-26 across a warm reboot and ran at 520-565 MHz and
+about 10 W under load while dgx1 and dgx2 ran at about 2,400 MHz. Tests on the
+latched node isolate the ceiling below the driver:
+
+| Change on dgx3 | SM clock under 8-stream load |
+|---|---:|
+| none (display already disconnected, DPMS off) | 553-559 MHz |
+| framebuffer blanked | 556 MHz |
+| HDMI connector forced off, display inactive | 554 MHz |
+| `nvidia-smi -lgc 2400,3003` | 554 MHz (ignored) |
+
+The ceiling is a platform power cap, applied below the GPU driver, so
+`nvidia-smi` shows no clock-event reason. The driver's own software power
+capping is not the cause: dgx3 had logged 3 s of it against about four hours on
+dgx1. On dgx3 the embedded controller (EC) had published zero for every power
+limit it supplies to the SoC, so the SoC ran on its fallback limits:
+
+| Effective limit | dgx3, latched | dgx1, healthy |
+|---|---:|---:|
+| Package PL1 / PL2 | 20 / 20 W | 140 / 142 W |
+| System PL1 / PL2 | 30 / 30 W | 231 / 244 W |
+
+The time the EC publishes had also stopped advancing. It looks as if the EC
+stops publishing after startup rather than sending a wrong value. That fits only
+AC removal clearing it, since the EC stays powered through a warm reboot. What
+stops the publication is unknown. No safe host command was found that
+republishes the limits or resets the EC without removing AC power; the
+investigation is in
+[dgx-spark-power-control](https://github.com/christopherowen/dgx-spark-power-control/blob/no-restart-recovery/docs/no-restart-recovery.md),
+on its `no-restart-recovery` branch.
+
+Firmware was identical on all three nodes (SMBIOS firmware inventory BIOS
+5.36_0ACUM027, SoC 0x02009b0b, EC 0x03000508, PD 0x00000516). The latch
+appeared on the boot that first enabled nvidia-drm kernel mode setting, but it
+persists with the display off, so mode setting is not the cause. The reboot that
+preceded it was also the first on dgx3 after the fan-floor driver had been
+active, and on the latched boot the EC reported a fan lower floor of 0 instead
+of unset. dgx1 and dgx2 run the same driver and restore it on every reboot
+without latching, so that correlation is unproven.
+
+The latch has also appeared right after firmware updates. After any update,
+let `fwupdmgr upgrade` and its reboot finish. Capsules flash during that boot,
+so never remove power while it runs. Then power the node off, remove AC power
+for at least a minute, power it on, and check the clock before trusting the
+node (below).
+
+`bin/spark doctor --live` reports a serving node whose GPU clock is below
+1,000 MHz. A healthy GB10 stays near 2,400 MHz while serving, even between
+requests. To recover: stop the service (so the peers' RoCE GIDs cannot move),
+power the node off, remove AC power for at least a minute, and power it on.
+After a recovery or a firmware update, start the service and confirm that
+`doctor --live` reports no clock problem on any node.
+
+## Recovery validation
+
+Recovery implementation commit `7f40db1` was installed on all three nodes on
+2026-09-21. Each node passed `scripts/host-recovery check`, reported no failed
+systemd units, and retained working SSH and Tailscale listeners through their
+scheduled restarts. dgx3 then rebooted into `6.17.0-1032-nvidia`. It had zero swap use, no current-boot `NV_ERR_NO_MEMORY` events, and healthy
+management and peer links after the reboot.
+
+The qualified candidate image is byte-identical on all three nodes as image ID
+`sha256:56820972a862a084c6d0d34dd8faa5ecc8a198b1ec276cb6cfd591fa983ef993`.
+No inference container was started as part of host recovery.
+
+## Watchdog and Plymouth consistency validation
+
+Recovery policy revision `188fa16780258c7d62f8ffead5b31fb15d2e557d` was
+applied sequentially to dgx1, dgx2, and dgx3 on 2026-09-22. Every node then
+passed `scripts/host-recovery check`, remained in systemd state `running` with
+zero failed units, and reported the same effective watchdog values: 30-second
+runtime watchdog, 10-minute reboot watchdog, and `/dev/watchdog0`.
+
+Every node also loaded the same Plymouth drop-in hash with a 40-second service
+bound, expected timeout status 124, and the repository-owned wait/quit command.
+The disabled `90-law-watchdog.conf.spark3-migrated` copies that existed only on
+dgx1 and dgx2 were removed after their directives were confirmed to be fully
+represented by the managed `95-spark-recovery` files. All compared recovery
+file hashes now match across the three hosts and no legacy copy remains. The
+drop-in is effective for the next boot; no reboot was performed during this
+live consistency change.

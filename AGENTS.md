@@ -34,6 +34,22 @@ file, `README.md`, the skills, and the proxy's `SPOOF_FROM` in the same commit. 
 `model-name-proxy/` is the only deliberate repo-root exception — it exists precisely because
 there is more than one recipe.
 
+## Switching lanes: the one manual step
+
+Stopping one recipe and starting another is `bin/stop.sh` then `bin/start.sh` — the start
+path refuses while anything else serves, so there is nothing else to remember. **The proxy is
+the exception:** `model-name-proxy/.env`'s `BACKEND_MODEL` is the value the proxy rewrites
+every request's `"model"` to, so it must track the serving recipe.
+
+- DeepSeek ↔ GLM: flip `BACKEND_MODEL` (`deepseek-v41-flash` ↔ `glm-5.3-flash`) and recreate
+  the proxy container, then send one chat request to confirm it round-trips.
+- GLM ↔ GLM (FP8 ↔ NVFP4): no edit — both serve `glm-5.3-flash`.
+
+A stale `BACKEND_MODEL` does **not** look like a proxy fault: `/v1/models` still reports the
+new lane correctly (with its context length) while **every chat completion 404s**
+("The model <stale> does not exist"). Observed live 2026-11-21; that is why the round-trip
+check, not `/v1/models`, is the verification.
+
 ## Cluster topology (four fixed nodes, switchless ring)
 
 | rank | host | mgmt IP | notes |

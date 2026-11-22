@@ -200,7 +200,7 @@
   "deployment": {
     "launch_enabled": true,
     "repository": "https://github.com/taoofshawn/spark-recipes",
-    "branch": "main",
+    "branch": "adopt-ds41f-inrepo",
     "path": "{home}/code/spark-recipes/deepseek-v41-flash-christopherowen/upstream",
     "ready_url": "http://127.0.0.1:8000/v1/models",
     "ready_timeout_seconds": 3600
@@ -209,7 +209,7 @@
   "default_shape": "tp4-ring-4k",
   "shapes": {
     "tp4-ring": {
-      "notes": "Four nodes in a cable ring (two ConnectX-7 paths per neighbour); NCCL settings are sparknet's tp4-ring profile. 32 concurrent streams (CUDA graphs up to 192 rows), 16.50 GiB KV pool (17.86x 1M contexts), calibrated IRLS adaptive verification (row cost 0.035), and L2 prefetch band 17-32=10. Site: 2-PF subset (rocep1s0f0/f1), sockets on wlP9s9.",
+      "notes": "Four nodes in a cable ring (two ConnectX-7 paths per neighbour); NCCL settings are sparknet's tp4-ring profile. 32 concurrent streams (CUDA graphs up to 192 rows), 16.50 GiB KV pool (17.86x 1M contexts), calibrated IRLS adaptive verification (row cost 0.035), and L2 prefetch band 17-32=10. Site: 2-PF subset (rocep1s0f0/f1), sockets on wlP9s9. Site: 2-PF subset (rocep1s0f0/f1), sockets on wlP9s9.",
       "nodes": 4,
       "engram_on_disk": true,
       "nodes_config": "config/nodes-ring4.json",

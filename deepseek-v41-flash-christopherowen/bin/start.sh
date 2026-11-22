@@ -52,12 +52,12 @@ import json,sys
 d=json.load(open(sys.argv[1]))
 c=d.get("container",{})
 print(d.get("default_shape",""), c.get("name",""), c.get("image",""),
-      d.get("deployment",{}).get("path",""), sep="|")
+      d.get("deployment",{}).get("path",""), d.get("deployment",{}).get("branch",""), sep="|")
 PY
 )
   [ -n "$got" ] || { printf '[start] cannot parse %s\n' "$f" >&2; return 1; }
-  local shape name image dpath
-  IFS='|' read -r shape name image dpath <<<"$got"
+  local shape name image dpath dbranch
+  IFS='|' read -r shape name image dpath dbranch <<<"$got"
   [ "$shape" = "$SHAPE" ]      || { printf '[start] site drift: cluster.json default_shape=%s, lane.env SHAPE=%s\n' "$shape" "$SHAPE" >&2; return 1; }
   [ "$name" = "$CONTAINER_NAMES" ] || { printf '[start] site drift: cluster.json container.name=%s, lane.env CONTAINER_NAMES=%s\n' "$name" "$CONTAINER_NAMES" >&2; return 1; }
   [ "$image" = "$IMAGE" ]      || { printf '[start] site drift: cluster.json image=%s, lane.env IMAGE=%s\n' "$image" "$IMAGE" >&2; return 1; }
@@ -65,7 +65,28 @@ PY
     *"/deepseek-v41-flash-christopherowen/upstream") ;;
     *) printf '[start] site drift: cluster.json deployment.path=%s (want …/deepseek-v41-flash-christopherowen/upstream)\n' "$dpath" >&2; return 1 ;;
   esac
-  printf '[start] site agrees: shape %s, container %s, image %s\n' "$shape" "$name" "$image"
+  [ "$dbranch" = "$DEPLOY_BRANCH" ] || { printf '[start] site drift: cluster.json deployment.branch=%s, lane.env DEPLOY_BRANCH=%s\n' "$dbranch" "$DEPLOY_BRANCH" >&2; return 1; }
+
+  # The checkout must BE the branch this lane pins. A lane brought up from a stale checkout
+  # serves the wrong tree while every other check still passes — the one failure the drift
+  # test cannot see by parsing files.
+  local top head_branch
+  top=$(git -C "$DEPLOY_PATH" rev-parse --show-toplevel 2>/dev/null) || {
+    printf '[start] %s is not inside a git checkout\n' "$DEPLOY_PATH" >&2; return 1; }
+  head_branch=$(git -C "$DEPLOY_PATH" rev-parse --abbrev-ref HEAD 2>/dev/null)
+  if [ "$head_branch" != "$DEPLOY_BRANCH" ]; then
+    printf '[start] wrong checkout: %s is on "%s", this lane pins "%s"\n' \
+      "$top" "$head_branch" "$DEPLOY_BRANCH" >&2
+    printf '[start]   fix: git -C %s fetch origin && git -C %s checkout %s && git -C %s pull --ff-only\n' \
+      "$top" "$top" "$DEPLOY_BRANCH" "$top" >&2
+    return 1
+  fi
+  if [ -n "$(git -C "$DEPLOY_PATH" status --porcelain --untracked-files=no 2>/dev/null)" ]; then
+    printf '[start] %s has tracked modifications; the image records the deployment commit\n' "$top" >&2
+    return 1
+  fi
+  printf '[start] site agrees: shape %s, container %s, image %s, branch %s @ %s\n' \
+    "$shape" "$name" "$image" "$head_branch" "$(git -C "$DEPLOY_PATH" rev-parse --short HEAD)"
 }
 drift || exit 4
 

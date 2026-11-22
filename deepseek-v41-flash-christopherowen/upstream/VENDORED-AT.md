@@ -70,7 +70,7 @@ git ls-files -s -- bin scripts | grep -v '100644'
 `bin/spark` plus every executed script (`memguard.sh`, `memguard-start.sh`, `host-recovery`,
 `configure-swap`, `install-*`, `lab_idle_start.sh`) at `100755`. A mode-stripped checkout fails on the
 nodes with `Permission denied` at `cluster start` — it did, on the first bring-up. Restored in
-`4f9d77f`, `d9176a5`, `2bb68d0`; blob SHAs match the pin, so only modes changed.
+`4f9d77f`, `2edb188`, `2bb68d0`; blob SHAs match the pin, so only modes changed.
 
 ## Byte identity and line endings
 

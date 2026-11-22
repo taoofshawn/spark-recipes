@@ -142,7 +142,7 @@ draft 1.4485 — flagged `foreign: 1`, so Sonar marks the point non-comparable.
 - The vendor pass dropped file modes: every script this recipe invokes by path was committed
   `100644` while upstream pins them `100755`, so `./bin/start.sh`, `site/gate-gid-slot.sh`,
   `bin/spark` and `scripts/memguard*.sh` all failed with `Permission denied` on the nodes.
-  Restored in three commits (`4f9d77f`, `d9176a5`, `2bb68d0`) — only modes changed, blob SHAs match
+  Restored in three commits (`4f9d77f`, `2edb188`, `2bb68d0`) — only modes changed, blob SHAs match
   upstream. A re-vendor must preserve modes; `VENDORED-AT.md` now says so.
 - `{checkout}/cache` must pre-exist: the tooling mounts it rw and refuses an absent source
   (`rw mount source is unavailable`), and nothing in the tree creates it. Created on all four nodes.

@@ -7,8 +7,10 @@ Provenance, decisions, measurements and watch items for the second DeepSeek-V4.1
 
 ## 2026-11-22 — adoption, Phase 1 (vendored recipe, no bring-up)
 
-**Status: recipe present and statically validated. Nothing built, nothing deployed, no lane
-touched.** Phase 2 (build → distribute → boot → gates → bench) is written as a separate
+**Status at the end of Phase 1: recipe present and statically validated. Nothing built,
+nothing deployed, no lane touched.** (Phase 2 has since run — see the entry below, which is
+the current state: built, distributed, booted, gated, benched, and the lane is **active**.)
+Phase 2 (build → distribute → boot → gates → bench) was written as a separate
 handoff for an off-spark model, because it needs the sparks stopped:
 **`.research/HANDOFF-ds41f-inrepo-phase2-20261122.md`**, executed off branch
 `adopt-ds41f-inrepo`.

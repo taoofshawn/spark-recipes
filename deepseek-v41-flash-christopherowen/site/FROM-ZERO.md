@@ -103,19 +103,32 @@ identity per node. The result must carry five tree labels equal to
 
 ```bash
 cd ../            # the recipe directory
+mkdir -p upstream/cache     # the tooling mounts {checkout}/cache rw and refuses an absent source
 ./bin/start.sh --dry-run
 ./bin/start.sh
 ```
 
 `cluster start` defragments memory, arms a startup memguard, launches **rank 3 → 2 → 1 → 0**,
-waits for `/v1/models`, then swaps to the steady memguard. Expect 4–10 min cold.
+waits for `/v1/models`, then swaps to the steady memguard. Expect 4–10 min cold — measured on the
+first bring-up: **1534 s** for the first-ever run on these nodes (full JIT/autotuning), ~150 s for
+warm restarts afterwards (the caches are host bind-mounts under `upstream/cache`, so the `mkdir`
+above is also what keeps a rebuild warm).
+
+Before the first start, check the modes survived the vendor pass — the node tooling runs these by
+path, and upstream pins them `100755`:
+
+```bash
+git ls-files -s -- bin scripts | grep -v '100644'      # expect: bin/spark + the executed scripts/*
+```
 
 ## 6. Gates — within minutes of `/v1/models` 200
 
 - one name `deepseek-v41-flash`, `max_model_len` 1,048,576;
 - a chat round-trip and a forced tool call with `chat_template_kwargs:{"thinking":true}`;
 - emoji/CJK probe → 0 × U+FFFD;
-- per rank: 0 `NCCL WARN`; the channel lines; only `rocep1s0f0`/`rocep1s0f1` used;
+- per rank: 0 `NCCL WARN`; the channel lines (they only appear with `NCCL_DEBUG=INFO` — this shape
+  sets no `NCCL_DEBUG`, so a normal boot prints none; run the collective probe with it if you need
+  the D11 confirmation); only `rocep1s0f0`/`rocep1s0f1` used;
 - the boot log's `GPU KV cache size` / `Maximum concurrency` lines, and `SpecDecoding`
   acceptance > 1;
 - one ~993K-token prefill with MemAvailable recorded before/after;
@@ -131,6 +144,9 @@ waits for `/v1/models`, then swaps to the steady memguard. Expect 4–10 min col
 | `doctor`: "tracked secret-like path" | the node map was renamed to `*.local.json`; keep `config/nodes-ring4.json` |
 | `build prepare`: missing patch | the closure was hand-edited; regenerate it |
 | image build refuses | ≥64 GiB free memory and no `spark-ds41f` container |
+| `Permission denied` running `bin/spark` or `scripts/memguard*.sh` on a node | the vendor pass committed the tree `100644`; upstream pins the executed paths `100755`. Restore modes with `git update-index --chmod +x`, push, pull — see `upstream/VENDORED-AT.md` step 4. Do not chmod on the node |
+| `rw mount source is unavailable: …/upstream/cache` | `{checkout}/cache` must exist on every node before the first start; nothing in the tree creates it |
+| `shape tp4-ring-4k: unset belong to every shape, not one` | `unset` is an arm-overlay key, not a shape key (`scripts/recipe.py:58`, rejection at `:166`); measure an unset arm by deleting the key from the extended shape |
 | NCCL hangs / QP RTR timeout | fabric wiring — `site/fabric/preflight.sh` first |
 | the container exists from a previous run | `./bin/stop.sh` (captures logs, removes) |
 | boot reads slow | JIT warm-up; never bench cold |

@@ -552,9 +552,7 @@
         "kv_cache_memory_bytes": 11274289152,
         "prefix_cache_retention_interval": 8192
       },
-      "environment": {
-        "NCCL_SWITCHLESS_BIDIRECTIONAL": "1"
-      },
+      "unset": ["NCCL_SWITCHLESS_BIDIRECTIONAL"],
       "notes": "site-shawndo: the 2026-10-17 external receipt's sizing (1M ctx / 16 seqs / 8,192 batched / KV 10.5 GiB) on the stock 4 KiB-page kernel without the memory saver; the qualified tp4-ring shape needs the 64 KiB kernel + memory-saver. Unqualified: no release benchmark covers this site shape."
     }
   }

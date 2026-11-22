@@ -99,6 +99,72 @@ promoted into `upstream/manifests/suites/`.
 
 ---
 
+## 2026-11-22 — first real run: build, boot, gates, bench, D7 A/B (lane left active)
+
+**what:** Phase 2 ran end to end on the live cluster. Image built on `spark-0f0b` from the pinned
+lock (digest-pinned base `3cf14c52…`, wall 1026 s, low-water MemAvailable 75.8 GiB), distributed to
+all four nodes (identical `sha256:bdd9f6dffc…` on every node), booted with `./bin/start.sh`
+(`tp4-ring-4k`, `--unqualified-shape`), gates G1–G10, Sonar bench, then the D7 three-arm
+comparison. The lane is left running as the active recipe; the proxy was not touched
+(`BACKEND_MODEL=deepseek-v41-flash` already, no recreate).
+
+**build labels (verbatim):** `local.spark-ds41f.vllm.tree=8fc99ca7546c`,
+`nccl.tree=6af10aa730a6`, `tilelang.tree=741806c73571`, `tile_kernels.tree=cb2fa41c8af2`,
+`sparknet.tree=e06f6a0675cb`; smokes: TileLang import ok, sparknet ABI 10, GPU import ok.
+
+**gates:** G1 one model entry `deepseek-v41-flash`, `max_model_len 1048576`. G2 `"The capital of
+France is Paris."`. G3 `tool_calls` function `get_weather`, arguments `{"city":"Paris"}` — valid JSON.
+G4 the emoji+CJK probe came back character for character. G5 **0 `NCCL WARN` lines on all four
+containers**. G7 mean acceptance length 3.87 / 3.38 (> 1). G8 a 993,072-token prompt was accepted and
+answered. G9 the NVFP4 lane's `start.sh --dry-run` refused with exit 1 naming `spark-ds41f`. G10 the
+upstream path refused with exit 1 ("a spark-ds41f container is running").
+
+**D7 A/B (Sonar decode matrix, warm engine, Sonar pinned at `110945d61238`):**
+
+| arm | prose-c1 | prose-c4 | code-c1 | code-c4 |
+|---|---|---|---|---|
+| `=2` shipped (pass 1) | 77.624 ±0.36% | 235.518 ±11.1% | 87.98 ±32.1% | 292.504 ±1.15% |
+| `=1` | 78.251 ±1.05% | 225.915 ±10.8% | 96.659 ±1.72% | 291.462 ±1.54% |
+| unset | 70.281 ±33.7% | 234.129 ±12.1% | 81.303 ±65.3% | 293.188 ±1.55% |
+| `=2` shipped (pass 2) | 78.681 ±1.4% | 241.680 ±3.99% | 87.995 ±33.8% | 291.967 ±0.22% |
+
+Decision: **keep the shipped `=2`**. `=1` is below `=2` at c4 in both passes and level at c1; its
+apparent +9.9% at `code-c1` sits against `=2` passes whose CIs are 32–34%, so it is not a win. The
+unset arm is inside `=2`'s noise at c4 and worse at c1. The config on the branch is the shipped value.
+
+**Record bench run** (label `2026-11-22-site-shawndo-tp4-4k`, receipts in `site/bench/…`): quality
+gate 5 checks passed; decode matrix prose c1 65.27 ±65%, c2 137.05, c4 245.41 ±3.7%, c8 395.76,
+c16 521.33; code c1 97.14 ±0.61%, c2 170.43, c4 291.33 ±1.6%, c8 488.61, c16 720.85. Single-stream
+(300 s closed, 10 windows): **77.88 tps ±7.45%**, tpot p50 12.25 ms, ttft p50 0.121 s, accepted per
+draft 1.4485 — flagged `foreign: 1`, so Sonar marks the point non-comparable.
+
+**gotchas**
+- The vendor pass dropped file modes: every script this recipe invokes by path was committed
+  `100644` while upstream pins them `100755`, so `./bin/start.sh`, `site/gate-gid-slot.sh`,
+  `bin/spark` and `scripts/memguard*.sh` all failed with `Permission denied` on the nodes.
+  Restored in three commits (`4f9d77f`, `d9176a5`, `2bb68d0`) — only modes changed, blob SHAs match
+  upstream. A re-vendor must preserve modes; `VENDORED-AT.md` now says so.
+- `{checkout}/cache` must pre-exist: the tooling mounts it rw and refuses an absent source
+  (`rw mount source is unavailable`), and nothing in the tree creates it. Created on all four nodes.
+- A shape cannot carry `unset` — `scripts/recipe.py:58` (`SHAPE_KEYS`) excludes it and `:166`
+  rejects it ("unset belong to every shape, not one"). The genuinely-unset arm is measured by
+  deleting the key from `tp4-ring`.
+- The D11 channel lines are not observable on this lane as configured: the shape sets no
+  `NCCL_DEBUG`, so the vendored NCCL prints no INFO lines at all (`grep -c 'NCCL INFO'` = 0 on head
+  and a worker). G5's zero-WARN half passes; confirming the channel/split lines needs a probe run
+  with `NCCL_DEBUG=INFO`.
+- Cold boot took 1534 s (JIT/autotuning); warm restarts took ~146 s. Bench low-water MemAvailable
+  was 23.8–25.6 GiB per node — well above the 3 GiB steady guard; D5's 18–21 GiB expectation is the
+  bench-time band, and the long-prefill probes measured 96–98 GiB because they ran right after boot.
+- `single-stream` flags foreign requests (1–2 per run) even with nothing else running; treat its
+  numbers as indicative and use the decode matrix for comparisons.
+
+**files:** `site/bench/2026-11-22-site-shawndo-tp4-4k/{README.md,matrix.json,single-stream-c1.json}`,
+this entry, `upstream/VENDORED-AT.md` (mode note), `upstream/config/cluster.json` (D7 arms; final
+state = shipped `=2`).
+
+---
+
 ## Template for the next entry
 
 ```markdown

@@ -61,7 +61,16 @@ git -C <a checkout at d3d40d94> diff --stat d3d40d94 -- .     # expect: config/c
 # 3. it still works
 python3 bin/spark doctor                    # configuration OK
 python3 bin/spark --cluster-config config/cluster.json cluster start     # the plan, no --apply
+
+# 4. modes survive: the node-side tooling runs bin/spark and the executed scripts/* as paths
+git ls-files -s -- bin scripts | grep -v '100644'
 ```
+
+**Step 4 is not optional.** The first vendor pass committed the whole tree `100644`, and upstream pins
+`bin/spark` plus every executed script (`memguard.sh`, `memguard-start.sh`, `host-recovery`,
+`configure-swap`, `install-*`, `lab_idle_start.sh`) at `100755`. A mode-stripped checkout fails on the
+nodes with `Permission denied` at `cluster start` — it did, on the first bring-up. Restored in
+`4f9d77f`, `d9176a5`, `2bb68d0`; blob SHAs match the pin, so only modes changed.
 
 ## Byte identity and line endings
 

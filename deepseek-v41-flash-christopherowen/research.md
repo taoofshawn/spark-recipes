@@ -9,7 +9,9 @@ Provenance, decisions, measurements and watch items for the second DeepSeek-V4.1
 
 **Status: recipe present and statically validated. Nothing built, nothing deployed, no lane
 touched.** Phase 2 (build → distribute → boot → gates → bench) is written as a separate
-handoff for an off-spark model, because it needs the sparks stopped.
+handoff for an off-spark model, because it needs the sparks stopped:
+**`.research/HANDOFF-ds41f-inrepo-phase2-20261122.md`**, executed off branch
+`adopt-ds41f-inrepo`.
 
 ### Provenance
 
@@ -45,7 +47,8 @@ lane, and the only lane here whose image content is attested by five git-tree la
 | D7 | **`NCCL_SWITCHLESS_BIDIRECTIONAL=2` kept, A/B scheduled** | upstream's shipped default assumes two PCIe roots; ours is one root. Phase 2 measures `=1` vs unset and keeps the winner |
 | D8 | **Served name `deepseek-v41-flash`** | same as the SGLang lane, so GLM↔DeepSeek is the only proxy edit and `SPOOF_FROM` already contains it. Two lanes on one name is safe because only one serves at a time |
 | D9 | **Guard table is per-recipe, with all four lanes' container names** | upstream's interlock matches only `spark-ds41f` and `^dsv41-`; it cannot see `glm53-*`. The one-lane-at-a-time precondition is this recipe's `bin/guard.sh` |
-| D10 | **Container removed on stop (repo teardown rule)** | upstream's `cluster start` refuses an existing exact container without `--replace`, and its memguard units can be left armed. Logs are captured per node first; JIT caches live in `{checkout}/cache` |
+| D10 | **`deployment.branch` = the adoption branch, not `main`** | `cluster sync` refuses any commit not published on that branch. Pinned to `main` while the recipe is unmerged, every sync aborts "not published on origin/main". `bin/start.sh` enforces the same pin on the local checkout (wrong branch, or tracked edits → exit 4). Flip both to `main` in the merge commit |
+| D11 | **Container removed on stop (repo teardown rule)** | upstream's `cluster start` refuses an existing exact container without `--replace`, and its memguard units can be left armed. Logs are captured per node first; JIT caches live in `{checkout}/cache` |
 
 ### What Phase 1 verified (all read-only, no container touched)
 
@@ -77,6 +80,13 @@ warning assumes a wired mgmt port.
   recipe ships `.gitattributes` `* -text` so a future CRLF checkout cannot rewrite patch bytes.
 - `host/recovery/` is required by `scripts/host-recovery` (setup stage 1) but was not in the
   build closure — added to the vendor list. 10 extra files.
+
+### Phase 2
+
+Written as `.research/HANDOFF-ds41f-inrepo-phase2-20261122.md` — execute it off the
+`adopt-ds41f-inrepo` branch, on a session not hosted on the sparks. Build → distribute → boot
+→ gates G1–G10 → D7 A/B → bench. The recipe stays `--unqualified-shape` until a run of ours is
+promoted into `upstream/manifests/suites/`.
 
 ### Watchlist
 

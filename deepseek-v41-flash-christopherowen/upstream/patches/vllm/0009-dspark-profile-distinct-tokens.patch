@@ -1,0 +1,173 @@
+From 6a84c8d4c476de7d07fa54d056dcb72da1ef04e3 Mon Sep 17 00:00:00 2001
+From: Christopher Owen <3221756+christopherowen@users.noreply.github.com>
+Date: Sun, 27 Sep 2026 00:47:25 +0200
+Subject: [PATCH] feat(spec-decode): profile adaptive verification on distinct
+ real rows
+
+Adaptive verification prices draft budgets from a startup profile of dummy
+batches. Every dummy row repeats token 0 and is marked as padding, which
+the MoE routers skip (VLLM_MOE_SKIP_PADDING), so the profile leaves out the
+routed-expert work, the cost that grows with every verification row: the
+tables price a verified row at about 0.4 ms against several milliseconds
+in real decode steps.
+
+With SPARK3_DSPARK_PROFILE_TOKENS=random the cost profile runs on a fixed
+pseudo-random token sequence (seed 0, identical on every rank), marked as
+real rows, and on the embeddings of those tokens where the model takes
+inputs_embeds. InputBatch.make_dummy copies the ids and clears the padding
+flag only while they are set. Graph capture and every other dummy run are
+unchanged; the embedding buffer is restored afterwards. Output is
+unchanged.
+---
+ tests/v1/worker/test_dummy_input_ids.py | 22 +++++++++++
+ vllm/v1/worker/gpu/input_batch.py       | 16 +++++++-
+ vllm/v1/worker/gpu/model_runner.py      | 52 ++++++++++++++++++++++---
+ 3 files changed, 82 insertions(+), 8 deletions(-)
+ create mode 100644 tests/v1/worker/test_dummy_input_ids.py
+
+diff --git a/tests/v1/worker/test_dummy_input_ids.py b/tests/v1/worker/test_dummy_input_ids.py
+new file mode 100644
+index 0000000000..72a1c27d03
+--- /dev/null
++++ b/tests/v1/worker/test_dummy_input_ids.py
+@@ -0,0 +1,22 @@
++# SPDX-License-Identifier: Apache-2.0
++# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
++
++import pytest
++import torch
++
++from vllm.v1.worker.gpu.input_batch import InputBatch, InputBuffers
++
++
++@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
++def test_dummy_batches_use_profile_token_ids_when_set():
++    buffers = InputBuffers(max_num_reqs=4, max_num_tokens=16, device=torch.device("cuda"))
++    buffers.input_ids.fill_(7)
++    batch = InputBatch.make_dummy(2, 8, buffers)
++    assert torch.equal(batch.input_ids.cpu(), torch.zeros(8, dtype=torch.int32))
++    assert bool(batch.is_padding.all())
++
++    ids = torch.arange(100, 116, dtype=torch.int32, device="cuda")
++    buffers.dummy_input_ids = ids
++    batch = InputBatch.make_dummy(2, 8, buffers)
++    assert torch.equal(batch.input_ids.cpu(), ids[:8].cpu())
++    assert not bool(batch.is_padding.any())
+diff --git a/vllm/v1/worker/gpu/input_batch.py b/vllm/v1/worker/gpu/input_batch.py
+index 81b24b8b5e..96994eb773 100644
+--- a/vllm/v1/worker/gpu/input_batch.py
++++ b/vllm/v1/worker/gpu/input_batch.py
+@@ -33,6 +33,10 @@ class InputBuffers:
+         self.device = device
+ 
+         self.input_ids = torch.zeros(max_num_tokens, dtype=torch.int32, device=device)
++        # Token ids dummy batches copy in place of zeros (None: zeros), and mark
++        # as real rather than padding rows. Set only while profiling, so dummy
++        # tokens route to experts like real ones.
++        self.dummy_input_ids: torch.Tensor | None = None
+         self.positions = torch.zeros(max_num_tokens, dtype=torch.int64, device=device)
+         self.is_padding = torch.zeros(max_num_tokens, dtype=torch.bool, device=device)
+         self.query_start_loc = torch.zeros(
+@@ -179,10 +183,18 @@ class InputBatch:
+         input_buffers.query_start_loc[num_reqs + 1 :] = num_tokens
+         query_start_loc = input_buffers.query_start_loc[: num_reqs + 1]
+ 
+-        input_ids = input_buffers.input_ids[:num_tokens].zero_()
++        input_ids = input_buffers.input_ids[:num_tokens]
++        if input_buffers.dummy_input_ids is not None:
++            input_ids.copy_(input_buffers.dummy_input_ids[:num_tokens])
++        else:
++            input_ids.zero_()
+         positions = input_buffers.positions[:num_tokens].zero_()
+ 
+-        input_buffers.is_padding[:num_tokens].fill_(True)
++        # Dummy rows are padding (MoE routing skips them) unless profile token
++        # ids are set: then they stand in for real rows and must route.
++        input_buffers.is_padding[:num_tokens].fill_(
++            input_buffers.dummy_input_ids is None
++        )
+         is_padding = input_buffers.is_padding[:num_tokens]
+ 
+         logits_indices = query_start_loc[1:] - 1
+diff --git a/vllm/v1/worker/gpu/model_runner.py b/vllm/v1/worker/gpu/model_runner.py
+index 995719cd56..2a29379ad1 100644
+--- a/vllm/v1/worker/gpu/model_runner.py
++++ b/vllm/v1/worker/gpu/model_runner.py
+@@ -17,8 +17,10 @@ hidden. Prefer utility functions defined elsewhere and call them from here,
+ instead of embedding feature-specific logic directly.
+ """
+ 
++import contextlib
+ import functools
+ import gc
++import os
+ import time
+ from collections.abc import Callable
+ from contextlib import AbstractContextManager
+@@ -835,6 +837,43 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+             num_blocks=self.kv_cache_config.num_blocks,
+         )
+ 
++    @contextlib.contextmanager
++    def _profile_token_ids(self):
++        """Feed distinct token ids to the adaptive-verification cost profile.
++
++        Dummy batches repeat token 0 and mark every row as padding, which
++        the MoE routers skip, so the profile leaves out routed-expert work,
++        the cost that grows with every verification row. With
++        SPARK3_DSPARK_PROFILE_TOKENS=random the profile runs on a fixed
++        pseudo-random token sequence (the same on every rank) as real rows,
++        and on its embeddings where the model takes inputs_embeds.
++        """
++        if os.environ.get("SPARK3_DSPARK_PROFILE_TOKENS", "zeros") != "random":
++            yield
++            return
++        generator = torch.Generator(device=self.device).manual_seed(0)
++        ids = torch.randint(
++            1000,
++            min(self.vocab_size, 100000),
++            (self.input_buffers.input_ids.shape[0],),
++            generator=generator,
++            device=self.device,
++            dtype=torch.int32,
++        )
++        buffers = self.input_buffers
++        buffers.dummy_input_ids = ids
++        embeds = None
++        if self.uses_inputs_embeds:
++            embeds = self.model_state.dummy_inputs_embeds(ids.shape[0])
++            saved = embeds.clone()
++            embeds.copy_(self.model.embed_input_ids(ids[: embeds.shape[0]]))
++        try:
++            yield
++        finally:
++            buffers.dummy_input_ids = None
++            if embeds is not None:
++                embeds.copy_(saved)
++
+     @torch.inference_mode()
+     @step_eplb_after(is_dummy=True)
+     def _dummy_run(
+@@ -1232,12 +1271,13 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+                         with use_workspace_lane(self._draft_workspace_lane):
+                             self.speculator.capture()
+                     if self.adaptive_verification is not None:
+-                        self.adaptive_verification.profile_costs(
+-                            self._dummy_run,
+-                            self.step_timing,
+-                            self.cudagraph_manager.captured_token_counts(),
+-                            self.cudagraph_manager.captured_full_batch_shapes(),
+-                        )
++                        with self._profile_token_ids():
++                            self.adaptive_verification.profile_costs(
++                                self._dummy_run,
++                                self.step_timing,
++                                self.cudagraph_manager.captured_token_counts(),
++                                self.cudagraph_manager.captured_full_batch_shapes(),
++                            )
+                     self.kv_connector.reset_capture_state()
+ 
+             end_free_gpu_memory = torch.accelerator.get_memory_info()[0]
+-- 
+2.43.0
+

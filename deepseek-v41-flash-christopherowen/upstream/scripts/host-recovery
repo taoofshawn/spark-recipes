@@ -1,0 +1,224 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+source_dir="$repo_root/host/recovery"
+action=${1:-check}
+
+if [[ "$action" != check && "$action" != apply ]]; then
+  echo "usage: scripts/host-recovery [check|apply]" >&2
+  exit 2
+fi
+
+tailscaled_installed() {
+  [[ "$(systemctl show tailscaled.service --property=LoadState --value 2>/dev/null)" == loaded ]]
+}
+
+files=(
+  "systemd-system.conf:/etc/systemd/system.conf.d/95-spark-recovery.conf:0644"
+  "sysctl.conf:/etc/sysctl.d/95-spark-recovery.conf:0644"
+  "sshd.conf:/etc/ssh/sshd_config.d/95-spark-recovery.conf:0644"
+  "ssh.service.conf:/etc/systemd/system/ssh.service.d/95-spark-recovery.conf:0644"
+  "plymouth-quit-wait.service.conf:/etc/systemd/system/plymouth-quit-wait.service.d/95-spark-recovery.conf:0644"
+  "spark-management-health:/usr/local/libexec/spark-management-health:0755"
+  "spark-management-health.service:/etc/systemd/system/spark-management-health.service:0644"
+  "spark-management-health.timer:/etc/systemd/system/spark-management-health.timer:0644"
+  "grub-console.cfg:/etc/default/grub.d/zz-spark-console.cfg:0644"
+)
+if tailscaled_installed; then
+  files+=("tailscaled.service.conf:/etc/systemd/system/tailscaled.service.d/95-spark-recovery.conf:0644")
+fi
+
+# Desktop services that serve nothing on a headless inference node (every
+# installed snap is a desktop application), and fwupd's daily refresh, which
+# keeps its daemon resident: fwupdmgr starts the daemon on demand over D-Bus.
+# NVIDIA's DGX Dashboard polls for updates (spark-ota-check), which wakes fwupd
+# and PackageKit and peaks near 850 MiB.
+# apply also disables the display manager, gdm3, which Ubuntu aliases as
+# display-manager.service.
+idle_units=(
+  bluetooth.service
+  cups.service cups.socket cups.path cups-browsed.service
+  snapd.service snapd.socket snapd.seeded.service snapd.snap-repair.timer
+  fwupd-refresh.timer
+  dgx-dashboard.service dgx-dashboard-admin.service
+)
+
+# KDGETMODE / KDSETMODE on the active virtual console: 0 is text, 1 graphics.
+console_mode() {
+  local vt
+  vt=$(cat /sys/class/tty/tty0/active)
+  sudo -n python3 -c 'import fcntl, struct, sys; f = open(sys.argv[1], "rb"); print(struct.unpack("i", fcntl.ioctl(f, 0x4B3B, struct.pack("i", 0)))[0])' "/dev/$vt"
+}
+
+console_text() {
+  local vt
+  vt=$(cat /sys/class/tty/tty0/active)
+  sudo -n python3 -c 'import fcntl, sys; fcntl.ioctl(open(sys.argv[1], "r+b", buffering=0), 0x4B3A, 0)' "/dev/$vt"
+}
+
+check_files() {
+  local failed=0 entry source destination mode actual_mode sshd_effective legacy
+  for entry in "${files[@]}"; do
+    IFS=: read -r source destination mode <<<"$entry"
+    if ! sudo -n test -f "$destination"; then
+      echo "missing: $destination" >&2
+      failed=1
+      continue
+    fi
+    if ! sudo -n cmp -s "$source_dir/$source" "$destination"; then
+      echo "different: $destination" >&2
+      failed=1
+    fi
+    actual_mode=$(sudo -n stat -c '%a' "$destination")
+    if [[ "0$actual_mode" != "$mode" ]]; then
+      echo "mode $actual_mode: $destination (expected ${mode#0})" >&2
+      failed=1
+    fi
+  done
+
+  if [[ "$(systemctl show --property=RuntimeWatchdogUSec --value)" != 30s ]]; then
+    echo "systemd runtime watchdog is not armed at 30s" >&2
+    failed=1
+  fi
+  if [[ "$(systemctl show --property=RebootWatchdogUSec --value)" != 10min ]]; then
+    echo "systemd reboot watchdog is not set to 10 minutes" >&2
+    failed=1
+  fi
+  if [[ "$(systemctl show plymouth-quit-wait.service \
+    --property=TimeoutStartUSec --value)" != 40s ]]; then
+    echo "plymouth-quit-wait.service is not bounded at 40s" >&2
+    failed=1
+  fi
+  for legacy in \
+    /etc/systemd/system.conf.d/90-law-watchdog.conf \
+    /etc/sysctl.d/90-law-watchdog.conf; do
+    if sudo -n test -e "$legacy"; then
+      echo "retired legacy recovery file remains: $legacy" >&2
+      failed=1
+    fi
+  done
+  if sudo -n grep -E '^[[:space:]]*linux[[:space:]]' /boot/grub/grub.cfg | grep -qw splash; then
+    echo "boot configuration still passes splash (run sudo update-grub)" >&2
+    failed=1
+  fi
+  if grep -qw splash /proc/cmdline; then
+    echo "running kernel was booted with splash; reboot with the service stopped" >&2
+    failed=1
+  fi
+  if [[ "$(console_mode)" != 0 ]]; then
+    echo "active console $(cat /sys/class/tty/tty0/active) is in graphics mode" >&2
+    failed=1
+  fi
+  if ! systemctl is-enabled --quiet spark-management-health.timer \
+    || ! systemctl is-active --quiet spark-management-health.timer; then
+    echo "spark-management-health.timer is not enabled and active" >&2
+    failed=1
+  fi
+  if ! sudo -n sshd -t; then
+    echo "sshd configuration is invalid" >&2
+    failed=1
+  fi
+  sshd_effective=$(sudo -n sshd -T)
+  if ! grep -qx 'logingracetime 30' <<<"$sshd_effective" \
+    || ! grep -qx 'maxstartups 64:30:128' <<<"$sshd_effective" \
+    || ! grep -qx 'persourcemaxstartups 32' <<<"$sshd_effective"; then
+    echo "sshd recovery limits are not active" >&2
+    failed=1
+  fi
+  if [[ "$(systemctl show ssh.service --property=MemoryMin --value)" != 134217728 ]]; then
+    echo "ssh.service MemoryMin is not 128 MiB" >&2
+    failed=1
+  fi
+  if [[ "$(systemctl show ssh.service --property=OOMScoreAdjust --value)" != -900 ]]; then
+    echo "ssh.service OOMScoreAdjust is not -900" >&2
+    failed=1
+  fi
+  if tailscaled_installed; then
+    if [[ "$(systemctl show tailscaled.service --property=MemoryMin --value)" != 268435456 ]]; then
+      echo "tailscaled.service MemoryMin is not 256 MiB" >&2
+      failed=1
+    fi
+    if [[ "$(systemctl show tailscaled.service --property=OOMScoreAdjust --value)" != -900 ]]; then
+      echo "tailscaled.service OOMScoreAdjust is not -900" >&2
+      failed=1
+    fi
+  fi
+  if [[ "$(sysctl -n kernel.panic)" != 30 \
+    || "$(sysctl -n kernel.panic_on_oops)" != 1 \
+    || "$(sysctl -n vm.panic_on_oom)" != 0 ]]; then
+    echo "kernel recovery sysctls are not active" >&2
+    failed=1
+  fi
+  # Warnings only: an idle service costs a little memory, and doctor's own
+  # display-manager check fails a node whose display manager actually runs.
+  local unit state
+  for unit in display-manager.service "${idle_units[@]}"; do
+    state=$(systemctl is-enabled "$unit" 2>/dev/null || true)
+    if systemctl is-active --quiet "$unit" || [[ "$state" == enabled || "$state" == alias ]]; then
+      echo "warning: $unit is enabled or running (${state:-unknown}); headless nodes keep it off" >&2
+    fi
+  done
+  if ((failed)); then
+    return 1
+  fi
+  echo "host recovery policy matches on $(hostname)"
+}
+
+if [[ "$action" == check ]]; then
+  check_files
+  exit
+fi
+
+sudo -n true
+for entry in "${files[@]}"; do
+  IFS=: read -r source destination mode <<<"$entry"
+  sudo -n install -D -m "$mode" "$source_dir/$source" "$destination"
+done
+
+# Retire the earlier ad-hoc files only after their repository-owned replacements
+# are installed. Their directives are fully represented by the managed files;
+# removing them keeps every host's configuration inventory identical.
+for legacy in \
+  /etc/systemd/system.conf.d/90-law-watchdog.conf \
+  /etc/sysctl.d/90-law-watchdog.conf; do
+  sudo -n rm -f "$legacy"
+done
+
+# Regenerate the boot menu when it still passes splash, and switch the active
+# console to text mode now (the next boot keeps it without splash).
+if sudo -n grep -E '^[[:space:]]*linux[[:space:]]' /boot/grub/grub.cfg | grep -qw splash; then
+  sudo -n update-grub >/dev/null 2>&1
+fi
+console_text
+
+# Keep the display manager and the idle desktop services off, and stop the
+# resident fwupd daemon (static, so never disabled or masked: fwupdmgr needs it).
+for unit in gdm3.service "${idle_units[@]}"; do
+  if systemctl cat "$unit" >/dev/null 2>&1; then
+    sudo -n systemctl disable --now "$unit" >/dev/null 2>&1
+  fi
+done
+sudo -n systemctl stop fwupd.service >/dev/null 2>&1 || true
+
+sudo -n sshd -t
+sudo -n systemctl daemon-reload
+sudo -n sysctl --load=/etc/sysctl.d/95-spark-recovery.conf >/dev/null
+sudo -n systemctl daemon-reexec
+sudo -n systemctl enable --now spark-management-health.timer >/dev/null
+
+# Start fresh listeners after this SSH command has returned so OOMScoreAdjust
+# applies to the running processes. Ubuntu's ssh.service uses KillMode=process,
+# so restarting its listener does not terminate the installing session.
+for unit in spark-restart-ssh spark-restart-tailscaled; do
+  sudo -n systemctl reset-failed "$unit.service" "$unit.timer" \
+    >/dev/null 2>&1 || true
+done
+sudo -n systemd-run --quiet --collect --unit=spark-restart-ssh \
+  --on-active=3s /usr/bin/systemctl try-restart ssh.service
+if tailscaled_installed; then
+  sudo -n systemd-run --quiet --collect --unit=spark-restart-tailscaled \
+    --on-active=8s /usr/bin/systemctl try-restart tailscaled.service
+fi
+
+echo "host recovery policy installed on $(hostname); management restarts scheduled"

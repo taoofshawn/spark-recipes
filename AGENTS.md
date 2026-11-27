@@ -7,19 +7,23 @@ file describes the live cluster only.
 
 ## What this repository is
 
-Three **discrete, independently operable** serving recipes on the **4-node DGX Spark (GB10)
+Four **discrete, independently operable** serving recipes on the **4-node DGX Spark (GB10)
 switchless ring**, each TP4 across all four nodes. Each recipe carries its own fabric facts,
 netplan generator + committed netplan, host bootstrap, `/etc` set, kernel/driver pins,
-four-PF NCCL build tree, preflight, from-zero runbook and `bin/{start,stop}.sh`.
+preflight, from-zero runbook and `bin/{start,stop}.sh`. Three also carry the host four-PF
+NCCL build tree; the fourth (`…-christopherowen`) ships NCCL inside its own image.
 
 | recipe | weights | context / KV | control | upstream |
 |---|---|---|---|---|
 | `glm-v53-flash-nvfp4-tp4-switchless` | stock `nvidia/GLM-5.3-Flash-NVFP4` @ `da920bb` (zero weight mod — the lane's premise) | 1M / 20 GiB/rank pin (~3.25M tokens) | `./bin/start.sh` → `upstream/start.sh serve` | vendored knapcio `770d115` |
 | `glm-v53-flash-fp8-tp4-switchless` | zai FP8 + the E36 conversion stack | 262K / 14 GiB pool (1,194,033 tokens) | `./bin/start.sh` → `upstream/scripts/tp4ctl up` | pinned jnardiello `ed365a6` (`080fe09` in the README; reconcile) |
 | `deepseek-v41-flash-tp4-switchless` | stock `deepseek-ai/DeepSeek-V4.1-Flash-1017` @ `1bae0e10` (zero weight mod, MIT) | 1M / free-memory-sized pool | `./bin/start.sh` → `site/start-cluster.sh serve` | vendored knapcio `540bf07` (v2.6.4) |
+| `deepseek-v41-flash-christopherowen` | stock `deepseek-ai/DeepSeek-V4.1-Flash-1017` @ `1bae0e10` (zero weight mod, MIT) | 1M / 10.5 GiB KV per rank (16 seqs) | `./bin/start.sh` → `upstream/bin/spark cluster start` | vendored `christopherowen/spark-ds41f` `spark-ds41f-1120` @ `d3d40d94` |
 
-The two GLM recipes serve `glm-5.3-flash`; DeepSeek serves `deepseek-v41-flash`. All on
-`:8000` behind the model-name proxy, so clients keep one name across recipes.
+The two GLM recipes serve `glm-5.3-flash`; both DeepSeek recipes serve
+`deepseek-v41-flash` (`…-tp4-switchless` is SGLang/knapcio, `…-christopherowen` is
+vLLM/spark-ds41f). All on `:8000` behind the model-name proxy, so clients keep one name
+across recipes.
 
 **There is no lane-switching document, and none is needed.** The one precondition that cannot
 be derived — "only one lane at a time" — is executable: each recipe's `bin/start.sh` refuses
@@ -34,6 +38,12 @@ file, `README.md`, the skills, and the proxy's `SPOOF_FROM` in the same commit. 
 `model-name-proxy/` is the only deliberate repo-root exception — it exists precisely because
 there is more than one recipe.
 
+**Caveat for `…-christopherowen`:** it is vendored *inside* this repo and its upstream tooling
+runs `git` from its own checkout, so `cluster sync` leaves the nodes' `~/code/spark-recipes`
+**detached** at the deployment commit. Reattach (`git checkout <branch> && git pull`) before
+using that checkout for another lane. The deletion rule still holds — its tree is ordinary
+tracked files.
+
 ## Switching lanes: the one manual step
 
 Stopping one recipe and starting another is `bin/stop.sh` then `bin/start.sh` — the start
@@ -43,7 +53,8 @@ every request's `"model"` to, so it must track the serving recipe.
 
 - DeepSeek ↔ GLM: flip `BACKEND_MODEL` (`deepseek-v41-flash` ↔ `glm-5.3-flash`) and recreate
   the proxy container, then send one chat request to confirm it round-trips.
-- GLM ↔ GLM (FP8 ↔ NVFP4): no edit — both serve `glm-5.3-flash`.
+- GLM ↔ GLM (FP8 ↔ NVFP4) and DeepSeek ↔ DeepSeek (SGLang ↔ vLLM): no edit — each pair
+  shares one served name (`glm-5.3-flash`, `deepseek-v41-flash`).
 
 A stale `BACKEND_MODEL` does **not** look like a proxy fault: `/v1/models` still reports the
 new lane correctly (with its context length) while **every chat completion 404s**
@@ -93,21 +104,24 @@ own facts file (`<recipe>/site/fabric/cluster.env` or `noswitch-prep/cluster.env
 | `<recipe>/site/fabric/` (FP8: `noswitch-prep/`) | fabric facts, netplan + committed netplan, vendored host bootstrap, preflight, `REUSE.md` |
 | `<recipe>/site/FROM-ZERO.md` (or upstream `docs/install-from-zero.md`) | rebuild that recipe from wiped nodes |
 | `<recipe>/upstream/VENDORED-AT.md` | upstream pin + every site modification and its re-apply recipe |
+| `<recipe>/site/gate-gid-slot.sh` | (christopherowen) exactly one IPv4 RoCE v2 GID on every routed PF — this lane discovers GIDs by address |
 | `<recipe>/site/fabric/check_switchless_nccl.py` (FP8: `noswitch-prep/`) | NCCL artifact identity check |
 
 ## Upstream sources (for update passes)
 
 - **NVIDIA forum** (Discourse JSON API, no auth, browser-ish User-Agent): tracked
   threads `381350` (GLM-5.3-Flash main), `382459` (jnardiello switchless), `382939`
-  (nvidia-NVFP4 optimization), `385075` (kindling 3x). General sweep every run:
+  (nvidia-NVFP4 optimization), `385075` (kindling 3x), `384438` (spark-ds41f / DeepSeek
+  V4.1 vLLM). General sweep every run:
   newest topics in categories `721`/`723` since the last review date + varied searches
   (`glm 5.3 flash`, `dflash`, `nvfp4`, `switchless`). API patterns:
   `/c/.../721.json?order=activity`, `/search.json?q=...`, `/t/<id>.json?page=N`.
 - **GitHub:** `knapcio/GLM-5.3-Flash-4x-DGX-Spark-TP4` (NVFP4 lane upstream),
   `jnardiello/GLM-5.3-Flash-FP8-4-DGX-Spark-Switchless` (FP8 lane upstream),
   `tonyd2wild/GLM-5.3-Flash-NVFP4-1M-KV-4x-DGX-Spark` + his 2x sibling (serving
-  family; his current default is knapcio's stack), kindlingai / eugr / technigma
-  stacks for cross-stack ideas.
+  family; his current default is knapcio's stack), `christopherowen/spark-ds41f` (the vLLM
+  DeepSeek lane — deploy only a promoted `spark-ds41f-*` tag, never `main`/`candidate-*`),
+  kindlingai / eugr / technigma stacks for cross-stack ideas.
 - **HF checkpoints:** `nvidia/GLM-5.3-Flash-NVFP4` (pin `da920bb` — any update must re-verify
   the zero-mod premise), drafter `incoai/GLM-5.3-Flash-DFlash2` (pin `bf582e4e`,
   **CC BY-NC-ND 4.0** — no derivative re-encodes), `deepseek-ai/DeepSeek-V4.1-Flash-1017`
@@ -150,12 +164,16 @@ own facts file (`<recipe>/site/fabric/cluster.env` or `noswitch-prep/cluster.env
   rung), MAX_MODEL_LEN 1M, the `stock-nvfp4.env` strip list (zero weight-mod premise —
   the lossless8 fallback is an explicit owner decision, not a drift), start order
   worker-first 3,2,1,0.
+- christopherowen: 2-PF subset per neighbour (sparknet refuses four PFs on a ring), NCCL
+  inside the image, `tp4-ring-4k` at the external 4 KiB receipt's sizing. Its four site
+  patches are load-bearing (`upstream/VENDORED-AT.md`); never rename the node map to
+  `*.local.json`, and never `--apply` a start without this recipe's `bin/start.sh`.
 - FP8: `GPU_MEM_UTIL=0.85` (0.89+ = NV_ERR_NO_MEMORY on the head), 14 GiB KV pool,
   `MAX_NUM_SEQS=6` + bounded-admission middleware, E35/E36 scheduler stack, pinned
   kernel `6.17.0-1032-nvidia` + driver `580.173.02` (the 7.x kernel breaks ring NCCL —
   no `apt upgrade` on the nodes).
-- Shared: port 8000, `glm-5.3-flash`, offline serving, four-PF NCCL contract,
-  `FABRIC_P2_VIEWS=1`, all-ranks teardown.
+- Shared: port 8000, two served names (`glm-5.3-flash`, `deepseek-v41-flash`), offline
+  serving, four-PF NCCL contract, `FABRIC_P2_VIEWS=1`, all-ranks teardown.
 
 ## Teardown rule (repo-wide — every recipe, including future ones)
 
@@ -180,6 +198,13 @@ New recipes inherit this rule; do not copy the upstream "stop but preserve" beha
 |---|---|
 | NCCL init hangs / QP RTR timeout | transport wiring — run the target recipe's `preflight.sh`; boot env must show `MERGE_NICS=0` + `SWITCHLESS_RING_ONLY=1` + `EXTENDED_IPV4_GIDS=1` + 4-PF HCA |
 | `wrong listener count` at ncclCommInitRank | four-PF lib without `NCCL_IB_EXTENDED_IPV4_GIDS=1` |
+| christopherowen: `cluster start` refuses "no release benchmark qualifies this shape" | expected — this lane is `--unqualified-shape` (baked into its `bin/start.sh`) until our own bench run is promoted |
+| christopherowen: a routed PF has 0 or 2 IPv4 RoCE v2 GIDs | `site/gate-gid-slot.sh` names it; fix the netplan. This lane finds GIDs by address and has no `NCCL_IB_GID_INDEX` pin |
+| christopherowen: `cluster sync` says "the deployed commit does not carry it" | the `profile_committed()` site patch was lost in a re-vendor — re-apply per its `upstream/VENDORED-AT.md` |
+| christopherowen: `doctor` says "tracked secret-like path" | the node map was renamed to `*.local.json`; it must stay `config/nodes-ring4.json` |
+| christopherowen: `build prepare` reports a missing patch | a re-vendor dropped part of the patch closure — regenerate it with the closure script, never hand-copy |
+| christopherowen: image build refuses | needs ≥64 GiB MemAvailable and no `spark-ds41f`/`^dsv41-` container; stop the lane first |
+| christopherowen: `fcntl` import error on the workstation | its CLI is Linux-only — run `doctor`/`build`/`cluster` on a node |
 | FP8 launcher GID preflight rejects a P2 HCA | stale deployed config/gid-checker allowlist (site fix #7) — redeploy from the head |
 | FP8 boots old config after a repo change | tp4ctl reads the DEPLOYED `~/.local/tp4/cluster.env` — `deploy.sh` from the head |
 | container name/overlay path refused | a container from a previous run still exists — `bin/stop.sh` captures logs and **removes** this recipe's containers, so re-run it, then start |

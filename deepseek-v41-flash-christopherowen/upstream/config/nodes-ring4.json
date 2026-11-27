@@ -1,0 +1,78 @@
+{
+  "schema_version": 1,
+  "ssh_user": "sdrew",
+  "nodes": [
+    {
+      "name": "spark-0f0b",
+      "rank": 0,
+      "management_ip": "10.69.43.170",
+      "head": true,
+      "roce_peer_hcas": {
+        "1": [
+          "rocep1s0f0"
+        ],
+        "3": [
+          "rocep1s0f1"
+        ]
+      },
+      "roce_subnets": {
+        "rocep1s0f0": "10.10.1.0/24",
+        "rocep1s0f1": "10.10.4.0/24"
+      }
+    },
+    {
+      "name": "spark-6d14",
+      "rank": 1,
+      "management_ip": "10.69.43.171",
+      "head": false,
+      "roce_peer_hcas": {
+        "0": [
+          "rocep1s0f0"
+        ],
+        "2": [
+          "rocep1s0f1"
+        ]
+      },
+      "roce_subnets": {
+        "rocep1s0f0": "10.10.1.0/24",
+        "rocep1s0f1": "10.10.2.0/24"
+      }
+    },
+    {
+      "name": "spark-6d90",
+      "rank": 2,
+      "management_ip": "10.69.43.172",
+      "head": false,
+      "roce_peer_hcas": {
+        "1": [
+          "rocep1s0f1"
+        ],
+        "3": [
+          "rocep1s0f0"
+        ]
+      },
+      "roce_subnets": {
+        "rocep1s0f0": "10.10.3.0/24",
+        "rocep1s0f1": "10.10.2.0/24"
+      }
+    },
+    {
+      "name": "spark-6d24",
+      "rank": 3,
+      "management_ip": "10.69.43.173",
+      "head": false,
+      "roce_peer_hcas": {
+        "0": [
+          "rocep1s0f1"
+        ],
+        "2": [
+          "rocep1s0f0"
+        ]
+      },
+      "roce_subnets": {
+        "rocep1s0f0": "10.10.3.0/24",
+        "rocep1s0f1": "10.10.4.0/24"
+      }
+    }
+  ]
+}

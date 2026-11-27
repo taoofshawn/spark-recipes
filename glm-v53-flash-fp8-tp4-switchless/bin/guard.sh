@@ -42,7 +42,8 @@ GUARD_NODES=(${NODES:-})
 GUARD_KNOWN=(
   "glm53_fp8_dflash_tp4|fp8-lane|"
   "glm53-nvfp4-r*|nvfp4-lane|"
-  "dsv41-*|deepseek-lane|dsv41-head dsv41-worker"
+  "dsv41-*|deepseek-sglang-lane|dsv41-head dsv41-worker"
+  "spark-ds41f|dsv41f-vllm-lane|spark-ds41f"
 )
 
 guard_log()  { printf '[guard] %s\n' "$*"; }
